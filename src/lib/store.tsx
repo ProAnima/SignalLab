@@ -1,5 +1,5 @@
 import {
-  createContext, useCallback, useContext, useEffect, useRef, useState,
+  createContext, useCallback, useContext, useEffect, useState,
   type ReactNode,
 } from "react";
 import { api, on, EV, type JobInfo, type JobEnded, type HostInfo } from "./api";
@@ -60,11 +60,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const clearLog = useCallback(() => setLog([]), []);
 
-  const started = useRef(false);
   useEffect(() => {
-    if (started.current) return;
-    started.current = true;
-
     api.hostInfo().then(setHost).catch(() => {});
     pushLog("info", "system", "Signal Lab ready");
     refreshJobs();
