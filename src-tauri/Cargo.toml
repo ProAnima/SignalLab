@@ -1,0 +1,29 @@
+[package]
+name = "hc-signal-lab"
+version = "0.1.0"
+description = "Signal Lab — OSC & network protocol simulator"
+authors = ["Hello"]
+edition = "2021"
+
+[lib]
+# The `_lib` suffix keeps the lib name unique so it doesn't clash with the bin
+# name on Windows (see rust-lang/cargo#8519).
+name = "hc_signal_lab_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "io-util"] }
+reqwest = { version = "0.12", features = ["json", "gzip"] }
+rand = "0.8"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
