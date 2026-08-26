@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState } from "react";
-import { api, on, EV, type JobInfo, type OscArg, type OscInbound, type GenTick, type Waveform } from "../lib/api";
+import { useEffect, useState } from "react";
+import { api, EV, type JobInfo, type OscArg, type OscInbound, type GenTick, type Waveform } from "../lib/api";
 import { useStore } from "../lib/store";
 import { useT, type TKey } from "../lib/i18n";
-import { useRollingList, useSeries } from "../lib/hooks";
+import { useJobStream, useRollingList, useSeries } from "../lib/hooks";
 import { fmtTime } from "../lib/format";
 import { Scope } from "../components/Scope";
 import { OscArgsEditor, fmtArg, toOscArg, type ArgRow } from "../components/OscArgs";
@@ -12,7 +12,7 @@ interface FlatMsg { ts: number; from: string; address: string; args: OscArg[]; e
 const WAVEFORMS: Waveform[] = ["sine", "triangle", "saw", "square", "ramp", "random", "constant"];
 
 export function OscView() {
-  const { pushLog, refreshJobs, stopJob, jobs } = useStore();
+  const { pushLog, refreshJobs, stopJob, jobGone } = useStore();
   const t = useT();
 
   // ---- sender ----
@@ -39,23 +39,16 @@ export function OscView() {
   const [bind, setBind] = useState("0.0.0.0:9000");
   const [monJob, setMonJob] = useState<JobInfo | null>(null);
   const { items: msgs, push: pushMsg, clear: clearMsgs } = useRollingList<FlatMsg>(300);
-  const monRef = useRef<number | null>(null);
-  monRef.current = monJob?.id ?? null;
 
-  useEffect(() => {
-    const un = on<OscInbound>(EV.oscMessage, (e) => {
-      const p = e.payload;
-      if (monRef.current !== null && p.job_id !== monRef.current) return;
-      if (p.error) {
-        pushMsg({ ts: p.ts, from: p.from, address: "", args: [], error: p.error });
-        return;
-      }
-      for (const m of p.messages) {
-        pushMsg({ ts: p.ts, from: p.from, address: m.address, args: m.args });
-      }
-    });
-    return () => { un.then((f) => f()); };
-  }, [pushMsg]);
+  useJobStream<OscInbound>(EV.oscMessage, monJob?.id ?? null, (p) => {
+    if (p.error) {
+      pushMsg({ ts: p.ts, from: p.from, address: "", args: [], error: p.error });
+      return;
+    }
+    for (const m of p.messages) {
+      pushMsg({ ts: p.ts, from: p.from, address: m.address, args: m.args });
+    }
+  });
 
   const toggleMonitor = async () => {
     if (monJob) {
@@ -75,8 +68,8 @@ export function OscView() {
 
   // Reflect external stop (from the jobs bar) back into local state.
   useEffect(() => {
-    if (monJob && !jobs.find((j) => j.id === monJob.id)) setMonJob(null);
-  }, [jobs, monJob]);
+    if (jobGone(monJob)) setMonJob(null);
+  }, [jobGone, monJob]);
 
   // ---- generator ----
   const [gen, setGen] = useState({
@@ -90,20 +83,13 @@ export function OscView() {
     as_int: false,
   });
   const [genJob, setGenJob] = useState<JobInfo | null>(null);
-  const genRef = useRef<number | null>(null);
-  genRef.current = genJob?.id ?? null;
   const { data: wave, push: pushWave, clear: clearWave } = useSeries(300);
 
-  useEffect(() => {
-    const un = on<GenTick>(EV.oscGenTick, (e) => {
-      if (genRef.current !== null && e.payload.job_id === genRef.current) pushWave(e.payload.value);
-    });
-    return () => { un.then((f) => f()); };
-  }, [pushWave]);
+  useJobStream<GenTick>(EV.oscGenTick, genJob?.id ?? null, (t) => pushWave(t.value));
 
   useEffect(() => {
-    if (genJob && !jobs.find((j) => j.id === genJob.id)) setGenJob(null);
-  }, [jobs, genJob]);
+    if (jobGone(genJob)) setGenJob(null);
+  }, [jobGone, genJob]);
 
   const toggleGen = async () => {
     if (genJob) {

@@ -13,7 +13,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpStream, UdpSocket};
 
 use super::inspect::{self, Frame, Gate};
-use super::jobs::{now_ms, JobInfo, JobRegistry};
+use super::jobs::{now_ms, JobInfo, JobRegistry, TaskGuard};
 
 #[derive(Clone, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
@@ -82,6 +82,9 @@ pub async fn start_storm(
         let payload = vec![0x55u8; size];
         let start = Instant::now();
         let gate = Gate::new(1_000);
+        // Stopping the storm must stop its reporter too; the guard aborts it
+        // when this task's future is dropped on cancel.
+        let mut guard = TaskGuard::new();
 
         // reporter
         let reporter = {
@@ -117,6 +120,7 @@ pub async fn start_storm(
                 }
             })
         };
+        guard.watch(reporter.abort_handle());
 
         // Pace: send `per_tick` units every 10ms to approximate the target rate.
         let tick = Duration::from_millis(10);
@@ -207,7 +211,7 @@ pub async fn start_storm(
             }
         }
 
-        reporter.abort();
+        drop(guard);
         // The reporter only ticks every 250 ms, so a run that ends on its own
         // duration used to leave the panel showing a count from a quarter second
         // ago — and "how many actually went out" is the one number a load

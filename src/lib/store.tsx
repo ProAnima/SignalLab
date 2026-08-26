@@ -40,6 +40,15 @@ interface Store {
   host: HostInfo | null;
   jobs: JobInfo[];
   refreshJobs: () => void;
+  /**
+   * Has the engine confirmed this job is gone?
+   *
+   * Absence from the polled list only means something if the list was asked for
+   * after the job started. Otherwise a job created between two polls looks dead
+   * the instant it exists — which is how a port scan used to wipe its own screen
+   * before a single result could land in it.
+   */
+  jobGone: (job: JobInfo | null) => boolean;
   stopJob: (id: number) => void;
   stopAll: () => void;
   log: LogEntry[];
@@ -83,6 +92,9 @@ const SAVE_DEBOUNCE_MS = 700;
 export function StoreProvider({ children }: { children: ReactNode }) {
   const [host, setHost] = useState<HostInfo | null>(null);
   const [jobs, setJobs] = useState<JobInfo[]>([]);
+  // When the list currently in state was asked for, not when it arrived.
+  const [jobsAt, setJobsAt] = useState(0);
+  const jobsAtRef = useRef(0);
   const [log, setLog] = useState<LogEntry[]>([]);
   const [library, setLibraryState] = useState<Signal[]>([]);
   const [libraryPath, setLibraryPath] = useState("");
@@ -103,8 +115,24 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const refreshJobs = useCallback(() => {
-    api.jobsList().then(setJobs).catch(() => {});
+    const asked = Date.now();
+    api
+      .jobsList()
+      .then((list) => {
+        // Two polls can overlap; the older answer must not win.
+        if (asked < jobsAtRef.current) return;
+        jobsAtRef.current = asked;
+        setJobs(list);
+        setJobsAt(asked);
+      })
+      .catch(() => {});
   }, []);
+
+  const jobGone = useCallback(
+    (job: JobInfo | null) =>
+      !!job && jobsAt > job.started_ms && !jobs.some((j) => j.id === job.id),
+    [jobs, jobsAt]
+  );
 
   const stopJob = useCallback((id: number) => {
     api.jobStop(id).then(() => {
@@ -230,7 +258,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, [writeLibrary]);
 
   const value: Store = {
-    host, jobs, refreshJobs, stopJob, stopAll, log, pushLog, clearLog,
+    host, jobs, refreshJobs, jobGone, stopJob, stopAll, log, pushLog, clearLog,
     library, libraryPath, libraryError, saveState, setLibrary,
     reloadLibrary: loadLibrary, fire, lastFired,
     mqttTopics, mqttVersion, mqttDropped, clearMqttTopics,

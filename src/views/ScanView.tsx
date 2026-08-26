@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState } from "react";
-import { api, on, EV, type JobInfo, type OpenPort, type ScanProgress } from "../lib/api";
+import { useEffect, useState } from "react";
+import { api, EV, type JobInfo, type OpenPort, type ScanProgress } from "../lib/api";
 import { useStore } from "../lib/store";
 import { useT, type TKey } from "../lib/i18n";
-import { useRollingList } from "../lib/hooks";
+import { useJobStream, useRollingList } from "../lib/hooks";
 import { fmtTime, fmtNum } from "../lib/format";
 
 const PRESETS: { key: TKey; range: [number, number] }[] = [
@@ -13,7 +13,7 @@ const PRESETS: { key: TKey; range: [number, number] }[] = [
 ];
 
 export function ScanView() {
-  const { pushLog, refreshJobs, stopJob, jobs } = useStore();
+  const { pushLog, refreshJobs, stopJob, jobGone } = useStore();
   const t = useT();
 
   const [host, setHost] = useState("127.0.0.1");
@@ -25,23 +25,14 @@ export function ScanView() {
 
   const [job, setJob] = useState<JobInfo | null>(null);
   const [prog, setProg] = useState<ScanProgress | null>(null);
-  const jobRef = useRef<number | null>(null);
-  jobRef.current = job?.id ?? null;
   const { items: open, push: pushOpen, clear: clearOpen } = useRollingList<OpenPort>(2000);
 
-  useEffect(() => {
-    const unOpen = on<OpenPort>(EV.scanOpen, (e) => {
-      if (jobRef.current !== null && e.payload.job_id === jobRef.current) pushOpen(e.payload);
-    });
-    const unProg = on<ScanProgress>(EV.scanProgress, (e) => {
-      if (jobRef.current !== null && e.payload.job_id === jobRef.current) setProg(e.payload);
-    });
-    return () => { unOpen.then((f) => f()); unProg.then((f) => f()); };
-  }, [pushOpen]);
+  useJobStream<OpenPort>(EV.scanOpen, job?.id ?? null, pushOpen);
+  useJobStream<ScanProgress>(EV.scanProgress, job?.id ?? null, setProg);
 
   useEffect(() => {
-    if (job && !jobs.find((j) => j.id === job.id)) setJob(null);
-  }, [jobs, job]);
+    if (jobGone(job)) setJob(null);
+  }, [jobGone, job]);
 
   const start = async () => {
     if (job) { stopJob(job.id); setJob(null); return; }

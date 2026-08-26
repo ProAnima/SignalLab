@@ -32,6 +32,41 @@ struct JobEntry {
     handle: JoinHandle<()>,
 }
 
+/// Aborts a set of child tasks when dropped.
+///
+/// Stopping a job aborts only its top-level task, and tokio *detaches* a child
+/// `spawn` when its `JoinHandle` is dropped rather than cancelling it — so a
+/// module that spawns workers or a stats reporter would keep them running after
+/// "stop": a scanner still probing ports, a relay still forwarding, a reporter
+/// still emitting. Holding the children here, inside the job's own async block,
+/// means the outer task's cancellation drops this guard and takes them with it.
+#[derive(Default)]
+pub struct TaskGuard {
+    children: Vec<tokio::task::AbortHandle>,
+}
+
+impl TaskGuard {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Track a child task so it is aborted when the job ends, however it ends.
+    /// Takes an `AbortHandle` (from `JoinHandle::abort_handle`) rather than the
+    /// handle itself, so the spawner can still await the task on its normal path
+    /// while the guard remains able to abort it on cancel.
+    pub fn watch(&mut self, handle: tokio::task::AbortHandle) {
+        self.children.push(handle);
+    }
+}
+
+impl Drop for TaskGuard {
+    fn drop(&mut self) {
+        for child in &self.children {
+            child.abort();
+        }
+    }
+}
+
 /// Cheaply-cloneable handle to the shared registry (managed in Tauri state).
 #[derive(Clone, Default)]
 pub struct JobRegistry {

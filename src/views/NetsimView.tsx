@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from "react";
-import { api, on, EV, type JobInfo, type ProxyStat } from "../lib/api";
+import { useEffect, useState } from "react";
+import { api, EV, type JobInfo, type ProxyStat } from "../lib/api";
 import { useStore } from "../lib/store";
 import { useT } from "../lib/i18n";
+import { useJobStream } from "../lib/hooks";
 import { fmtBytes, fmtNum } from "../lib/format";
 
 function Slider({ label, value, onChange, min, max, step, unit }: {
@@ -20,7 +21,7 @@ function Slider({ label, value, onChange, min, max, step, unit }: {
 }
 
 export function NetsimView() {
-  const { pushLog, refreshJobs, stopJob, jobs } = useStore();
+  const { pushLog, refreshJobs, stopJob, jobGone } = useStore();
   const t = useT();
 
   const [listen, setListen] = useState("0.0.0.0:9010");
@@ -33,19 +34,11 @@ export function NetsimView() {
 
   const [job, setJob] = useState<JobInfo | null>(null);
   const [stat, setStat] = useState<ProxyStat | null>(null);
-  const jobRef = useRef<number | null>(null);
-  jobRef.current = job?.id ?? null;
+  useJobStream<ProxyStat>(EV.netsimStat, job?.id ?? null, setStat);
 
   useEffect(() => {
-    const un = on<ProxyStat>(EV.netsimStat, (e) => {
-      if (jobRef.current !== null && e.payload.job_id === jobRef.current) setStat(e.payload);
-    });
-    return () => { un.then((f) => f()); };
-  }, []);
-
-  useEffect(() => {
-    if (job && !jobs.find((j) => j.id === job.id)) setJob(null);
-  }, [jobs, job]);
+    if (jobGone(job)) setJob(null);
+  }, [jobGone, job]);
 
   const toggle = async () => {
     if (job) { stopJob(job.id); setJob(null); return; }

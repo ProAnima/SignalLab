@@ -10,6 +10,7 @@ use tauri::{AppHandle, Emitter};
 use tokio::io::AsyncReadExt;
 use tokio::net::TcpStream;
 use tokio::sync::Semaphore;
+use tokio::task::JoinSet;
 
 use super::inspect::{self, Frame};
 use super::jobs::{now_ms, JobInfo, JobRegistry};
@@ -87,7 +88,9 @@ pub async fn start_scan(
         let sem = Arc::new(Semaphore::new(concurrency));
         let done = Arc::new(AtomicU64::new(0));
         let open = Arc::new(AtomicU64::new(0));
-        let mut tasks = Vec::new();
+        // A JoinSet aborts whatever is still running when it is dropped, so a
+        // stopped scan stops probing instead of quietly finishing the range.
+        let mut tasks: JoinSet<()> = JoinSet::new();
 
         for port in start_port..=end_port {
             let permit = match sem.clone().acquire_owned().await {
@@ -96,7 +99,7 @@ pub async fn start_scan(
             };
             let (app_t, host_t, done_t, open_t) =
                 (app_cl.clone(), host.clone(), done.clone(), open.clone());
-            tasks.push(tokio::spawn(async move {
+            tasks.spawn(async move {
                 let _permit = permit;
                 let addr = format!("{host_t}:{port}");
                 if let Ok(Ok(mut stream)) =
@@ -148,12 +151,10 @@ pub async fn start_scan(
                         },
                     );
                 }
-            }));
+            });
         }
 
-        for t in tasks {
-            let _ = t.await;
-        }
+        while tasks.join_next().await.is_some() {}
         let _ = app_cl.emit(
             "scan://progress",
             ScanProgress {

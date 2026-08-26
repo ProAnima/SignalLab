@@ -17,7 +17,7 @@ function defaultClientId(): string {
 
 export function MqttView() {
   const {
-    pushLog, jobs, stopJob, refreshJobs, library, setLibrary,
+    pushLog, jobGone, stopJob, refreshJobs, library, setLibrary,
     mqttTopics, mqttVersion, mqttDropped, clearMqttTopics,
   } = useStore();
   const t = useT();
@@ -84,8 +84,8 @@ export function MqttView() {
 
   // Reflect a stop from the console strip.
   useEffect(() => {
-    if (job && !jobs.find((j) => j.id === job.id)) { setJob(null); setGrants([]); }
-  }, [jobs, job]);
+    if (jobGone(job)) { setJob(null); setGrants([]); }
+  }, [jobGone, job]);
 
   const connect = async () => {
     if (job) { stopJob(job.id); return; }

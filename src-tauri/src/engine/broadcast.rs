@@ -24,7 +24,7 @@ use tauri::{AppHandle, Emitter};
 use tokio::net::UdpSocket;
 
 use super::inspect::{self, describe_payload, Frame, Gate};
-use super::jobs::{now_ms, JobInfo, JobRegistry};
+use super::jobs::{now_ms, JobInfo, JobRegistry, TaskGuard};
 use super::osc_codec::{encode_message, OscArg};
 
 /// Guard rail: a sweep never expands past this many hosts.
@@ -447,6 +447,9 @@ pub async fn start_beacon(
         let errors = Arc::new(AtomicU64::new(0));
         let rounds = Arc::new(AtomicU64::new(0));
         let gate = Gate::new(50);
+        // Stopping the beacon must stop its reporter; the guard aborts it when
+        // this task's future is dropped on cancel.
+        let mut guard = TaskGuard::new();
 
         let reporter = {
             let (app_r, p, b, e, r) = (
@@ -531,7 +534,8 @@ pub async fn start_beacon(
             }
         }
 
-        reporter.abort();
+        guard.watch(reporter.abort_handle());
+        drop(guard);
         // Same reason as the storm reporter: a beacon that runs out its own
         // count or duration has to leave the real totals on screen, not the
         // last 250 ms tick.
@@ -709,6 +713,9 @@ pub async fn start_discovery(
     let jobs_cl = jobs.clone();
 
     let handle = tauri::async_runtime::spawn(async move {
+        // Stopping discovery must stop its reporter; the guard aborts it when
+        // this task's future is dropped on cancel.
+        let mut guard = TaskGuard::new();
         let reporter = {
             let (app_r, peers_r, p, b, r) = (
                 app_cl.clone(),
@@ -847,7 +854,8 @@ pub async fn start_discovery(
             }
         }
 
-        reporter.abort();
+        guard.watch(reporter.abort_handle());
+        drop(guard);
         let _ = app_cl.emit(
             "job://ended",
             serde_json::json!({ "job_id": id, "kind": "discovery", "error": error }),

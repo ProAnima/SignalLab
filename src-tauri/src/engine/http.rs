@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 
 use super::inspect::{self, Frame, Gate};
-use super::jobs::{now_ms, JobInfo, JobRegistry};
+use super::jobs::{now_ms, JobInfo, JobRegistry, TaskGuard};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct HttpRequest {
@@ -223,6 +223,9 @@ pub async fn start_burst(
         let total = cfg.total;
         let claimed = Arc::new(AtomicU64::new(0));
         let start = Instant::now();
+        // Stopping the burst must stop its workers and reporter; the guard
+        // aborts them all when this task's future is dropped on cancel.
+        let mut guard = TaskGuard::new();
 
         // Reporter task: emits progress ~10 Hz.
         let reporter = {
@@ -235,7 +238,7 @@ pub async fn start_burst(
                 last_lat.clone(),
                 stop.clone(),
             );
-            tauri::async_runtime::spawn(async move {
+            tokio::spawn(async move {
                 let mut prev_sent = 0u64;
                 let mut prev = Instant::now();
                 loop {
@@ -279,6 +282,7 @@ pub async fn start_burst(
                 }
             })
         };
+        guard.watch(reporter.abort_handle());
 
         // Worker pool. A burst can push thousands of requests per second, so the
         // pool shares one sampling gate into the Inspector.
@@ -298,7 +302,7 @@ pub async fn start_burst(
                 last_lat.clone(),
             );
             let duration_s = cfg.duration_s;
-            workers.push(tauri::async_runtime::spawn(async move {
+            workers.push(tokio::spawn(async move {
                 loop {
                     if duration_s > 0.0 && start.elapsed().as_secs_f64() >= duration_s {
                         break;
@@ -325,6 +329,9 @@ pub async fn start_burst(
             }));
         }
 
+        for w in &workers {
+            guard.watch(w.abort_handle());
+        }
         for w in workers {
             let _ = w.await;
         }

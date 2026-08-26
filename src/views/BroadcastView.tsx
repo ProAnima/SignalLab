@@ -1,11 +1,12 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import {
-  api, on, EV,
+  api, EV,
   type EmitConfig, type EmitResult, type EmitStat, type JobInfo,
   type Payload, type Peer, type PeerReport, type TargetMode,
 } from "../lib/api";
 import { useStore } from "../lib/store";
 import { useT, type TKey, type Translate } from "../lib/i18n";
+import { useJobStream } from "../lib/hooks";
 import { OscArgsEditor, toOscArg, type ArgRow } from "../components/OscArgs";
 import { fmtBytes, fmtNum } from "../lib/format";
 
@@ -131,7 +132,7 @@ function fromLocalIp(ip: string, mode: TargetMode): string | null {
 }
 
 export function BroadcastView() {
-  const { pushLog, refreshJobs, stopJob, jobs, host } = useStore();
+  const { pushLog, refreshJobs, stopJob, jobGone, host } = useStore();
   const t = useT();
 
   // ---- emitter ----
@@ -158,8 +159,6 @@ export function BroadcastView() {
 
   const [beaconJob, setBeaconJob] = useState<JobInfo | null>(null);
   const [emitStat, setEmitStat] = useState<EmitStat | null>(null);
-  const beaconRef = useRef<number | null>(null);
-  beaconRef.current = beaconJob?.id ?? null;
 
   const target = targets[mode];
   const setTarget = (v: string) => setTargets({ ...targets, [mode]: v });
@@ -215,16 +214,11 @@ export function BroadcastView() {
     }
   };
 
-  useEffect(() => {
-    const un = on<EmitStat>(EV.emitStat, (e) => {
-      if (beaconRef.current !== null && e.payload.job_id === beaconRef.current) setEmitStat(e.payload);
-    });
-    return () => { un.then((f) => f()); };
-  }, []);
+  useJobStream<EmitStat>(EV.emitStat, beaconJob?.id ?? null, setEmitStat);
 
   useEffect(() => {
-    if (beaconJob && !jobs.find((j) => j.id === beaconJob.id)) setBeaconJob(null);
-  }, [jobs, beaconJob]);
+    if (jobGone(beaconJob)) setBeaconJob(null);
+  }, [jobGone, beaconJob]);
 
   // ---- discovery ----
   const [dBind, setDBind] = useState("0.0.0.0:9000");
@@ -244,19 +238,11 @@ export function BroadcastView() {
 
   const [discJob, setDiscJob] = useState<JobInfo | null>(null);
   const [report, setReport] = useState<PeerReport | null>(null);
-  const discRef = useRef<number | null>(null);
-  discRef.current = discJob?.id ?? null;
+  useJobStream<PeerReport>(EV.peers, discJob?.id ?? null, setReport);
 
   useEffect(() => {
-    const un = on<PeerReport>(EV.peers, (e) => {
-      if (discRef.current !== null && e.payload.job_id === discRef.current) setReport(e.payload);
-    });
-    return () => { un.then((f) => f()); };
-  }, []);
-
-  useEffect(() => {
-    if (discJob && !jobs.find((j) => j.id === discJob.id)) setDiscJob(null);
-  }, [jobs, discJob]);
+    if (jobGone(discJob)) setDiscJob(null);
+  }, [jobGone, discJob]);
 
   const toggleDiscovery = async () => {
     if (discJob) {

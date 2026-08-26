@@ -14,7 +14,7 @@ use tauri::{AppHandle, Emitter};
 use tokio::net::UdpSocket;
 
 use super::inspect::{self, describe_payload, Frame, Gate};
-use super::jobs::{now_ms, JobInfo, JobRegistry};
+use super::jobs::{now_ms, JobInfo, JobRegistry, TaskGuard};
 
 #[derive(Clone, Deserialize)]
 pub struct ImpairProfile {
@@ -329,9 +329,17 @@ pub async fn start_proxy(
             })
         };
 
-        // Run until the job is aborted; abort propagates by dropping the tasks.
-        let _ = tokio::join!(c2s, s2c);
-        reporter.abort();
+        // The relay runs until the job is stopped. Both legs and the reporter
+        // are children of this task; without the guard, stopping the job would
+        // abort only this supervisor and leave the relay forwarding traffic and
+        // the reporter emitting. The guard aborts all three when this task's
+        // future is dropped on cancel.
+        let mut guard = TaskGuard::new();
+        guard.watch(c2s.abort_handle());
+        guard.watch(s2c.abort_handle());
+        guard.watch(reporter.abort_handle());
+        std::future::pending::<()>().await;
+        drop(guard);
         jobs_cl.finish(id);
     });
 

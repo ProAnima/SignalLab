@@ -1,15 +1,15 @@
-import { useEffect, useRef, useState } from "react";
-import { api, on, EV, type HttpResponse, type JobInfo, type BurstProgress } from "../lib/api";
+import { useEffect, useState } from "react";
+import { api, EV, type HttpResponse, type JobInfo, type BurstProgress } from "../lib/api";
 import { useStore } from "../lib/store";
 import { useT } from "../lib/i18n";
-import { useSeries } from "../lib/hooks";
+import { useJobStream, useSeries } from "../lib/hooks";
 import { fmtBytes, fmtNum, statusClass } from "../lib/format";
 import { Scope } from "../components/Scope";
 
 const METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
 
 export function HttpView() {
-  const { pushLog, refreshJobs, stopJob, jobs } = useStore();
+  const { pushLog, refreshJobs, stopJob, jobGone } = useStore();
   const t = useT();
 
   const [method, setMethod] = useState("GET");
@@ -53,23 +53,16 @@ export function HttpView() {
   const [duration, setDuration] = useState(0);
   const [burstJob, setBurstJob] = useState<JobInfo | null>(null);
   const [prog, setProg] = useState<BurstProgress | null>(null);
-  const burstRef = useRef<number | null>(null);
-  burstRef.current = burstJob?.id ?? null;
   const { data: rpsSeries, push: pushRps, clear: clearRps } = useSeries(240);
 
-  useEffect(() => {
-    const un = on<BurstProgress>(EV.burstProgress, (e) => {
-      if (burstRef.current !== null && e.payload.job_id === burstRef.current) {
-        setProg(e.payload);
-        pushRps(e.payload.rps);
-      }
-    });
-    return () => { un.then((f) => f()); };
-  }, [pushRps]);
+  useJobStream<BurstProgress>(EV.burstProgress, burstJob?.id ?? null, (p) => {
+    setProg(p);
+    pushRps(p.rps);
+  });
 
   useEffect(() => {
-    if (burstJob && !jobs.find((j) => j.id === burstJob.id)) setBurstJob(null);
-  }, [jobs, burstJob]);
+    if (jobGone(burstJob)) setBurstJob(null);
+  }, [jobGone, burstJob]);
 
   const toggleBurst = async () => {
     if (burstJob) { stopJob(burstJob.id); setBurstJob(null); return; }

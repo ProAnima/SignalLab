@@ -1,13 +1,13 @@
-import { useEffect, useRef, useState } from "react";
-import { api, on, EV, type JobInfo, type StormStat } from "../lib/api";
+import { useEffect, useState } from "react";
+import { api, EV, type JobInfo, type StormStat } from "../lib/api";
 import { useStore } from "../lib/store";
 import { useT } from "../lib/i18n";
-import { useSeries } from "../lib/hooks";
+import { useJobStream, useSeries } from "../lib/hooks";
 import { fmtBytes, fmtNum } from "../lib/format";
 import { Scope } from "../components/Scope";
 
 export function StormView() {
-  const { pushLog, refreshJobs, stopJob, jobs } = useStore();
+  const { pushLog, refreshJobs, stopJob, jobGone } = useStore();
   const t = useT();
 
   const [target, setTarget] = useState("127.0.0.1:9000");
@@ -18,23 +18,16 @@ export function StormView() {
 
   const [job, setJob] = useState<JobInfo | null>(null);
   const [stat, setStat] = useState<StormStat | null>(null);
-  const jobRef = useRef<number | null>(null);
-  jobRef.current = job?.id ?? null;
   const { data: ppsSeries, push: pushPps, clear: clearPps } = useSeries(240);
 
-  useEffect(() => {
-    const un = on<StormStat>(EV.stormStat, (e) => {
-      if (jobRef.current !== null && e.payload.job_id === jobRef.current) {
-        setStat(e.payload);
-        pushPps(e.payload.pps);
-      }
-    });
-    return () => { un.then((f) => f()); };
-  }, [pushPps]);
+  useJobStream<StormStat>(EV.stormStat, job?.id ?? null, (s) => {
+    setStat(s);
+    pushPps(s.pps);
+  });
 
   useEffect(() => {
-    if (job && !jobs.find((j) => j.id === job.id)) setJob(null);
-  }, [jobs, job]);
+    if (jobGone(job)) setJob(null);
+  }, [jobGone, job]);
 
   const toggle = async () => {
     if (job) { stopJob(job.id); setJob(null); return; }
