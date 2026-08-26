@@ -2,6 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import { StoreProvider, useStore } from "./lib/store";
 import { I18nProvider, LANGS, useI18n, type TKey } from "./lib/i18n";
 import { Brand } from "./components/Brand";
+import { Palette } from "./components/Palette";
+import { SignalsView } from "./views/SignalsView";
+import { MqttView } from "./views/MqttView";
 import { OscView } from "./views/OscView";
 import { BroadcastView } from "./views/BroadcastView";
 import { InspectView } from "./views/InspectView";
@@ -11,12 +14,15 @@ import { StormView } from "./views/StormView";
 import { ScanView } from "./views/ScanView";
 import { fmtTime } from "./lib/format";
 
-const APP_VERSION = "0.2";
+const APP_VERSION = "0.3";
 
-type ViewKey = "osc" | "broadcast" | "inspect" | "http" | "netsim" | "storm" | "scan";
+type ViewKey =
+  | "signals" | "osc" | "mqtt" | "broadcast" | "inspect" | "http" | "netsim" | "storm" | "scan";
 
 const NAV: { key: ViewKey; glyph: string; label: TKey; kinds: string[] }[] = [
+  { key: "signals", glyph: "❖", label: "nav.signals", kinds: [] },
   { key: "osc", glyph: "∿", label: "nav.osc", kinds: ["osc-monitor", "osc-gen"] },
+  { key: "mqtt", glyph: "◈", label: "nav.mqtt", kinds: ["mqtt"] },
   { key: "broadcast", glyph: "⊛", label: "nav.broadcast", kinds: ["beacon", "discovery"] },
   { key: "inspect", glyph: "◫", label: "nav.inspect", kinds: [] },
   { key: "http", glyph: "⇄", label: "nav.http", kinds: ["http-burst"] },
@@ -105,7 +111,9 @@ function Shell() {
       </header>
 
       <main className="main">
+        {view === "signals" && <SignalsView />}
         {view === "osc" && <OscView />}
+        {view === "mqtt" && <MqttView />}
         {view === "broadcast" && <BroadcastView />}
         {view === "inspect" && <InspectView />}
         {view === "http" && <HttpView />}
@@ -163,6 +171,8 @@ function Shell() {
           <div ref={logEndRef} />
         </div>
       </section>
+
+      <Palette />
     </div>
   );
 }

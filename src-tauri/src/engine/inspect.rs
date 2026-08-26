@@ -296,12 +296,7 @@ impl Capture {
 }
 
 fn export_dir() -> std::path::PathBuf {
-    let home = std::env::var("USERPROFILE")
-        .or_else(|_| std::env::var("HOME"))
-        .unwrap_or_else(|_| ".".to_string());
-    std::path::Path::new(&home)
-        .join("Documents")
-        .join("SignalLab")
+    super::signals::data_dir()
 }
 
 /// Publish a frame from anywhere that holds an `AppHandle`.

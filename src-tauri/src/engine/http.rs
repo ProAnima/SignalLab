@@ -10,7 +10,7 @@ use tauri::{AppHandle, Emitter};
 use super::inspect::{self, Frame, Gate};
 use super::jobs::{now_ms, JobInfo, JobRegistry};
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct HttpRequest {
     pub method: String,
     pub url: String,

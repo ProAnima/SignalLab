@@ -16,6 +16,16 @@ export function toOscArg(row: ArgRow): OscArg {
   }
 }
 
+/** The inverse of `toOscArg`, for loading a stored signal into the editor. */
+export function fromOscArg(a: OscArg): ArgRow {
+  switch (a.type) {
+    case "nil": return { type: "nil", value: "" };
+    case "bool": return { type: "bool", value: a.value ? "true" : "false" };
+    case "blob": return { type: "str", value: "" };
+    default: return { type: a.type, value: String(a.value) };
+  }
+}
+
 export function fmtArg(a: OscArg): string {
   switch (a.type) {
     case "nil": return "nil";

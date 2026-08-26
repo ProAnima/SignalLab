@@ -1,7 +1,7 @@
 mod commands;
 mod engine;
 
-use engine::{Capture, JobRegistry};
+use engine::{Capture, JobRegistry, MqttHub};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -11,6 +11,7 @@ pub fn run() {
     tauri::Builder::default()
         .manage(JobRegistry::new())
         .manage(capture)
+        .manage(MqttHub::new())
         .setup(move |app| {
             // A single pump ships capture batches to the UI for the whole app.
             engine::inspect::spawn_pump(app.handle().clone(), pump_capture);
@@ -37,6 +38,13 @@ pub fn run() {
             commands::inspect_snapshot,
             commands::inspect_clear,
             commands::inspect_export,
+            commands::signals_load,
+            commands::signals_save,
+            commands::mqtt_connect,
+            commands::mqtt_publish,
+            commands::mqtt_subscribe,
+            commands::mqtt_unsubscribe,
+            commands::mqtt_publish_once,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

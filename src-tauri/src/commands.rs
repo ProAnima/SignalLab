@@ -7,12 +7,16 @@ use crate::engine::broadcast::{DiscoveryConfig, EmitConfig, EmitResult};
 use crate::engine::http::{BurstConfig, HttpRequest, HttpResponse};
 use crate::engine::inspect::{CaptureStats, Frame};
 use crate::engine::net::{host_info, HostInfo};
+use crate::engine::mqtt::{Cmd, MqttConfig, MqttHub, Sub};
 use crate::engine::netsim::ProxyConfig;
 use crate::engine::osc::{send_once, start_generator, start_monitor, GenConfig};
 use crate::engine::osc_codec::OscArg;
 use crate::engine::scan::ScanConfig;
+use crate::engine::signals::{Library, LibraryFile};
 use crate::engine::storm::StormConfig;
-use crate::engine::{broadcast, http, netsim, scan, storm, Capture, JobInfo, JobRegistry};
+use crate::engine::{
+    broadcast, http, mqtt, netsim, scan, signals, storm, Capture, JobInfo, JobRegistry,
+};
 
 // ---- host ----------------------------------------------------------------
 
@@ -176,4 +180,94 @@ pub fn inspect_clear(capture: State<'_, Capture>) -> CaptureStats {
 #[tauri::command]
 pub fn inspect_export(capture: State<'_, Capture>, format: String) -> Result<String, String> {
     capture.export(&format)
+}
+
+// ---- MQTT ----------------------------------------------------------------
+
+/// Open a connection and hold it as a job. CONNECT/CONNACK completes here, so a
+/// refused password is an error on the button rather than a job that dies.
+#[tauri::command]
+pub async fn mqtt_connect(
+    app: AppHandle,
+    jobs: State<'_, JobRegistry>,
+    hub: State<'_, MqttHub>,
+    config: MqttConfig,
+) -> Result<JobInfo, String> {
+    mqtt::start_client(app, jobs.inner().clone(), hub.inner().clone(), config).await
+}
+
+/// Publish on an open connection. An empty payload with `retain` is how a
+/// retained value is cleared — the one operation nobody can do by hand.
+#[tauri::command]
+pub fn mqtt_publish(
+    hub: State<'_, MqttHub>,
+    job_id: u64,
+    topic: String,
+    payload: String,
+    qos: u8,
+    retain: bool,
+) -> Result<(), String> {
+    hub.send(
+        job_id,
+        Cmd::Publish {
+            topic,
+            payload: payload.into_bytes(),
+            qos,
+            retain,
+        },
+    )
+}
+
+#[tauri::command]
+pub fn mqtt_subscribe(
+    hub: State<'_, MqttHub>,
+    job_id: u64,
+    filters: Vec<Sub>,
+) -> Result<(), String> {
+    if filters.is_empty() {
+        return Err("nothing to subscribe to".into());
+    }
+    hub.send(job_id, Cmd::Subscribe(filters))
+}
+
+#[tauri::command]
+pub fn mqtt_unsubscribe(
+    hub: State<'_, MqttHub>,
+    job_id: u64,
+    filters: Vec<String>,
+) -> Result<(), String> {
+    if filters.is_empty() {
+        return Err("nothing to unsubscribe from".into());
+    }
+    hub.send(job_id, Cmd::Unsubscribe(filters))
+}
+
+/// Connect, publish, wait for the ack the QoS calls for, disconnect. This is
+/// what a library signal uses: it must work with nothing set up.
+#[tauri::command]
+pub async fn mqtt_publish_once(
+    app: AppHandle,
+    config: MqttConfig,
+    topic: String,
+    payload: String,
+    qos: u8,
+    retain: bool,
+) -> Result<String, String> {
+    mqtt::publish_once(app, config, topic, payload, qos, retain).await
+}
+
+// ---- Signal library ------------------------------------------------------
+
+/// Read the library, seeding it on first run. Firing a signal is not a command:
+/// the UI dispatches it through `osc_send` / `broadcast_send` / `http_request`,
+/// so there is exactly one send path per transport.
+#[tauri::command]
+pub fn signals_load() -> Result<LibraryFile, String> {
+    signals::load()
+}
+
+/// Write the whole library back. Returns the path, for the console line.
+#[tauri::command]
+pub fn signals_save(library: Library) -> Result<String, String> {
+    signals::save(&library)
 }

@@ -157,6 +157,88 @@ export interface Peer {
   responded: number;
 }
 
+// ---- mqtt ----
+
+export interface MqttWill {
+  topic: string;
+  payload: string;
+  qos: number;
+  retain: boolean;
+}
+
+export interface MqttSub {
+  filter: string;
+  qos: number;
+}
+
+export interface MqttConfig {
+  host: string;
+  port: number;
+  client_id: string;
+  username: string;
+  password: string;
+  keep_alive_s: number;
+  clean_session: boolean;
+  will: MqttWill | null;
+  /** Subscribed the moment the connection is up. `#` scans the whole broker. */
+  subscribe: MqttSub[];
+}
+
+export interface MqttMessage {
+  ts: number;
+  topic: string;
+  payload: string;
+  bytes: number;
+  qos: number;
+  retain: boolean;
+  dup: boolean;
+}
+
+export interface MqttGrant {
+  filter: string;
+  qos: number;
+  accepted: boolean;
+}
+
+// ---- signal library ----
+
+/**
+ * Bytes for a raw signal — narrower than `Payload` on purpose: an OSC message
+ * is what the `osc` transport is for. It is still assignable to `Payload`, so
+ * firing one goes straight to `broadcast_send`.
+ */
+export type RawPayload =
+  | { kind: "text"; text: string }
+  | { kind: "hex"; hex: string };
+
+/** What a stored signal puts on the wire; the tag is its transport. */
+export type SignalBody =
+  | { transport: "osc"; target: string; address: string; args: OscArg[] }
+  | { transport: "udp"; target: string; payload: RawPayload }
+  | { transport: "http"; request: HttpRequest }
+  | { transport: "mqtt"; broker: string; topic: string; payload: string; qos: number; retain: boolean };
+
+export interface Signal {
+  id: string;
+  name: string;
+  /** Folder in the explorer; empty is the ungrouped root. */
+  group: string;
+  note: string;
+  body: SignalBody;
+}
+
+export interface Library {
+  version: number;
+  signals: Signal[];
+}
+
+export interface LibraryFile {
+  path: string;
+  library: Library;
+  /** The file did not exist and the starter set was written. */
+  seeded: boolean;
+}
+
 // ---- inspector ----
 
 export interface Frame {
@@ -219,6 +301,28 @@ export interface PeerReport {
   job_id: number; ts: number; peers: Peer[];
   packets: number; bytes: number; responses: number;
 }
+export interface MqttBatch {
+  job_id: number;
+  ts: number;
+  messages: MqttMessage[];
+  /** Messages the accumulator had to shed while the UI was behind. */
+  dropped: number;
+}
+export interface MqttStateEvent {
+  job_id: number;
+  ts: number;
+  state: "connected" | "subscribed" | "closed";
+  broker: string;
+  error: string | null;
+  grants: MqttGrant[];
+}
+export interface MqttAck {
+  job_id: number;
+  ts: number;
+  kind: "published" | "unsubscribed";
+  packet_id: number;
+  topic: string | null;
+}
 export interface InspectBatch {
   frames: Frame[];
   stats: CaptureStats;
@@ -257,6 +361,20 @@ export const api = {
   inspectSnapshot: (limit: number) => invoke<Frame[]>("inspect_snapshot", { limit }),
   inspectClear: () => invoke<CaptureStats>("inspect_clear"),
   inspectExport: (format: "jsonl" | "txt") => invoke<string>("inspect_export", { format }),
+
+  mqttConnect: (config: MqttConfig) => invoke<JobInfo>("mqtt_connect", { config }),
+  mqttPublish: (jobId: number, topic: string, payload: string, qos: number, retain: boolean) =>
+    invoke<void>("mqtt_publish", { jobId, topic, payload, qos, retain }),
+  mqttSubscribe: (jobId: number, filters: MqttSub[]) =>
+    invoke<void>("mqtt_subscribe", { jobId, filters }),
+  mqttUnsubscribe: (jobId: number, filters: string[]) =>
+    invoke<void>("mqtt_unsubscribe", { jobId, filters }),
+  mqttPublishOnce: (
+    config: MqttConfig, topic: string, payload: string, qos: number, retain: boolean
+  ) => invoke<string>("mqtt_publish_once", { config, topic, payload, qos, retain }),
+
+  signalsLoad: () => invoke<LibraryFile>("signals_load"),
+  signalsSave: (library: Library) => invoke<string>("signals_save", { library }),
 };
 
 // Typed event subscription helper.
@@ -276,4 +394,7 @@ export const EV = {
   emitStat: "broadcast://emit-stat",
   peers: "broadcast://peers",
   inspectBatch: "inspect://batch",
+  mqttMessages: "mqtt://messages",
+  mqttState: "mqtt://state",
+  mqttAck: "mqtt://ack",
 } as const;

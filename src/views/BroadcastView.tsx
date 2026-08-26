@@ -478,7 +478,7 @@ export function BroadcastView() {
                 <label>{t("bc.interface")}</label>
                 <input value={iface} disabled={!!discJob} placeholder={host?.local_ip ?? "0.0.0.0"} onChange={(e) => setIface(e.target.value)} />
               </div>
-              <div className="field" style={{ display: "flex", alignItems: "flex-end" }}>
+              <div className="field check">
                 <label className="checkbox">
                   <input type="checkbox" checked={reuse} disabled={!!discJob} onChange={(e) => setReuse(e.target.checked)} />
                   {t("bc.reuse")}

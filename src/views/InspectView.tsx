@@ -3,6 +3,7 @@ import { api, on, EV, type CaptureStats, type Frame, type InspectBatch } from ".
 import { useStore } from "../lib/store";
 import { useT } from "../lib/i18n";
 import { fmtBytes, fmtNum, fmtTime } from "../lib/format";
+import { signalFromFrame } from "../lib/signals";
 
 /** Frames kept in the view. The engine's ring holds more for export. */
 const VIEW_CAPACITY = 4000;
@@ -22,7 +23,7 @@ function verdictClass(v: string | null): string {
 }
 
 export function InspectView() {
-  const { pushLog } = useStore();
+  const { pushLog, library, setLibrary } = useStore();
   const t = useT();
 
   const [rows, setRows] = useState<Row[]>([]);
@@ -70,6 +71,18 @@ export function InspectView() {
     try { setStats(await api.inspectClear()); } catch { /* ignore */ }
   };
 
+  /**
+   * The reason to keep a frame is to send it again later, when the gear that
+   * produced it is not on this network any more.
+   */
+  const saveAsSignal = (frame: Frame) => {
+    const name = (frame.summary || `${frame.proto} #${frame.seq}`).slice(0, 48);
+    const signal = signalFromFrame(frame, library, name);
+    if (!signal) return;
+    setLibrary([...library, signal]);
+    pushLog("ok", "inspect", "log.signalCaptured", { seq: frame.seq, name: signal.name });
+  };
+
   const exportTo = async (format: "jsonl" | "txt") => {
     try {
       const path = await api.inspectExport(format);
@@ -105,6 +118,9 @@ export function InspectView() {
   );
 
   const picked = selected !== null ? rows.find((f) => f.seq === selected) ?? null : null;
+  // The dump stops at 1 KB. Half a packet is a different packet, so a frame it
+  // truncated cannot become a signal.
+  const canReplay = !!picked?.hex && !/more bytes/.test(picked.hex);
   const armed = stats?.enabled ?? false;
 
   return (
@@ -242,6 +258,17 @@ export function InspectView() {
                 <dt>{t("ins.size")}</dt><dd>{t("ins.sizeBytes", { n: picked.bytes })}</dd>
                 {picked.verdict && <><dt>{t("ins.verdict")}</dt><dd className={verdictClass(picked.verdict)}>{picked.verdict}</dd></>}
               </dl>
+
+              <div className="btn-row">
+                <button
+                  className="ghost sm"
+                  disabled={!canReplay}
+                  title={canReplay ? undefined : t("ins.noExactCopy")}
+                  onClick={() => saveAsSignal(picked)}
+                >
+                  {t("sig.fromFrame")}
+                </button>
+              </div>
 
               <p className="section-label" style={{ marginTop: 16 }}>{t("ins.decoded")}</p>
               <pre className="hex">{picked.detail ?? picked.summary}</pre>

@@ -241,7 +241,7 @@ export function OscView() {
                 <label>{t("osc.max")}</label>
                 <input type="number" value={gen.max} onChange={(e) => setGen({ ...gen, max: +e.target.value })} />
               </div>
-              <div className="field" style={{ display: "flex", alignItems: "flex-end" }}>
+              <div className="field check">
                 <label className="checkbox">
                   <input type="checkbox" checked={gen.as_int} onChange={(e) => setGen({ ...gen, as_int: e.target.checked })} />
                   {t("osc.asInt")}

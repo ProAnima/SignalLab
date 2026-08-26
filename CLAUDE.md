@@ -36,7 +36,9 @@ src/                      React UI
   lib/i18n.tsx            locale provider, t() with {placeholder} interpolation
   lib/locales/en.ts       source of truth for every string; ru.ts is typed against it
   components/Scope.tsx    canvas oscilloscope (no chart library)
-  components/OscArgs.tsx  typed OSC argument editor (OSC + Broadcast share it)
+  components/OscArgs.tsx  typed OSC argument editor (OSC + Broadcast + Signals share it)
+  components/Palette.tsx  Ctrl+K signal palette, mounted once in the shell
+  lib/signals.ts          firing, describing and capturing signals
   views/*.tsx             one screen per module
 src-tauri/src/
   lib.rs                  Tauri builder: manages JobRegistry + Capture, registers commands
@@ -49,6 +51,9 @@ src-tauri/src/
   engine/netsim.rs        UDP impairment relay (latency/jitter/loss/dup/corrupt)
   engine/storm.rs         UDP/TCP load generator
   engine/scan.rs          TCP connect scanner
+  engine/mqtt_codec.rs    hand-written MQTT 3.1.1 codec (no external crate)
+  engine/mqtt.rs          one broker connection as a job; MqttHub routes commands
+  engine/signals.rs       signal library: file + starter set (storage only)
   engine/jobs.rs          job registry: start / list / stop
 ```
 
@@ -71,8 +76,28 @@ src-tauri/src/
   included; they need focus rings and Space/Enter. Never put a click target
   inside a `<label>`. `--text-faint` carries the 9.5px labels and is tuned to
   clear WCAG AA on all three surfaces — don't darken it.
+- **One socket, one owner.** The MQTT connection is a single task that owns the
+  stream; `MqttHub` maps a job id to its command channel, so publish/subscribe
+  from the UI reach it without a lock on the wire. Inbound messages are batched
+  to the UI every 100 ms — a `#` scan is a firehose — and the batch reports what
+  it had to shed rather than dropping it silently.
+- **MQTT is 3.1.1, plain TCP, clean session, QoS 0/1/2.** Show and installation
+  gear routinely uses QoS 2 for subscribe, publish *and* its last-will, so none
+  of that is optional; clean sessions are why there is no offline queue to
+  persist. No MQTT 5, no TLS — adding either is a decision, not a detail.
+
+- **A signal is not a second send path.** `engine/signals.rs` only stores; the
+  UI fires through `osc_send` / `broadcast_send` / `http_request`, so a library
+  signal is byte-identical to a hand-typed one and shows up in the Inspector
+  under its real source. Adding a transport means a `SignalBody` variant plus a
+  branch in `fireSignal` — never a new command.
+- **The library file is someone else's document.** It lives in
+  `Documents/SignalLab/signals.json`, is written whole on a debounce, and a
+  parse error is reported with the path rather than silently overwritten with
+  the starter set. Shipped seed targets stay on loopback; a test enforces it.
+
 - **Keep `cargo test` green**: it covers the OSC codec, the CIDR/target
-  resolver, socket-option paths and the capture ring.
+  resolver, socket-option paths, the capture ring and the signal library.
 
 ## Responsible use
 

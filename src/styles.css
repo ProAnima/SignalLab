@@ -345,6 +345,13 @@ body::before {
 
 .field { margin-bottom: 13px; }
 .field:last-child { margin-bottom: 0; }
+/* An explanation under a control, for the settings whose name is jargon. */
+.field-hint {
+  margin: 7px 1px 0;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-faint);
+}
 .field > label {
   display: block;
   font-size: 11px;
@@ -435,14 +442,64 @@ input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.15); }
 label.checkbox {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 9px;
   margin-bottom: 0;
   cursor: pointer;
   font-size: 11.5px;
+  line-height: 1.35;
   color: var(--text-dim);
 }
-.checkbox input { width: auto; margin: 0; accent-color: var(--accent); cursor: pointer; }
 .checkbox:hover { color: var(--text); }
+
+/* Drawn rather than left native: `accent-color` gives Chromium's saturated
+   filled square, which is the loudest thing on a panel of thin borders and
+   muted type. This is the same box as an input, at 15px. */
+.checkbox input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  flex-shrink: 0;
+  position: relative;
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  /* 4px, not --radius-xs: six on a fifteen-pixel box reads as a circle. */
+  border-radius: 4px;
+  background: var(--bg-input);
+  cursor: pointer;
+  transition: background 0.13s var(--ease), border-color 0.13s var(--ease);
+}
+.checkbox input[type="checkbox"]:hover { border-color: var(--accent-deep); }
+/* On is said the way the rest of the app says it — accent-soft behind an accent
+   edge — rather than with a saturated fill that outshouts the panel. */
+.checkbox input[type="checkbox"]:checked {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+/* The tick is drawn, so it lands on the same pixel grid at every zoom. */
+.checkbox input[type="checkbox"]:checked::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 1px;
+  width: 4px;
+  height: 8px;
+  border: solid var(--accent);
+  border-width: 0 2px 2px 0;
+  transform: rotate(40deg);
+}
+.checkbox input[type="checkbox"]:focus-visible { outline: none; box-shadow: var(--ring); }
+.checkbox input[type="checkbox"]:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* A checkbox standing where an input would be, beside captioned fields: it has
+   no caption of its own, so it needs the input's height to line up with them
+   instead of floating at the top of the row. */
+.field.check {
+  display: flex;
+  align-items: flex-end;
+}
+.field.check > label.checkbox { min-height: 34px; }
 
 /* ---------- buttons ---------- */
 
@@ -747,6 +804,240 @@ pre.hex {
 .peer-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 8px; }
 .peer-dot.fresh { background: var(--accent); box-shadow: 0 0 7px var(--accent); }
 .peer-dot.stale { background: var(--text-faint); }
+
+/* ---------- signal library ---------- */
+
+.sig-list { flex: 1; min-height: 0; margin: 0 -6px; padding: 0 6px; }
+.sig-group + .sig-group { margin-top: 13px; }
+.sig-group-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 6px;
+  padding: 0 4px;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 1.3px;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+.sig-group-head span {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 0;
+  background: var(--surface-3);
+  border-radius: 999px;
+  padding: 1px 7px;
+}
+/* Real buttons, like the sidebar: the explorer is walked with the keyboard as
+   often as with the mouse. */
+.sig-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  width: 100%;
+  margin-bottom: 3px;
+  padding: 7px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s var(--ease), color 0.15s var(--ease);
+}
+.sig-item:active { transform: none; }
+.sig-item:hover { background: rgba(255, 255, 255, 0.035); color: var(--text); }
+.sig-item.active {
+  background: linear-gradient(90deg, var(--accent-soft), rgba(139, 124, 255, 0.05));
+  border-color: rgba(62, 230, 176, 0.18);
+  color: var(--text);
+}
+.sig-item-name { font-size: 12.5px; font-weight: 550; }
+.sig-item-meta {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 100%;
+  overflow: hidden;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--text-faint);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sig-badge {
+  flex-shrink: 0;
+  padding: 1px 5px;
+  border-radius: var(--radius-xs);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+}
+.sig-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--text-faint);
+}
+.sig-foot .spacer, .btn-row .spacer { flex: 1; }
+.sig-foot .ok { color: var(--accent); }
+
+kbd {
+  padding: 0 5px;
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 2px;
+  border-radius: var(--radius-xs);
+  background: var(--bg-input);
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 10.5px;
+}
+
+/* ---------- mqtt topic tree ---------- */
+
+.mq-stats {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--text-faint);
+}
+.mq-stats .spacer { flex: 1; }
+.mq-stats .ok { color: var(--accent); }
+.mq-stats .warn { color: var(--amber); }
+
+.topic-tree { flex: 1; min-height: 0; margin: 0 -6px; padding: 0 6px; }
+/* A row is a button: the tree is walked with the keyboard, and a topic is picked
+   and expanded from the same place. */
+.topic-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 4px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.topic-row:active { transform: none; }
+.topic-row:hover { background: rgba(255, 255, 255, 0.035); color: var(--text); }
+.topic-row.active {
+  background: var(--accent-soft);
+  border-color: rgba(62, 230, 176, 0.2);
+  color: var(--text);
+}
+.topic-twist {
+  flex: 0 0 10px;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-faint);
+}
+.topic-name {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+/* The value takes what is left and gets cut, never the topic: which topic it is
+   matters more than the tail of a long payload. */
+.topic-value {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--accent);
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.topic-count {
+  flex: 0 0 auto;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  font-family: var(--mono);
+  font-size: 9.5px;
+  color: var(--text-faint);
+}
+
+/* ---------- command palette ---------- */
+
+.palette-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 12vh 20px 20px;
+  background: rgba(4, 7, 11, 0.62);
+  backdrop-filter: blur(2px);
+}
+.palette {
+  width: min(560px, 100%);
+  padding: 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface-1);
+  box-shadow: var(--shadow-md);
+}
+.palette > input { padding: 10px 12px; font-size: 13px; }
+.palette-list { max-height: 46vh; margin-top: 10px; overflow-y: auto; }
+.palette-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.palette-row:active { transform: none; }
+.palette-row.active {
+  background: var(--accent-soft);
+  border-color: rgba(62, 230, 176, 0.22);
+  color: var(--text);
+}
+.palette-name { flex-shrink: 0; font-size: 12.5px; }
+.palette-target {
+  flex: 1;
+  overflow: hidden;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--text-faint);
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.palette-hint {
+  margin: 10px 2px 2px;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-faint);
+}
 
 /* ---------- scrollbars ---------- */
 

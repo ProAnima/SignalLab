@@ -7,8 +7,10 @@
 *An open-source tool by [ProAnimaStudio](https://github.com/ProAnima).*
 
 A lightweight, cross-platform simulator and toolbox for **OSC signals, HTTP,
-network impairment, broadcast/discovery, traffic storms, and port scanning** —
-with live signal display and a cross-protocol packet inspector. Built with
+MQTT, network impairment, broadcast/discovery, traffic storms, and port
+scanning** —
+with live signal display, a cross-protocol packet inspector, and a library of
+named signals you can fire again. Built with
 **Tauri 2 + React/TypeScript** on a native **Rust** networking engine, so it
 ships as a small binary yet has full raw UDP/TCP access.
 
@@ -25,7 +27,9 @@ choice. See [Interface & localization](#interface--localization).
 
 | Module | What it does |
 | --- | --- |
+| **Signals** | The library: a named, editable packet you can fire again — OSC, raw UDP or an HTTP request — grouped, searchable, and fired from anywhere with `Ctrl+K`. Ships with the recipes for the gear it was written against, saves itself as hand-editable JSON in `Documents/SignalLab/signals.json`, and turns any frame the Inspector caught into a byte-exact replay. |
 | **OSC** | Send OSC 1.0 messages with typed arguments, monitor an incoming port with live decoding, and drive continuous waveforms (sine / triangle / saw / square / ramp / random) into any endpoint with an on-screen oscilloscope. |
+| **MQTT** | Connect to a broker, subscribe to `#` and watch every topic it holds build up as a live tree — last value, retain flag, QoS, message count. Publish at QoS 0/1/2, announce a last will, and **clear a retained value** (the empty-payload trick), which is the one thing a stuck broker needs and no other tool makes easy. MQTT 3.1.1, hand-written, plain TCP. |
 | **Broadcast** | Fan a payload — OSC, text, or raw hex — out to a **list** of hosts, a **broadcast** address (`SO_BROADCAST`), a **multicast** group, or every host in a **CIDR sweep**. One-shot or as a repeating beacon. The paired **discovery listener** joins multicast groups, tables every peer that answers, and can auto-reply to impersonate a device. |
 | **Inspector** | One timeline for every module: each OSC send, monitor packet, beacon, discovery probe and impaired relay frame, decoded, with a hex dump and the relay's verdict on it. Filter by protocol / direction / text, then export the buffer to `.jsonl` or `.txt`. |
 | **HTTP** | Inspect a single request/response (status, latency, headers, body), then run a concurrent **load burst** with live RPS and latency percentiles. |
@@ -43,12 +47,14 @@ events and can be stopped individually or all at once from the console strip.
 ```
 src/                     React + TypeScript UI (Vite)
   lib/api.ts             typed wrappers over Tauri invoke + event channels
-  lib/store.tsx          shared jobs + console state
+  lib/store.tsx          shared jobs, console and signal-library state
+  lib/signals.ts         firing, describing and capturing library signals
   lib/i18n.tsx           locale provider + t() with {placeholder} interpolation
   lib/locales/en.ts      source-of-truth dictionary (every key)
   lib/locales/ru.ts      Russian, typed against en.ts
   components/Scope.tsx   canvas oscilloscope / charts (no chart libs)
-  components/OscArgs.tsx typed OSC argument editor (shared by OSC + Broadcast)
+  components/OscArgs.tsx typed OSC argument editor (OSC + Broadcast + Signals)
+  components/Palette.tsx Ctrl+K palette that fires a signal from any screen
   components/Brand.tsx   ProAnimaStudio inline-SVG mark + lockup
   views/*.tsx            one screen per module
 src-tauri/src/engine/    the Rust engine
@@ -59,15 +65,18 @@ src-tauri/src/engine/    the Rust engine
   http.rs                request runner + concurrent burst
   netsim.rs              UDP impairment relay
   storm.rs               UDP/TCP load generator
+  mqtt_codec.rs          self-contained MQTT 3.1.1 codec (no deps)
+  mqtt.rs                one live broker connection as a job + one-shot publish
   scan.rs                TCP connect scanner
+  signals.rs             signal library file + starter set (storage only)
   jobs.rs                job registry (start / list / stop)
   commands.rs            thin #[tauri::command] layer
 ```
 
 The engine uses `tokio` for async sockets, `socket2` for the socket options
 tokio can't set before bind (`SO_REUSEADDR`), and `reqwest` (native-tls /
-schannel on Windows) for HTTP. The OSC codec is hand-written, so there are no
-OSC crate version risks and the dependency tree stays small.
+schannel on Windows) for HTTP. The OSC and MQTT codecs are hand-written, so
+there are no protocol-crate version risks and the dependency tree stays small.
 
 ### The capture bus
 
