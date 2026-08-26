@@ -208,6 +208,22 @@ pub async fn start_storm(
         }
 
         reporter.abort();
+        // The reporter only ticks every 250 ms, so a run that ends on its own
+        // duration used to leave the panel showing a count from a quarter second
+        // ago — and "how many actually went out" is the one number a load
+        // generator owes you. The rate reads zero: nothing is being sent now.
+        let _ = app_cl.emit(
+            "storm://stat",
+            StormStat {
+                job_id: id,
+                ts: now_ms(),
+                packets: packets.load(Ordering::Relaxed),
+                bytes: bytes.load(Ordering::Relaxed),
+                errors: errors.load(Ordering::Relaxed),
+                pps: 0.0,
+                mbps: 0.0,
+            },
+        );
         let _ = app_cl.emit(
             "job://ended",
             serde_json::json!({ "job_id": id, "kind": "storm", "error": serde_json::Value::Null }),

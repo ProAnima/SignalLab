@@ -532,6 +532,21 @@ pub async fn start_beacon(
         }
 
         reporter.abort();
+        // Same reason as the storm reporter: a beacon that runs out its own
+        // count or duration has to leave the real totals on screen, not the
+        // last 250 ms tick.
+        let _ = app_cl.emit(
+            "broadcast://emit-stat",
+            EmitStat {
+                job_id: id,
+                ts: now_ms(),
+                rounds: rounds.load(Ordering::Relaxed),
+                packets: packets.load(Ordering::Relaxed),
+                bytes: bytes.load(Ordering::Relaxed),
+                errors: errors.load(Ordering::Relaxed),
+                pps: 0.0,
+            },
+        );
         let _ = app_cl.emit(
             "job://ended",
             serde_json::json!({ "job_id": id, "kind": "beacon", "error": error }),

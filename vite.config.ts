@@ -16,7 +16,10 @@ export default defineConfig(async () => ({
   server: {
     port: 1420,
     strictPort: true,
-    host: host || false,
+    // Bind the IPv4 loopback explicitly. Node 17+ resolves `localhost` to
+    // ::1 first, while the Tauri shell dials 127.0.0.1 — leaving this unset
+    // makes `tauri dev` hang on "Waiting for your frontend dev server".
+    host: host || "127.0.0.1",
     hmr: host
       ? {
           protocol: "ws",

@@ -150,8 +150,20 @@ UI and automatic Rust rebuilds.
 npm run tauri build
 ```
 
-Produces an installer / executable under `src-tauri/target/release/bundle/`.
-The release profile is size-optimized (`opt-level = "s"`, LTO, stripped).
+Produces two Windows installers under `src-tauri/target/release/bundle/`:
+
+| Artifact | Use |
+| --- | --- |
+| `nsis/Signal Lab_<version>_x64-setup.exe` | normal install — asks per-user or per-machine, English/Russian |
+| `msi/Signal Lab_<version>_x64_en-US.msi` | unattended / group-policy deployment |
+
+`src-tauri/target/release/signal-lab.exe` is the bare executable and needs no
+installation at all — handy for a USB stick on a show site. The release profile
+is size-optimized (`opt-level = "s"`, LTO, stripped).
+
+The app icon is redrawn from the in-app brand mark (`src/components/Brand.tsx`)
+by `scripts/gen-icon.py`; feed the 1024px result to `npx tauri icon` to cut the
+platform set.
 
 ---
 
