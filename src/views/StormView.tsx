@@ -1,12 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { api, on, EV, type JobInfo, type StormStat } from "../lib/api";
 import { useStore } from "../lib/store";
+import { useT } from "../lib/i18n";
 import { useSeries } from "../lib/hooks";
 import { fmtBytes, fmtNum } from "../lib/format";
 import { Scope } from "../components/Scope";
 
 export function StormView() {
   const { pushLog, refreshJobs, stopJob, jobs } = useStore();
+  const t = useT();
 
   const [target, setTarget] = useState("127.0.0.1:9000");
   const [protocol, setProtocol] = useState<"udp" | "tcp">("udp");
@@ -41,7 +43,9 @@ export function StormView() {
       setStat(null);
       const j = await api.stormStart({ target, protocol, size, rate, duration_s: duration });
       setJob(j);
-      pushLog("warn", "storm", `${protocol.toUpperCase()} storm → ${target} @ ${rate}pps × ${size}B`);
+      pushLog("warn", "storm", "log.stormStarted", {
+        protocol: protocol.toUpperCase(), target, rate, size,
+      });
       refreshJobs();
     } catch (e) {
       pushLog("err", "storm", String(e));
@@ -51,48 +55,60 @@ export function StormView() {
   return (
     <div>
       <div className="view-head">
-        <h1>Network storm</h1>
-        <p>A controlled UDP/TCP load source for stress-testing your own servers and links. Set the packet rate, payload size and duration; throughput is metered live.</p>
+        <h1>{t("st.title")}</h1>
+        <p>{t("st.blurb")}</p>
       </div>
 
       <div className="cols side">
         <div className="panel">
-          <p className="section-label">Generator</p>
-          <div className="field"><label>Target host:port</label><input value={target} onChange={(e) => setTarget(e.target.value)} disabled={!!job} /></div>
+          <p className="section-label">{t("st.generator")}</p>
+          <div className="field">
+            <label>{t("common.target")}</label>
+            <input value={target} onChange={(e) => setTarget(e.target.value)} disabled={!!job} />
+          </div>
           <div className="row">
             <div className="field">
-              <label>Protocol</label>
+              <label>{t("common.protocol")}</label>
               <select value={protocol} onChange={(e) => setProtocol(e.target.value as "udp" | "tcp")} disabled={!!job}>
-                <option value="udp">UDP flood</option>
-                <option value="tcp">TCP connect flood</option>
+                <option value="udp">{t("st.udp")}</option>
+                <option value="tcp">{t("st.tcp")}</option>
               </select>
             </div>
-            <div className="field"><label>Payload (bytes)</label><input type="number" value={size} onChange={(e) => setSize(+e.target.value)} disabled={!!job} /></div>
+            <div className="field">
+              <label>{t("st.payloadSize")}</label>
+              <input type="number" value={size} onChange={(e) => setSize(+e.target.value)} disabled={!!job} />
+            </div>
           </div>
           <div className="row">
-            <div className="field"><label>Rate (pps, 0 = max)</label><input type="number" value={rate} onChange={(e) => setRate(+e.target.value)} disabled={!!job} /></div>
-            <div className="field"><label>Duration (s, 0 = manual)</label><input type="number" value={duration} onChange={(e) => setDuration(+e.target.value)} disabled={!!job} /></div>
+            <div className="field">
+              <label>{t("st.rate")}</label>
+              <input type="number" value={rate} onChange={(e) => setRate(+e.target.value)} disabled={!!job} />
+            </div>
+            <div className="field">
+              <label>{t("st.duration")}</label>
+              <input type="number" value={duration} onChange={(e) => setDuration(+e.target.value)} disabled={!!job} />
+            </div>
           </div>
           <div className="btn-row">
-            <button className={job ? "danger" : "primary"} onClick={toggle}>{job ? "Stop storm" : "Launch storm"}</button>
+            <button className={job ? "danger" : "primary"} onClick={toggle}>
+              {job ? t("st.stop") : t("st.launch")}
+            </button>
           </div>
-          <div className="hint amber">
-            ⚠ Only target hosts and networks you own or are authorized to test. High packet rates can saturate links and trip intrusion detection.
-          </div>
+          <div className="hint amber">{t("st.warning")}</div>
         </div>
 
         <div className="panel">
-          <p className="section-label">Live throughput</p>
+          <p className="section-label">{t("st.throughput")}</p>
           <div className="metrics" style={{ marginBottom: 14 }}>
-            <div className="metric"><div className="k">Packets</div><div className="v accent">{fmtNum(stat?.packets ?? 0)}</div></div>
-            <div className="metric"><div className="k">PPS</div><div className="v accent">{fmtNum(stat?.pps ?? 0)}</div></div>
-            <div className="metric"><div className="k">Rate</div><div className="v amber">{(stat?.mbps ?? 0).toFixed(2)}<small>Mbps</small></div></div>
-            <div className="metric"><div className="k">Volume</div><div className="v">{fmtBytes(stat?.bytes ?? 0)}</div></div>
-            <div className="metric"><div className="k">Errors</div><div className="v red">{fmtNum(stat?.errors ?? 0)}</div></div>
+            <div className="metric"><div className="k">{t("common.packets")}</div><div className="v accent">{fmtNum(stat?.packets ?? 0)}</div></div>
+            <div className="metric"><div className="k">{t("st.pps")}</div><div className="v accent">{fmtNum(stat?.pps ?? 0)}</div></div>
+            <div className="metric"><div className="k">{t("st.rateLabel")}</div><div className="v amber">{(stat?.mbps ?? 0).toFixed(2)}<small>Mbps</small></div></div>
+            <div className="metric"><div className="k">{t("common.volume")}</div><div className="v">{fmtBytes(stat?.bytes ?? 0)}</div></div>
+            <div className="metric"><div className="k">{t("common.errors")}</div><div className="v red">{fmtNum(stat?.errors ?? 0)}</div></div>
           </div>
-          <Scope data={ppsSeries} height={220} color="#ffb454" min={0} />
-          <div style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--text-faint)", marginTop: 6, textAlign: "right" }}>
-            packets / second
+          <Scope data={ppsSeries} height={220} color="#ffc069" min={0} />
+          <div style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--text-faint)", marginTop: 8, textAlign: "right" }}>
+            {t("st.ppsCaption")}
           </div>
         </div>
       </div>

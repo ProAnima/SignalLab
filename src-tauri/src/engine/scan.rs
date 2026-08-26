@@ -11,6 +11,7 @@ use tokio::io::AsyncReadExt;
 use tokio::net::TcpStream;
 use tokio::sync::Semaphore;
 
+use super::inspect::{self, Frame};
 use super::jobs::{now_ms, JobInfo, JobRegistry};
 
 #[derive(Clone, Deserialize)]
@@ -107,6 +108,22 @@ pub async fn start_scan(
                         None
                     };
                     open_t.fetch_add(1, Ordering::Relaxed);
+
+                    // Open ports are rare enough to put every one on the timeline.
+                    if inspect::armed(&app_t) {
+                        inspect::publish(
+                            &app_t,
+                            Frame::rx("tcp", "scan")
+                                .job(id)
+                                .remote(&addr)
+                                .summary(match &banner {
+                                    Some(b) => format!("port {port} open — {b}"),
+                                    None => format!("port {port} open"),
+                                })
+                                .verdict("open"),
+                        );
+                    }
+
                     let _ = app_t.emit(
                         "scan://open",
                         OpenPort {

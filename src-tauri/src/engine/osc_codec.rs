@@ -197,9 +197,58 @@ fn decode_message(buf: &[u8]) -> Result<OscMessage, String> {
     Ok(OscMessage { address, args })
 }
 
+/// Render one argument for logs and the Inspector's summary column.
+pub fn arg_str(a: &OscArg) -> String {
+    match a {
+        OscArg::Int(v) => v.to_string(),
+        OscArg::Float(v) => v.to_string(),
+        OscArg::Long(v) => v.to_string(),
+        OscArg::Double(v) => v.to_string(),
+        OscArg::Str(v) => format!("\"{v}\""),
+        OscArg::Bool(v) => v.to_string(),
+        OscArg::Blob(v) => format!("blob[{}]", v.len()),
+        OscArg::Nil => "nil".to_string(),
+    }
+}
+
+/// One-line summary of a decoded packet: the first message, plus a count when a
+/// bundle carried more.
+pub fn summarize_messages(msgs: &[OscMessage]) -> String {
+    let Some(first) = msgs.first() else {
+        return "(empty packet)".to_string();
+    };
+    let args = first.args.iter().map(arg_str).collect::<Vec<_>>().join(" ");
+    let head = if args.is_empty() {
+        first.address.clone()
+    } else {
+        format!("{} {}", first.address, args)
+    };
+    if msgs.len() > 1 {
+        format!("{head}  +{} more in bundle", msgs.len() - 1)
+    } else {
+        head
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn summarizes_a_bundle() {
+        let msgs = vec![
+            OscMessage {
+                address: "/a".into(),
+                args: vec![OscArg::Int(1)],
+            },
+            OscMessage {
+                address: "/b".into(),
+                args: vec![],
+            },
+        ];
+        assert_eq!(summarize_messages(&msgs), "/a 1  +1 more in bundle");
+        assert_eq!(summarize_messages(&[]), "(empty packet)");
+    }
 
     #[test]
     fn round_trips_common_types() {

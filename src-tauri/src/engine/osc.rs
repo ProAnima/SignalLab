@@ -7,8 +7,11 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 use tokio::net::UdpSocket;
 
+use super::inspect::{self, Frame, Gate};
 use super::jobs::{now_ms, JobInfo, JobRegistry};
-use super::osc_codec::{decode_packet, encode_message, OscArg, OscMessage};
+use super::osc_codec::{
+    arg_str, decode_packet, encode_message, summarize_messages, OscArg, OscMessage,
+};
 
 /// One decoded inbound OSC packet, forwarded to the UI on `osc://message`.
 #[derive(Clone, Serialize)]
@@ -27,6 +30,22 @@ struct JobEnded {
     job_id: u64,
     kind: String,
     error: Option<String>,
+}
+
+/// Every message in a packet, one per line, for the Inspector's detail pane.
+fn detail_lines(messages: &[OscMessage]) -> String {
+    messages
+        .iter()
+        .map(|m| {
+            let args = m.args.iter().map(arg_str).collect::<Vec<_>>().join(" ");
+            if args.is_empty() {
+                m.address.clone()
+            } else {
+                format!("{} {}", m.address, args)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn emit_ended(app: &AppHandle, job_id: u64, kind: &str, error: Option<String>) {
@@ -70,6 +89,7 @@ pub async fn start_monitor(
 
     let jobs_cl = jobs.clone();
     let app_cl = app.clone();
+    let local_cl = local.clone();
     let handle = tauri::async_runtime::spawn(async move {
         let mut buf = vec![0u8; 65_536];
         loop {
@@ -79,6 +99,24 @@ pub async fn start_monitor(
                         Ok(m) => (m, None),
                         Err(e) => (Vec::new(), Some(e)),
                     };
+
+                    if inspect::armed(&app_cl) {
+                        let mut frame = Frame::rx("osc", "osc-monitor")
+                            .job(id)
+                            .local(&local_cl)
+                            .remote(from)
+                            .payload(&buf[..n]);
+                        frame = match &error {
+                            Some(e) => frame
+                                .summary(format!("malformed packet ({n} B)"))
+                                .verdict(format!("decode error: {e}")),
+                            None => frame
+                                .summary(summarize_messages(&messages))
+                                .detail(detail_lines(&messages)),
+                        };
+                        inspect::publish(&app_cl, frame);
+                    }
+
                     let _ = app_cl.emit(
                         "osc://message",
                         OscInbound {
@@ -176,7 +214,14 @@ pub async fn start_generator(
 
     let app_cl = app.clone();
     let jobs_cl = jobs.clone();
+    let gen_local = socket
+        .local_addr()
+        .map(|a| a.to_string())
+        .unwrap_or_default();
     let handle = tauri::async_runtime::spawn(async move {
+        // The generator can run at thousands of pps; the Inspector only wants a
+        // representative sample of that.
+        let gate = Gate::new(100);
         let period = std::time::Duration::from_secs_f64(1.0 / rate);
         let mut ticker = tokio::time::interval(period);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -227,12 +272,25 @@ pub async fn start_generator(
             } else {
                 OscArg::Float(value as f32)
             };
-            let packet = encode_message(&cfg.address, &[arg]);
+            let packet = encode_message(&cfg.address, std::slice::from_ref(&arg));
             if let Err(e) = socket.send(&packet).await {
                 emit_ended(&app_cl, id, "osc-gen", Some(e.to_string()));
                 break;
             }
             sent += 1;
+
+            if inspect::armed(&app_cl) && gate.allow() {
+                inspect::publish(
+                    &app_cl,
+                    Frame::tx("osc", "osc-gen")
+                        .job(id)
+                        .local(&gen_local)
+                        .remote(&cfg.target)
+                        .payload(&packet)
+                        .summary(format!("{} {}", cfg.address, arg_str(&arg)))
+                        .verdict("sampled"),
+                );
+            }
 
             // Throttle UI telemetry to ~30 Hz regardless of send rate.
             if sent % ((rate / 30.0).max(1.0) as u64) == 0 {
@@ -256,6 +314,7 @@ pub async fn start_generator(
 
 /// Send a single OSC message immediately (fire-and-forget, no job).
 pub async fn send_once(
+    app: AppHandle,
     target: String,
     address: String,
     args: Vec<OscArg>,
@@ -267,8 +326,30 @@ pub async fn send_once(
         .await
         .map_err(|e| format!("socket create failed: {e}"))?;
     let packet = encode_message(&address, &args);
-    socket
+    let sent = socket
         .send_to(&packet, addr)
         .await
-        .map_err(|e| format!("send failed: {e}"))
+        .map_err(|e| format!("send failed: {e}"))?;
+
+    if inspect::armed(&app) {
+        let arg_text = args.iter().map(arg_str).collect::<Vec<_>>().join(" ");
+        inspect::publish(
+            &app,
+            Frame::tx("osc", "osc-send")
+                .local(
+                    socket
+                        .local_addr()
+                        .map(|a| a.to_string())
+                        .unwrap_or_default(),
+                )
+                .remote(addr)
+                .payload(&packet)
+                .summary(if arg_text.is_empty() {
+                    address
+                } else {
+                    format!("{address} {arg_text}")
+                }),
+        );
+    }
+    Ok(sent)
 }

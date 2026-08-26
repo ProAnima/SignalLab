@@ -7,6 +7,7 @@ use std::time::Instant;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 
+use super::inspect::{self, Frame, Gate};
 use super::jobs::{now_ms, JobInfo, JobRegistry};
 
 #[derive(Clone, Deserialize)]
@@ -106,10 +107,54 @@ async fn execute(client: &reqwest::Client, req: &HttpRequest) -> HttpResponse {
     }
 }
 
+/// Response body kept in a capture frame's detail pane.
+const FRAME_BODY_PREVIEW: usize = 2_000;
+
+/// Render one request/response exchange as a capture frame.
+fn exchange_frame(req: &HttpRequest, resp: &HttpResponse, job_id: Option<u64>) -> Frame {
+    let summary = match &resp.error {
+        Some(e) => format!("{} {} → {e}", req.method, req.url),
+        None => format!(
+            "{} {} → {} in {:.0}ms",
+            req.method, req.url, resp.status, resp.latency_ms
+        ),
+    };
+
+    let mut detail = String::new();
+    for (k, v) in &resp.headers {
+        detail.push_str(&format!("{k}: {v}\n"));
+    }
+    if !resp.body.is_empty() {
+        detail.push('\n');
+        detail.extend(resp.body.chars().take(FRAME_BODY_PREVIEW));
+        if resp.body.len() > FRAME_BODY_PREVIEW {
+            detail.push_str("\n… (body truncated)");
+        }
+    }
+
+    let mut frame = Frame::tx("http", "http")
+        .remote(&req.url)
+        .size(resp.body_bytes)
+        .summary(summary)
+        .detail(detail)
+        .verdict(match &resp.error {
+            Some(_) => "failed".to_string(),
+            None => format!("{} {}", resp.status, resp.status_text),
+        });
+    if let Some(id) = job_id {
+        frame = frame.job(id);
+    }
+    frame
+}
+
 /// Fire a single request and return the full response for the inspector.
-pub async fn request_once(req: HttpRequest) -> Result<HttpResponse, String> {
+pub async fn request_once(app: AppHandle, req: HttpRequest) -> Result<HttpResponse, String> {
     let client = build_client(req.timeout_ms)?;
-    Ok(execute(&client, &req).await)
+    let resp = execute(&client, &req).await;
+    if inspect::armed(&app) {
+        inspect::publish(&app, exchange_frame(&req, &resp, None));
+    }
+    Ok(resp)
 }
 
 // ---------------------------------------------------------------------------
@@ -235,12 +280,16 @@ pub async fn start_burst(
             })
         };
 
-        // Worker pool.
+        // Worker pool. A burst can push thousands of requests per second, so the
+        // pool shares one sampling gate into the Inspector.
+        let gate = Arc::new(Gate::new(100));
         let mut workers = Vec::with_capacity(concurrency as usize);
         for _ in 0..concurrency {
             let client = client.clone();
             let request = request.clone();
             let claimed = claimed.clone();
+            let gate = gate.clone();
+            let app_w = app_cl.clone();
             let (sent, ok, failed) = (sent.clone(), ok.clone(), failed.clone());
             let (lat_sum, lat_min, lat_max, last_lat) = (
                 lat_sum.clone(),
@@ -258,6 +307,9 @@ pub async fn start_burst(
                         break;
                     }
                     let resp = execute(&client, &request).await;
+                    if inspect::armed(&app_w) && gate.allow() {
+                        inspect::publish(&app_w, exchange_frame(&request, &resp, Some(id)));
+                    }
                     sent.fetch_add(1, Ordering::Relaxed);
                     let micros = (resp.latency_ms * 1000.0) as u64;
                     last_lat.store(micros, Ordering::Relaxed);

@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 use tokio::net::UdpSocket;
 
+use super::inspect::{self, describe_payload, Frame, Gate};
 use super::jobs::{now_ms, JobInfo, JobRegistry};
 
 #[derive(Clone, Deserialize)]
@@ -63,6 +64,46 @@ struct ProxyStat {
     bytes: u64,
 }
 
+/// Everything `schedule` needs to report a packet's fate to the Inspector.
+#[derive(Clone)]
+struct Tap {
+    app: AppHandle,
+    job_id: u64,
+    /// Which leg of the relay: "client→target" or "target→client".
+    leg: &'static str,
+    /// "tx" for traffic heading to the target, "rx" for replies coming back —
+    /// so the Inspector's direction filter means something for relayed packets.
+    dir: &'static str,
+    /// Fallback peer label when the socket is connected and `dest` is None.
+    peer: String,
+    /// Shared sampling budget — a relay under load must not flood the UI.
+    gate: Arc<Gate>,
+}
+
+impl Tap {
+    fn armed(&self) -> bool {
+        inspect::armed(&self.app) && self.gate.allow()
+    }
+
+    fn record(&self, bytes: &[u8], dest: Option<SocketAddr>, verdict: String) {
+        let (proto, summary, detail) = describe_payload(bytes);
+        let peer = dest
+            .map(|d| d.to_string())
+            .unwrap_or_else(|| self.peer.clone());
+        let mut frame = Frame::new(proto, self.dir, "netsim")
+            .job(self.job_id)
+            .local(self.leg)
+            .remote(peer)
+            .payload(bytes)
+            .summary(summary)
+            .verdict(verdict);
+        if let Some(d) = detail {
+            frame = frame.detail(d);
+        }
+        inspect::publish(&self.app, frame);
+    }
+}
+
 /// Apply the impairment profile to one packet, sending it (possibly delayed,
 /// duplicated, corrupted, or dropped) via `deliver`.
 fn schedule(
@@ -71,6 +112,7 @@ fn schedule(
     stats: &Arc<Stats>,
     sock: Arc<UdpSocket>,
     dest: Option<SocketAddr>,
+    tap: &Tap,
 ) {
     let (loss, dup, corrupt, latency, jitter) = (
         profile.loss,
@@ -80,9 +122,16 @@ fn schedule(
         profile.jitter_ms,
     );
 
+    // Decide once per packet: a dropped packet is exactly the event a QA run
+    // wants to see, so the sampling decision is made before the verdict.
+    let capture = tap.armed();
+
     let mut rng = rand::thread_rng();
     if loss > 0.0 && rng.gen_bool(loss.clamp(0.0, 1.0)) {
         stats.dropped.fetch_add(1, Ordering::Relaxed);
+        if capture {
+            tap.record(&payload, dest, "dropped".to_string());
+        }
         return;
     }
 
@@ -93,16 +142,19 @@ fn schedule(
         1
     };
 
-    for _ in 0..copies {
+    for copy in 0..copies {
         let mut bytes = payload.clone();
+        let mut corrupted = false;
         if corrupt > 0.0 && !bytes.is_empty() && rng.gen_bool(corrupt.clamp(0.0, 1.0)) {
             let idx = rng.gen_range(0..bytes.len());
             bytes[idx] ^= 1 << rng.gen_range(0..8);
             stats.corrupted.fetch_add(1, Ordering::Relaxed);
+            corrupted = true;
         }
         let delay = latency + if jitter > 0.0 { rng.gen_range(0.0..jitter) } else { 0.0 };
         let sock = sock.clone();
         let stats = stats.clone();
+        let tap = tap.clone();
         tokio::spawn(async move {
             if delay > 0.0 {
                 tokio::time::sleep(Duration::from_secs_f64(delay / 1000.0)).await;
@@ -111,9 +163,26 @@ fn schedule(
                 Some(addr) => sock.send_to(&bytes, addr).await,
                 None => sock.send(&bytes).await,
             };
-            if let Ok(n) = res {
-                stats.forwarded.fetch_add(1, Ordering::Relaxed);
-                stats.bytes.fetch_add(n as u64, Ordering::Relaxed);
+            match res {
+                Ok(n) => {
+                    stats.forwarded.fetch_add(1, Ordering::Relaxed);
+                    stats.bytes.fetch_add(n as u64, Ordering::Relaxed);
+                    if capture {
+                        let mut verdict = format!("forwarded +{delay:.0}ms");
+                        if corrupted {
+                            verdict.push_str(" · corrupted");
+                        }
+                        if copies > 1 {
+                            verdict.push_str(&format!(" · copy {}/{copies}", copy + 1));
+                        }
+                        tap.record(&bytes, dest, verdict);
+                    }
+                }
+                Err(e) => {
+                    if capture {
+                        tap.record(&bytes, dest, format!("send failed: {e}"));
+                    }
+                }
             }
         });
     }
@@ -163,6 +232,10 @@ pub async fn start_proxy(
     let jobs_cl = jobs.clone();
 
     let handle = tauri::async_runtime::spawn(async move {
+        // One sampling budget shared by both legs, so a loaded relay reports a
+        // representative slice rather than swamping the Inspector.
+        let gate = Arc::new(Gate::new(25));
+
         // client -> target
         let c2s = {
             let (down, up, profile, stats, client_addr) = (
@@ -172,13 +245,21 @@ pub async fn start_proxy(
                 stats.clone(),
                 client_addr.clone(),
             );
+            let tap = Tap {
+                app: app_cl.clone(),
+                job_id: id,
+                leg: "client→target",
+                dir: "tx",
+                peer: target_addr.to_string(),
+                gate: gate.clone(),
+            };
             tokio::spawn(async move {
                 let mut buf = vec![0u8; 65_536];
                 loop {
                     match down.recv_from(&mut buf).await {
                         Ok((n, from)) => {
                             *client_addr.lock().unwrap() = Some(from);
-                            schedule(buf[..n].to_vec(), &profile, &stats, up.clone(), None);
+                            schedule(buf[..n].to_vec(), &profile, &stats, up.clone(), None, &tap);
                         }
                         Err(_) => break,
                     }
@@ -195,6 +276,14 @@ pub async fn start_proxy(
                 stats.clone(),
                 client_addr.clone(),
             );
+            let tap = Tap {
+                app: app_cl.clone(),
+                job_id: id,
+                leg: "target→client",
+                dir: "rx",
+                peer: target_addr.to_string(),
+                gate: gate.clone(),
+            };
             tokio::spawn(async move {
                 let mut buf = vec![0u8; 65_536];
                 loop {
@@ -208,6 +297,7 @@ pub async fn start_proxy(
                                     &stats,
                                     down.clone(),
                                     Some(addr),
+                                    &tap,
                                 );
                             }
                         }

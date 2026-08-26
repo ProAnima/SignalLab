@@ -102,6 +102,88 @@ export interface HostInfo {
   hostname: string;
 }
 
+// ---- broadcast / discovery ----
+
+export type TargetMode = "list" | "broadcast" | "multicast" | "sweep";
+
+export type Payload =
+  | { kind: "osc"; address: string; args: OscArg[] }
+  | { kind: "text"; text: string }
+  | { kind: "hex"; hex: string };
+
+export interface EmitConfig {
+  mode: TargetMode;
+  target: string;
+  /** Port for `sweep` mode; the other modes carry it inside `target`. */
+  port: number;
+  payload: Payload;
+  bind: string | null;
+  ttl: number;
+  multicast_loop: boolean;
+  /** Beacon rounds per second — one round is one packet per target. */
+  rate: number;
+  count: number;
+  duration_s: number;
+}
+
+export interface EmitResult {
+  targets: number;
+  packets: number;
+  bytes: number;
+  errors: number;
+  resolved: string[];
+  summary: string;
+}
+
+export interface DiscoveryConfig {
+  bind: string;
+  groups: string[];
+  interface: string | null;
+  reuse: boolean;
+  respond: boolean;
+  response: Payload | null;
+  respond_delay_ms: number;
+  match_contains: string | null;
+}
+
+export interface Peer {
+  addr: string;
+  proto: string;
+  packets: number;
+  bytes: number;
+  first_ms: number;
+  last_ms: number;
+  last_summary: string;
+  responded: number;
+}
+
+// ---- inspector ----
+
+export interface Frame {
+  seq: number;
+  ts: number;
+  proto: string;
+  dir: "tx" | "rx";
+  source: string;
+  job_id: number | null;
+  local: string;
+  remote: string;
+  bytes: number;
+  summary: string;
+  detail: string | null;
+  hex: string | null;
+  verdict: string | null;
+}
+
+export interface CaptureStats {
+  enabled: boolean;
+  total: number;
+  bytes: number;
+  skipped: number;
+  buffered: number;
+  capacity: number;
+}
+
 // ---- event payloads ----
 
 export interface OscInbound {
@@ -129,6 +211,20 @@ export interface StormStat {
 export interface OpenPort { job_id: number; ts: number; port: number; banner: string | null; }
 export interface ScanProgress { job_id: number; ts: number; done: number; total: number; open: number; }
 export interface JobEnded { job_id: number; kind: string; error: string | null; }
+export interface EmitStat {
+  job_id: number; ts: number; rounds: number; packets: number;
+  bytes: number; errors: number; pps: number;
+}
+export interface PeerReport {
+  job_id: number; ts: number; peers: Peer[];
+  packets: number; bytes: number; responses: number;
+}
+export interface InspectBatch {
+  frames: Frame[];
+  stats: CaptureStats;
+  /** Frames that existed but never reached the UI since the last batch. */
+  skipped_now: number;
+}
 
 // ---- command wrappers ----
 
@@ -149,6 +245,18 @@ export const api = {
   netsimStart: (config: ProxyConfig) => invoke<JobInfo>("netsim_start", { config }),
   stormStart: (config: StormConfig) => invoke<JobInfo>("storm_start", { config }),
   scanStart: (config: ScanConfig) => invoke<JobInfo>("scan_start", { config }),
+
+  broadcastSend: (config: EmitConfig) => invoke<EmitResult>("broadcast_send", { config }),
+  broadcastBeaconStart: (config: EmitConfig) =>
+    invoke<JobInfo>("broadcast_beacon_start", { config }),
+  discoveryStart: (config: DiscoveryConfig) => invoke<JobInfo>("discovery_start", { config }),
+
+  inspectSetEnabled: (enabled: boolean) =>
+    invoke<CaptureStats>("inspect_set_enabled", { enabled }),
+  inspectStats: () => invoke<CaptureStats>("inspect_stats"),
+  inspectSnapshot: (limit: number) => invoke<Frame[]>("inspect_snapshot", { limit }),
+  inspectClear: () => invoke<CaptureStats>("inspect_clear"),
+  inspectExport: (format: "jsonl" | "txt") => invoke<string>("inspect_export", { format }),
 };
 
 // Typed event subscription helper.
@@ -165,4 +273,7 @@ export const EV = {
   scanOpen: "scan://open",
   scanProgress: "scan://progress",
   jobEnded: "job://ended",
+  emitStat: "broadcast://emit-stat",
+  peers: "broadcast://peers",
+  inspectBatch: "inspect://batch",
 } as const;

@@ -12,6 +12,7 @@ use tauri::{AppHandle, Emitter};
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpStream, UdpSocket};
 
+use super::inspect::{self, Frame, Gate};
 use super::jobs::{now_ms, JobInfo, JobRegistry};
 
 #[derive(Clone, Deserialize, PartialEq)]
@@ -80,6 +81,7 @@ pub async fn start_storm(
         let errors = Arc::new(AtomicU64::new(0));
         let payload = vec![0x55u8; size];
         let start = Instant::now();
+        let gate = Gate::new(1_000);
 
         // reporter
         let reporter = {
@@ -154,6 +156,19 @@ pub async fn start_storm(
                                 Ok(n) => {
                                     packets.fetch_add(1, Ordering::Relaxed);
                                     bytes.fetch_add(n as u64, Ordering::Relaxed);
+                                    // Every packet is identical, so one sample a
+                                    // second is all the timeline needs.
+                                    if inspect::armed(&app_cl) && gate.allow() {
+                                        inspect::publish(
+                                            &app_cl,
+                                            Frame::tx("udp", "storm")
+                                                .job(id)
+                                                .remote(target)
+                                                .payload(&payload)
+                                                .summary(format!("UDP flood packet ({n} B)"))
+                                                .verdict("sampled 1/s"),
+                                        );
+                                    }
                                 }
                                 Err(_) => {
                                     errors.fetch_add(1, Ordering::Relaxed);

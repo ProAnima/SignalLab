@@ -3,15 +3,30 @@ import {
   type ReactNode,
 } from "react";
 import { api, on, EV, type JobInfo, type JobEnded, type HostInfo } from "./api";
+import type { TextKey } from "./i18n";
 
 export type LogLevel = "info" | "ok" | "warn" | "err";
+
+/**
+ * A console line stores its dictionary key and parameters rather than finished
+ * text, so switching language re-renders the whole console in the new one. Raw
+ * engine errors are passed as free text and fall through `t` untouched.
+ */
 export interface LogEntry {
   id: number;
   ts: number;
   level: LogLevel;
   tag: string;
-  msg: string;
+  key: TextKey;
+  params?: Record<string, string | number>;
 }
+
+type PushLog = (
+  level: LogLevel,
+  tag: string,
+  key: TextKey,
+  params?: Record<string, string | number>
+) => void;
 
 interface Store {
   host: HostInfo | null;
@@ -20,12 +35,13 @@ interface Store {
   stopJob: (id: number) => void;
   stopAll: () => void;
   log: LogEntry[];
-  pushLog: (level: LogLevel, tag: string, msg: string) => void;
+  pushLog: PushLog;
   clearLog: () => void;
 }
 
 const Ctx = createContext<Store | null>(null);
 
+const LOG_CAPACITY = 500;
 let logSeq = 0;
 
 export function StoreProvider({ children }: { children: ReactNode }) {
@@ -33,10 +49,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [jobs, setJobs] = useState<JobInfo[]>([]);
   const [log, setLog] = useState<LogEntry[]>([]);
 
-  const pushLog = useCallback((level: LogLevel, tag: string, msg: string) => {
+  const pushLog = useCallback<PushLog>((level, tag, key, params) => {
     setLog((prev) => {
-      const next = [...prev, { id: ++logSeq, ts: Date.now(), level, tag, msg }];
-      return next.length > 500 ? next.slice(next.length - 500) : next;
+      const next = [...prev, { id: ++logSeq, ts: Date.now(), level, tag, key, params }];
+      return next.length > LOG_CAPACITY ? next.slice(next.length - LOG_CAPACITY) : next;
     });
   }, []);
 
@@ -46,14 +62,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const stopJob = useCallback((id: number) => {
     api.jobStop(id).then(() => {
-      pushLog("warn", "jobs", `stopped job #${id}`);
+      pushLog("warn", "jobs", "log.jobStopped", { id });
       refreshJobs();
     });
   }, [pushLog, refreshJobs]);
 
   const stopAll = useCallback(() => {
     api.jobsStopAll().then(() => {
-      pushLog("warn", "jobs", "stopped all jobs");
+      pushLog("warn", "jobs", "log.allStopped");
       refreshJobs();
     });
   }, [pushLog, refreshJobs]);
@@ -62,15 +78,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     api.hostInfo().then(setHost).catch(() => {});
-    pushLog("info", "system", "Signal Lab ready");
+    pushLog("info", "system", "log.ready");
     refreshJobs();
 
     const unlisteners: Promise<() => void>[] = [];
     unlisteners.push(
       on<JobEnded>(EV.jobEnded, (e) => {
         const p = e.payload;
-        if (p.error) pushLog("err", p.kind, `job #${p.job_id} ended: ${p.error}`);
-        else pushLog("ok", p.kind, `job #${p.job_id} finished`);
+        if (p.error) pushLog("err", p.kind, "log.jobFailed", { id: p.job_id, error: p.error });
+        else pushLog("ok", p.kind, "log.jobFinished", { id: p.job_id });
         refreshJobs();
       })
     );
