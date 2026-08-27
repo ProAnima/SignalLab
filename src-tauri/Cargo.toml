@@ -1,6 +1,6 @@
 [package]
 name = "signal-lab"
-version = "0.3.0"
+version = "0.3.1"
 description = "Signal Lab — OSC & network protocol simulator (a ProAnimaStudio product)"
 authors = ["ProAnimaStudio"]
 edition = "2021"

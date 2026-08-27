@@ -14,7 +14,7 @@ import { StormView } from "./views/StormView";
 import { ScanView } from "./views/ScanView";
 import { fmtTime } from "./lib/format";
 
-const APP_VERSION = "0.3";
+const APP_VERSION = "0.3.1";
 
 type ViewKey =
   | "signals" | "osc" | "mqtt" | "broadcast" | "inspect" | "http" | "netsim" | "storm" | "scan";
