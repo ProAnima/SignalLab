@@ -1,0 +1,12 @@
+# Text is stored with LF line endings whatever the machine; each checkout uses
+# its platform's endings (core.autocrlf). Files read by Linux tools inside
+# containers and CI stay LF everywhere.
+* text=auto
+
+*.sh text eol=lf
+Dockerfile text eol=lf
+*.yml text eol=lf
+
+*.png binary
+*.ico binary
+*.icns binary

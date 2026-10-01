@@ -17,8 +17,6 @@ import { fmtTime } from "./lib/format";
 import { usePersistentState } from "./lib/hooks";
 import type { SignalBody } from "./lib/api";
 
-const APP_VERSION = "0.3.1";
-
 type ViewKey =
   | "experiment" | "signals" | "osc" | "mqtt" | "broadcast" | "inspect" | "http" | "netsim" | "storm" | "scan";
 
@@ -135,7 +133,7 @@ function Shell() {
         })}
         <div className="fill" />
         <div className="foot">
-          <span>{t("app.version", { version: APP_VERSION })}</span>
+          <span>{t("app.version", { version: __APP_VERSION__ })}</span>
           <span>{t("app.activeJobs", { n: jobs.length })}</span>
         </div>
       </aside>

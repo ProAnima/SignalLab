@@ -278,9 +278,11 @@ npm run tauri dev
 This launches the Vite dev server and the native window with hot reload for the
 UI and automatic Rust rebuilds.
 
-Run `npm test` for editor history and graph-transformation checks, `npm run build`
-for TypeScript and the production UI, and `cargo test --lib` in `src-tauri` for
-engine tests.
+Before pushing, run **`npm run check`** — the same checks CI runs on Windows and
+Linux, in order: versions agree, UI tests, TypeScript + production build, `clippy`
+with warnings as errors, engine tests. `npm run check:linux` runs them on Linux in
+Docker. How CI, releases and the planned server mode work:
+[docs/delivery.md](docs/delivery.md).
 
 ## Build a desktop bundle
 
@@ -302,6 +304,25 @@ is size-optimized (`opt-level = "s"`, LTO, stripped).
 The app icon is redrawn from the in-app brand mark (`src/components/Brand.tsx`)
 by `scripts/gen-icon.py`; feed the 1024px result to `npx tauri icon` to cut the
 platform set.
+
+**Linux packages** from this machine: `npm run build:linux` builds `.deb`, `.rpm`
+and `.AppImage` in Docker on Ubuntu 22.04 (the system CI uses) into
+`artifacts/linux/`, with `SHA256SUMS.txt`. Installed packages need WebKitGTK 4.1.
+
+## Releases
+
+Releases are built by GitHub Actions from a version tag, never uploaded by hand:
+
+```bash
+npm run release -- 0.4.0 --dry-run   # check everything, change nothing
+npm run release -- 0.4.0 --push      # version, changelog, commit, tag, push
+```
+
+The tag builds the Windows and Linux installers into a **draft** release with
+`SHA256SUMS.txt` and notes taken from `CHANGELOG.md`; review it and publish it on
+the releases page. Write user-visible changes under *Unreleased* in `CHANGELOG.md`
+as they land — that text is the release notes. Details and the rules the release
+script enforces: [docs/delivery.md](docs/delivery.md).
 
 ---
 

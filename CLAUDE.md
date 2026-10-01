@@ -13,12 +13,24 @@ short version for working on the code.
 ```bash
 npm install                # once
 npm run tauri dev          # native window + Vite HMR + Rust rebuilds  <- normal dev loop
+npm run check              # EVERYTHING CI checks — run before every push
+npm run check:linux        # the same on Linux, in Docker
 npm run build              # tsc (strict) + vite build  -> dist/
-npm run tauri build        # installer/exe -> src-tauri/target/release/bundle/
+npm run tauri build        # Windows installers -> src-tauri/target/release/bundle/
+npm run build:linux        # .deb/.rpm/.AppImage in Docker -> artifacts/linux/
+npm run release -- X.Y.Z --dry-run   # then --push; see docs/delivery.md
 cd src-tauri && cargo test # engine unit tests
-cd src-tauri && cargo check --all-targets
 python scripts/gen-icon.py && npx tauri icon src-tauri/icons/icon-1024.png  # app icon
 ```
+
+**Delivery** ([docs/delivery.md](docs/delivery.md)): `scripts/check.mjs` is the one
+list of checks — CI (`.github/workflows/ci.yml`, Windows + Linux) runs that file, so
+add a check there, not in YAML. clippy runs with `-D warnings` and `--locked`: no
+new warnings, no lock-file drift. The version is written only in `package.json`
+(`node scripts/version.mjs set X.Y.Z` updates the Rust copies). Note user-visible
+changes under *Unreleased* in `CHANGELOG.md` — it becomes the release notes.
+Releases are tags pushed by `npm run release`; `.github/workflows/release.yml`
+builds a draft release, a person publishes it. Never upload installers by hand.
 
 `npm run dev` alone serves the UI at http://localhost:1420, but **every engine
 call fails there** — there is no Tauri runtime in a plain browser. Use it only

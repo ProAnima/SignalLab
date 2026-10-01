@@ -7,6 +7,11 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "test": "node --test tests/*.test.mjs",
+    "check": "node scripts/check.mjs",
+    "check:linux": "node scripts/linux.mjs check",
+    "build:linux": "node scripts/linux.mjs build",
+    "clean:linux": "node scripts/linux.mjs clean",
+    "release": "node scripts/release.mjs",
     "preview": "vite preview",
     "tauri": "tauri"
   },

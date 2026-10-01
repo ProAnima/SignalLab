@@ -255,6 +255,14 @@ Added when a real experiment needs them, each on the same node/wait/template mod
 - **Headless runner** for CI: `signal-lab run experiment.json --profile stage --param k=v --report out.json`, exit code by outcome, JUnit output. This is the point to introduce an event-sink interface in the engine instead of the Tauri `AppHandle` — not earlier.
 - **gRPC**, distributed agents and a topology canvas are separate projects, considered only with concrete demand.
 
+## Delivery
+
+Detailed design: [docs/delivery.md](docs/delivery.md).
+
+- **Delivered:** `npm run check` as the single definition of the checks, run by CI on Windows and Linux for every push and pull request; one version source; `CHANGELOG.md` as the release notes; `npm run release` cutting a tag from `main`; a release workflow that builds Windows (NSIS, MSI) and Linux (deb, rpm, AppImage) installers into a draft release with checksums for a person to publish; Linux checks and packages from a Windows machine through Docker.
+- **Next — server mode (D1–D4):** the engine independent of Tauri, a `signal-lab-server` binary with the same commands over HTTP and WebSocket, the interface in a browser, and a Docker image on GHCR. Loopback by default, a token for anything else; `--network host` on Linux for broadcast, multicast and discovery.
+- **Later:** code signing for Windows installers and signed checksums.
+
 ## Cross-cutting work
 
 - **Document format.** Each milestone that changes the file bumps the version and ships a migration from the previous one with tests. Templates in `experiments/templates/` are updated with it.
