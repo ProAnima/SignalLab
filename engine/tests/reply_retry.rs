@@ -223,3 +223,21 @@ async fn retry_and_reply_settings_are_checked_before_anything_is_sent() {
     let bind = check(doc(vec![start, bad_bind, end], &["start", "ping", "end"])).await;
     assert!(bind.contains("node.bind_invalid") && bind.contains("reply_bind"), "{bind}");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn with_capture_armed_a_matched_reply_points_at_its_inspector_frame() {
+    let (service, recorder) = service();
+    service.invoke("inspect_set_enabled", json!({ "enabled": true })).await.unwrap();
+    let (device, _pings) = osc_device(0).await;
+    let [start, end] = ends();
+    let (ended, steps) = run(&service, &recorder, doc(vec![start, ping(device, "127.0.0.1:0", 1000, None), end], &["start", "ping", "end"])).await;
+    assert_eq!(ended["error"], Value::Null, "{ended}");
+    let frame = of(&steps, "ping", "passed")[0]["frame"].as_u64().expect("the step names the frame of its reply");
+    let snapshot = service.invoke("inspect_snapshot", json!({ "limit": 100 })).await.unwrap();
+    let frames = snapshot.as_array().cloned().or_else(|| snapshot["frames"].as_array().cloned()).unwrap();
+    let found = frames.iter().find(|item| item["seq"] == frame).expect("that frame is in the Inspector");
+    assert_eq!((found["dir"].as_str(), found["proto"].as_str()), (Some("rx"), Some("osc")));
+    assert!(found["summary"].as_str().unwrap().starts_with("/pong"), "{found}");
+    service.invoke("inspect_set_enabled", json!({ "enabled": false })).await.unwrap();
+}
+

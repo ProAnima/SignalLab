@@ -17,7 +17,7 @@ import { ScanView } from "./views/ScanView";
 import { fmtTime } from "./lib/format";
 import { usePersistentState } from "./lib/hooks";
 import { isDesktop, serverNeedsSignIn, signOut } from "./lib/platform";
-import type { SignalBody } from "./lib/api";
+import type { ExperimentNode, SignalBody } from "./lib/api";
 
 type ViewKey =
   | "experiment" | "signals" | "osc" | "mqtt" | "broadcast" | "inspect" | "http" | "netsim" | "storm" | "scan";
@@ -98,6 +98,17 @@ function Shell() {
     if (experiment.current?.add(body)) go("experiment");
     else pushLog("warn", "experiment", "log.experimentBusy");
   };
+  /** Wait for this: a wait built from a received message becomes the next step. */
+  const waitInExperiment = (node: ExperimentNode) => {
+    if (experiment.current?.addNode(node)) go("experiment");
+    else pushLog("warn", "experiment", "log.experimentBusy");
+  };
+  // A frame the timeline points at, for the Inspector to select.
+  const [revealFrame, setRevealFrame] = useState<{ seq: number; at: number } | null>(null);
+  const showFrame = (seq: number) => {
+    setRevealFrame({ seq, at: Date.now() });
+    go("inspect");
+  };
   const lastLine = log[log.length - 1];
   const logEndRef = useRef<HTMLDivElement>(null);
   const [autoscroll, setAutoscroll] = useState(true);
@@ -165,13 +176,13 @@ function Shell() {
       {connection === "lost" && <div className="connection-banner" role="status">{t("app.connectionLost")}</div>}
       <main className="main" ref={mainRef}>
         <div className="experiment-host" hidden={view !== "experiment"}>
-          <ExperimentView ref={experiment} active={view === "experiment"} focusMode={focusMode} setFocusMode={setFocusMode} />
+          <ExperimentView ref={experiment} active={view === "experiment"} focusMode={focusMode} setFocusMode={setFocusMode} onShowFrame={showFrame} />
         </div>
         {page("signals", <SignalsView />)}
-        {page("osc", <OscView onToExperiment={toExperiment} />)}
-        {page("mqtt", <MqttView />)}
+        {page("osc", <OscView onToExperiment={toExperiment} onWaitFor={waitInExperiment} />)}
+        {page("mqtt", <MqttView onWaitFor={waitInExperiment} />)}
         {page("broadcast", <BroadcastView />)}
-        {page("inspect", <InspectView />)}
+        {page("inspect", <InspectView reveal={revealFrame} />)}
         {page("http", <HttpView onToExperiment={toExperiment} />)}
         {page("netsim", <NetsimView />)}
         {page("storm", <StormView />)}

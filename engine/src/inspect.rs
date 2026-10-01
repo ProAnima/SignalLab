@@ -171,12 +171,14 @@ impl Capture {
         self.inner.enabled.load(Ordering::Relaxed)
     }
 
-    /// Record a frame. Cheap no-op while capture is disarmed.
-    pub fn push(&self, mut frame: Frame) {
+    /// Record a frame and return its number; a cheap no-op (`None`) while
+    /// capture is disarmed.
+    pub fn push(&self, mut frame: Frame) -> Option<u64> {
         if !self.is_enabled() {
-            return;
+            return None;
         }
         frame.seq = self.inner.seq.fetch_add(1, Ordering::Relaxed) + 1;
+        let seq = frame.seq;
         if frame.ts == 0 {
             frame.ts = now_ms();
         }
@@ -188,6 +190,7 @@ impl Capture {
             ring.pop_front();
         }
         ring.push_back(frame);
+        Some(seq)
     }
 
     pub fn clear(&self) {
@@ -300,9 +303,9 @@ fn export_dir() -> std::path::PathBuf {
     super::paths::data_dir()
 }
 
-/// Publish a frame from anywhere that holds a `Host`.
-pub fn publish(host: &Host, frame: Frame) {
-    host.capture().push(redact(frame, &super::secrets::active()));
+/// Publish a frame from anywhere that holds a `Host`; its number, when capture is armed.
+pub fn publish(host: &Host, frame: Frame) -> Option<u64> {
+    host.capture().push(redact(frame, &super::secrets::active()))
 }
 
 /// A frame with secret values in use masked in every text it carries.

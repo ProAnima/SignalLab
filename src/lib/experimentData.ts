@@ -28,7 +28,7 @@ export const hasTemplate = (text: string) => /(^|[^\\])\{\{/.test(text);
 /** The variable a node writes and the output it is set on: a wait has no reply on Timeout. */
 export function writtenVariable(node: ExperimentNode): { name: string; port: string } | null {
   if (node.type === "extract") return node.variable ? { name: node.variable, port: "next" } : null;
-  if (node.type === "wait_osc" || node.type === "wait_udp") return node.variable ? { name: node.variable, port: "matched" } : null;
+  if (node.type === "wait_osc" || node.type === "wait_udp" || node.type === "wait_mqtt") return node.variable ? { name: node.variable, port: "matched" } : null;
   // A send that waits for its reply passes only with one, so the reply exists on Next.
   if ((node.type === "osc" || node.type === "udp") && node.reply) return node.reply.variable ? { name: node.reply.variable, port: "next" } : null;
   return null;
@@ -71,6 +71,7 @@ export function replyFields(node: ExperimentNode): string[] {
   const udp = (mode: UdpMode) => mode === "any" ? ["text", "hex", "bytes", "from", "ms"] : ["text", "match", "hex", "bytes", "from", "ms"];
   if (node.type === "wait_osc" || (node.type === "osc" && node.reply)) return osc;
   if (node.type === "wait_udp") return udp(node.mode);
+  if (node.type === "wait_mqtt") return ["topic", ...udp(node.mode)];
   if (node.type === "udp" && node.reply) return udp(node.reply.mode);
   return [];
 }
@@ -89,7 +90,7 @@ export const DEFAULT_RETRY: Retry = { attempts: 3, delay_ms: 500, backoff: "fixe
 
 /** Sends or listens, so a second attempt may succeed (the engine's `NodeKind::retries`). */
 export function canRetry(node: ExperimentNode): boolean {
-  return ["http", "tcp", "mqtt", "osc", "udp", "wait_osc", "wait_udp"].includes(node.type);
+  return ["http", "tcp", "mqtt", "osc", "udp", "wait_osc", "wait_udp", "wait_mqtt"].includes(node.type);
 }
 
 /** `$.items[0]["first name"]` from the steps into a JSON value. */

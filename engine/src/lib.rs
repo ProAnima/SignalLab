@@ -31,6 +31,7 @@ pub mod secrets;
 pub mod service;
 pub mod signals;
 pub mod storm;
+pub mod subscribe;
 pub mod template;
 pub mod transport;
 

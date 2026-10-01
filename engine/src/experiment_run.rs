@@ -20,6 +20,7 @@ use super::http::HttpResponse;
 use super::jobs::{now_ms, JobInfo, JobRegistry, TaskGuard};
 use super::listen::{FrameSink, Listener, Listeners};
 use super::secrets::{self, SecretStore};
+use super::subscribe::{self, Subscription, Subscriptions};
 use super::paths::data_dir;
 use super::template::{Renderer, Scope};
 
@@ -43,6 +44,9 @@ pub struct RunEvent {
     /// Why the step failed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<EngineError>,
+    /// The Inspector frame of the message a wait matched, to open it from the timeline.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frame: Option<u64>,
 }
 
 #[derive(Clone, Serialize)]
@@ -118,6 +122,8 @@ struct EngineShared {
     tasks: Mutex<TaskGuard>,
     /// Sockets the waits listen on; cleared when the run ends or is stopped.
     listeners: Mutex<Listeners>,
+    /// Broker connections the MQTT waits listen on; closed with the run.
+    subscriptions: Mutex<Subscriptions>,
     started: Instant,
 }
 
@@ -134,6 +140,9 @@ impl Drop for CancelBranches {
         if let Ok(mut listeners) = self.0.listeners.lock() {
             listeners.clear();
         }
+        if let Ok(mut subscriptions) = self.0.subscriptions.lock() {
+            subscriptions.clear();
+        }
     }
 }
 
@@ -144,15 +153,16 @@ struct Step {
     message: Option<(&'static str, Value)>,
     vars: Option<BTreeMap<String, Value>>,
     error: Option<EngineError>,
+    frame: Option<u64>,
 }
 
 impl Step {
     fn running() -> Self {
-        Step { state: "running", detail: String::new(), message: None, vars: None, error: None }
+        Step { state: "running", detail: String::new(), message: None, vars: None, error: None, frame: None }
     }
 
     fn failed(error: EngineError) -> Self {
-        Step { state: "failed", detail: String::new(), message: None, vars: None, error: Some(error) }
+        Step { state: "failed", detail: String::new(), message: None, vars: None, error: Some(error), frame: None }
     }
 
     /// An attempt failed and the step will run again after `pause`.
@@ -164,6 +174,7 @@ impl Step {
             message: Some(("exp.step.retrying", serde_json::json!({ "attempt": attempt, "attempts": attempts, "ms": ms }))),
             vars: None,
             error: Some(error),
+            frame: None,
         }
     }
 }
@@ -180,6 +191,7 @@ fn emit(shared: &EngineShared, node_id: &str, step: Step) {
         message_params: step.message.map(|(_, params)| secrets::mask_value(&params, masked)).unwrap_or_default(),
         vars: step.vars.map(|vars| vars.into_iter().map(|(name, value)| (name, secrets::mask_value(&value, masked))).collect()),
         error: step.error.map(|error| error.masked(masked)),
+        frame: step.frame,
     };
     if let Ok(mut list) = shared.events.lock() {
         list.push(event.clone());
@@ -319,6 +331,7 @@ async fn run_branch(
             client_id: format!("lab-{}", shared.job_id),
             seed: shared.seed,
             listeners: shared.listeners.lock().map(|listeners| listeners.clone()).unwrap_or_default(),
+            subscriptions: shared.subscriptions.lock().map(|subscriptions| subscriptions.clone()).unwrap_or_default(),
             has_timeout: shared.outgoing.contains_key(&(current.clone(), "timeout".to_string())),
             inputs: shared.joins.lock().ok().and_then(|joins| joins.get(&current).map(|barrier| barrier.expected)).unwrap_or(1),
             run_started: shared.started,
@@ -348,7 +361,7 @@ async fn run_branch(
         };
         let port = match result {
             Ok(outcome) => {
-                let step = Step { state: "passed", detail: outcome.detail, message: outcome.message, vars: outcome.written, error: None };
+                let step = Step { state: "passed", detail: outcome.detail, message: outcome.message, vars: outcome.written, error: None, frame: outcome.frame };
                 emit(&shared, &current, step);
                 outcome.port
             }
@@ -397,11 +410,34 @@ async fn arm_listeners(nodes: &[Node], sink: Arc<dyn FrameSink>) -> EngineResult
     Ok(listeners)
 }
 
+/// One MQTT connection per broker and topic filter of the *Wait for MQTT*
+/// steps, subscribed before the first step — so their broker and topic may use
+/// parameters only. A refusal stops the run before any traffic, at that wait.
+async fn arm_subscriptions(host: &Host, nodes: &[Node], params: &BTreeMap<String, String>) -> EngineResult<Subscriptions> {
+    let mut subscriptions = Subscriptions::new();
+    for node in nodes {
+        let Some((broker, port, topic)) = node.kind.subscription() else { continue };
+        let at = |error: EngineError| error.at(&node.id);
+        let fixed = |text: &str, field: &'static str| {
+            data::static_text(text, params).ok_or_else(|| at(EngineError::new("node.params_only").in_field(Field::new(field))))
+        };
+        let (broker, topic) = (fixed(broker, "broker")?, fixed(topic, "topic")?);
+        let key = subscribe::key(&broker, port, &topic);
+        if subscriptions.contains_key(&key) {
+            continue;
+        }
+        let subscription = Subscription::arm(host.clone(), &broker, port, &topic).await.map_err(at)?;
+        subscriptions.insert(key, Arc::new(subscription));
+    }
+    Ok(subscriptions)
+}
+
 struct Prepared {
     seed: u64,
     params: BTreeMap<String, String>,
     secrets: BTreeMap<String, String>,
     listeners: Listeners,
+    subscriptions: Subscriptions,
 }
 
 async fn run(host: &Host, events: &mut Vec<RunEvent>, job_id: u64, doc: &Experiment, prepared: Prepared) -> Result<(), EngineError> {
@@ -430,6 +466,7 @@ async fn run(host: &Host, events: &mut Vec<RunEvent>, job_id: u64, doc: &Experim
         counts: Mutex::new(HashMap::new()),
         tasks: Mutex::new(TaskGuard::new()),
         listeners: Mutex::new(prepared.listeners),
+        subscriptions: Mutex::new(prepared.subscriptions),
         started: Instant::now(),
     });
     let _cancel = CancelBranches(shared.clone());
@@ -466,7 +503,7 @@ async fn run(host: &Host, events: &mut Vec<RunEvent>, job_id: u64, doc: &Experim
     // Every branch has finished: now the run is complete.
     if shared.first_error.lock().unwrap().is_none() {
         if let Some(end) = doc.nodes.iter().find(|node| matches!(node.kind, NodeKind::End)) {
-            let complete = Step { state: "passed", detail: "Complete".into(), message: Some(("exp.step.complete", serde_json::json!({}))), vars: None, error: None };
+            let complete = Step { state: "passed", detail: "Complete".into(), message: Some(("exp.step.complete", serde_json::json!({}))), vars: None, error: None, frame: None };
             emit(&shared, &end.id, complete);
         }
     }
@@ -529,6 +566,7 @@ pub async fn start(
     let (_order, params) = validate_run(&doc, &overrides)?;
     let secret_values = data::load_secrets(&doc.nodes, store)?;
     let listeners = arm_listeners(&doc.nodes, Arc::new(host.clone())).await?;
+    let subscriptions = arm_subscriptions(&host, &doc.nodes, &params).await?;
     let id = jobs.next_id();
     let info = JobInfo { id, kind: "experiment".into(), label: doc.name.clone(), started_ms: now_ms() };
     let host_cl = host.clone();
@@ -542,7 +580,7 @@ pub async fn start(
             return;
         }
         let mut steps = Vec::new();
-        let prepared = Prepared { seed, params: settings.params.clone(), secrets: secret_values, listeners };
+        let prepared = Prepared { seed, params: settings.params.clone(), secrets: secret_values, listeners, subscriptions };
         let error = run(&host_cl, &mut steps, id, &doc, prepared).await.err();
         let (report_path, report_error) = match save_report(id, &settings, started_ms, &doc, &steps, &error) {
             Ok(path) => (Some(path), None),
@@ -601,12 +639,14 @@ pub async fn send_node(
     let failed = |error: EngineError| error.at(node_id).masked(&masked);
     let kind = data::render_kind(&node.kind, &mut Renderer::new(scope)).map_err(failed)?;
     let listeners = arm_listeners(std::slice::from_ref(node), Arc::new(host.clone())).await.map_err(failed)?;
+    let subscriptions = arm_subscriptions(host, std::slice::from_ref(node), &params).await.map_err(failed)?;
     let env = StepEnv {
         host,
         // A one-off client id: reusing one would knock another connection off the broker.
         client_id: format!("lab-send-{:08x}", rand::random::<u32>()),
         seed,
         listeners,
+        subscriptions,
         has_timeout: false,
         inputs: 1,
         run_started: Instant::now(),

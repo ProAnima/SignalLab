@@ -23,7 +23,8 @@ function verdictClass(v: string | null): string {
   return "verdict-ok";
 }
 
-export function InspectView() {
+/** `reveal`: a frame to select (from the experiment timeline); `at` makes a repeat a new request. */
+export function InspectView({ reveal }: { reveal?: { seq: number; at: number } | null } = {}) {
   const { pushLog, pushError, library, setLibrary } = useStore();
   const t = useT();
 
@@ -36,6 +37,15 @@ export function InspectView() {
   const [dirFilter, setDirFilter] = useState<string[]>([]);
   const pausedRef = useRef(paused);
   pausedRef.current = paused;
+
+  // From the experiment timeline: that frame, selected, with nothing filtering its row away.
+  useEffect(() => {
+    if (!reveal) return;
+    setQuery(""); setProtoFilter([]); setDirFilter([]); setPaused(false);
+    setSelected(reveal.seq);
+    const frame = requestAnimationFrame(() => document.querySelector(`[data-frame="${reveal.seq}"]`)?.scrollIntoView({ block: "nearest" }));
+    return () => cancelAnimationFrame(frame);
+  }, [reveal]);
 
   // Repopulate from the engine's ring so switching views doesn't lose history.
   useEffect(() => {
@@ -208,6 +218,7 @@ export function InspectView() {
                 {visible.map((f) => (
                   <Fragment key={f.seq}>
                     <tr
+                      data-frame={f.seq}
                       className={selected === f.seq ? "picked" : ""}
                       onClick={() => setSelected(f.seq)}
                       style={{ cursor: "pointer" }}

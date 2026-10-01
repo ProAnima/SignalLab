@@ -30,21 +30,22 @@ pub const QUEUE: usize = 1024;
 pub type Listeners = HashMap<SocketAddr, Arc<Listener>>;
 
 /// Where received datagrams are reported: the Inspector when hosted, nowhere in tests.
+/// The Inspector frame's number comes back, so a matched wait can point at it.
 pub trait FrameSink: Send + Sync {
-    fn received(&self, local: SocketAddr, datagram: &Datagram);
+    fn received(&self, local: SocketAddr, datagram: &Datagram) -> Option<u64>;
 }
 
 impl FrameSink for Host {
-    fn received(&self, local: SocketAddr, datagram: &Datagram) {
+    fn received(&self, local: SocketAddr, datagram: &Datagram) -> Option<u64> {
         if !inspect::armed(self) {
-            return;
+            return None;
         }
         let bytes = &datagram.bytes;
         let frame = match decode_packet(bytes) {
             Ok(messages) if !messages.is_empty() => Frame::rx("osc", "experiment-wait").summary(summarize_messages(&messages)),
             _ => Frame::rx("udp", "experiment-wait").summary(inspect::ascii_preview(bytes, 96)),
         };
-        inspect::publish(self, frame.local(local).remote(datagram.from).payload(bytes));
+        inspect::publish(self, frame.local(local).remote(datagram.from).payload(bytes))
     }
 }
 
@@ -53,19 +54,30 @@ pub struct NoFrames;
 
 #[cfg(test)]
 impl FrameSink for NoFrames {
-    fn received(&self, _local: SocketAddr, _datagram: &Datagram) {}
+    fn received(&self, _local: SocketAddr, _datagram: &Datagram) -> Option<u64> {
+        None
+    }
 }
 
-struct Queue {
+/// What a source of a run received, kept for its waits: a bounded queue, a
+/// wake-up for waiting steps, and the error that ended the source, if any.
+/// A UDP socket (`Listener`) and an MQTT subscription (`subscribe`) fill one each.
+pub struct Inbox {
     datagrams: Mutex<VecDeque<Datagram>>,
     dropped: AtomicU64,
-    /// Wakes every waiting step when a datagram arrives or the socket fails.
+    /// Wakes every waiting step when a datagram arrives or the source fails.
     arrived: Notify,
     failed: Mutex<Option<EngineError>>,
 }
 
-impl Queue {
-    fn push(&self, datagram: Datagram) {
+impl Default for Inbox {
+    fn default() -> Self {
+        Inbox { datagrams: Mutex::new(VecDeque::new()), dropped: AtomicU64::new(0), arrived: Notify::new(), failed: Mutex::new(None) }
+    }
+}
+
+impl Inbox {
+    pub fn push(&self, datagram: Datagram) {
         {
             let mut datagrams = self.datagrams.lock().unwrap();
             if datagrams.len() == QUEUE {
@@ -77,9 +89,39 @@ impl Queue {
         self.arrived.notify_waiters();
     }
 
-    fn fail(&self, error: EngineError) {
+    pub fn fail(&self, error: EngineError) {
         *self.failed.lock().unwrap() = Some(error);
         self.arrived.notify_waiters();
+    }
+
+    /// Datagrams dropped because the queue was full.
+    pub fn dropped(&self) -> u64 {
+        self.dropped.load(Ordering::Relaxed)
+    }
+
+    /// The first datagram that arrived at or after `since` and matches, waiting
+    /// up to `timeout` for one. A matched datagram is consumed.
+    pub async fn wait(&self, matcher: &dyn Matcher, since: Instant, timeout: Duration) -> EngineResult<WaitOutcome> {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            // Registered before looking, so an arrival between the look and the
+            // sleep still wakes this wait.
+            let arrived = self.arrived.notified();
+            tokio::pin!(arrived);
+            arrived.as_mut().enable();
+            if let Some((datagram, reply)) = self.take(matcher, since) {
+                return Ok(WaitOutcome::Matched(datagram, reply));
+            }
+            if let Some(error) = self.failed.lock().unwrap().clone() {
+                return Err(error);
+            }
+            tokio::select! {
+                _ = &mut arrived => {}
+                _ = tokio::time::sleep_until(deadline) => {
+                    return Ok(WaitOutcome::TimedOut { unmatched: self.arrived_since(since) });
+                }
+            }
+        }
     }
 
     /// Removes and returns the first datagram since `since` that matches.
@@ -112,7 +154,7 @@ pub struct Listener {
     /// Also for sending: a step that expects a reply sends from here, so a
     /// device that answers the sender's port is heard.
     socket: Arc<UdpSocket>,
-    queue: Arc<Queue>,
+    queue: Arc<Inbox>,
     task: tokio::task::AbortHandle,
 }
 
@@ -157,20 +199,15 @@ impl Listener {
         let socket = Arc::new(bind_socket(bind).await.map_err(|error| bind_error(bind, error))?);
         let local = socket.local_addr().unwrap_or(bind);
         let receiving = socket.clone();
-        let queue = Arc::new(Queue {
-            datagrams: Mutex::new(VecDeque::new()),
-            dropped: AtomicU64::new(0),
-            arrived: Notify::new(),
-            failed: Mutex::new(None),
-        });
+        let queue = Arc::new(Inbox::default());
         let filled = queue.clone();
         let task = tokio::spawn(async move {
             let mut buffer = vec![0u8; 65_536];
             loop {
                 match receiving.recv_from(&mut buffer).await {
                     Ok((size, from)) => {
-                        let datagram = Datagram { bytes: buffer[..size].to_vec(), from, at: Instant::now() };
-                        sink.received(local, &datagram);
+                        let mut datagram = Datagram { bytes: buffer[..size].to_vec(), from, at: Instant::now(), topic: None, frame: None };
+                        datagram.frame = sink.received(local, &datagram);
                         filled.push(datagram);
                     }
                     // Windows reports an ICMP "port unreachable" for an earlier
@@ -197,32 +234,17 @@ impl Listener {
 
     /// Datagrams dropped because the queue was full.
     pub fn dropped(&self) -> u64 {
-        self.queue.dropped.load(Ordering::Relaxed)
+        self.queue.dropped()
+    }
+
+    pub fn inbox(&self) -> &Inbox {
+        &self.queue
     }
 
     /// The first datagram that arrived at or after `since` and matches, waiting
     /// up to `timeout` for one. A matched datagram is consumed.
     pub async fn wait(&self, matcher: &dyn Matcher, since: Instant, timeout: Duration) -> EngineResult<WaitOutcome> {
-        let deadline = tokio::time::Instant::now() + timeout;
-        loop {
-            // Registered before looking, so an arrival between the look and the
-            // sleep still wakes this wait.
-            let arrived = self.queue.arrived.notified();
-            tokio::pin!(arrived);
-            arrived.as_mut().enable();
-            if let Some((datagram, reply)) = self.queue.take(matcher, since) {
-                return Ok(WaitOutcome::Matched(datagram, reply));
-            }
-            if let Some(error) = self.queue.failed.lock().unwrap().clone() {
-                return Err(error);
-            }
-            tokio::select! {
-                _ = &mut arrived => {}
-                _ = tokio::time::sleep_until(deadline) => {
-                    return Ok(WaitOutcome::TimedOut { unmatched: self.queue.arrived_since(since) });
-                }
-            }
-        }
+        self.queue.wait(matcher, since, timeout).await
     }
 }
 
@@ -338,10 +360,10 @@ mod tests {
 
     #[test]
     fn the_queue_is_bounded_and_counts_what_it_drops() {
-        let queue = Queue { datagrams: Mutex::new(VecDeque::new()), dropped: AtomicU64::new(0), arrived: Notify::new(), failed: Mutex::new(None) };
+        let queue = Inbox::default();
         let from: SocketAddr = "127.0.0.1:1".parse().unwrap();
         for index in 0..QUEUE + 6 {
-            queue.push(Datagram { bytes: index.to_string().into_bytes(), from, at: Instant::now() });
+            queue.push(Datagram { bytes: index.to_string().into_bytes(), from, at: Instant::now(), topic: None, frame: None });
         }
         assert_eq!((queue.datagrams.lock().unwrap().len(), queue.dropped.load(Ordering::Relaxed)), (QUEUE, 6));
         assert_eq!(queue.datagrams.lock().unwrap().front().unwrap().bytes, b"6", "the oldest are dropped");

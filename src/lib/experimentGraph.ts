@@ -1,4 +1,4 @@
-import type { Experiment, ExperimentNode, ExperimentPort, HttpRequest } from "./api";
+import type { ArgRule, Experiment, ExperimentNode, ExperimentPort, HttpRequest, OscArg } from "./api";
 
 export type NodeType = ExperimentNode["type"];
 export type Port = ExperimentPort;
@@ -39,7 +39,32 @@ export function createNode(type: NodeType, x: number, y: number): ExperimentNode
     // Listens on loopback by default, like every shipped target.
     case "wait_osc": return { ...base, type, bind: "127.0.0.1:9001", address: "/pong", args: [], timeout_ms: 2000, variable: "reply" };
     case "wait_udp": return { ...base, type, bind: "127.0.0.1:9001", mode: "contains", pattern: "pong", timeout_ms: 2000, variable: "reply" };
+    case "wait_mqtt": return { ...base, type, host: "127.0.0.1", port: 1883, topic: "lab/#", mode: "any", pattern: "", timeout_ms: 2000, variable: "reply" };
   }
+}
+
+/** Argument rules a Wait for OSC may hold, and the highest argument index (as the engine allows). */
+const MAX_RULES = 16;
+const MAX_ARG_INDEX = 63;
+
+/**
+ * A Wait for OSC that recognises a message seen in the monitor again: on the
+ * monitor's port, by its address, and by its text, whole-number and true/false
+ * arguments. Floats are measurements that change, so they are left out.
+ */
+export function waitForOscMessage(bind: string, address: string, args: OscArg[]): ExperimentNode {
+  const rules = args.flatMap((arg, index): ArgRule[] => {
+    if (index > MAX_ARG_INDEX) return [];
+    if (arg.type === "str") return [{ index, op: "eq", value: arg.value }];
+    if (arg.type === "int" || arg.type === "long" || arg.type === "bool") return [{ index, op: "eq", value: String(arg.value) }];
+    return [];
+  }).slice(0, MAX_RULES);
+  return { ...createNode("wait_osc", 0, 0), type: "wait_osc", bind, address, args: rules, timeout_ms: 2000, variable: "reply" };
+}
+
+/** A Wait for MQTT on a topic seen in the broker tree, any payload. */
+export function waitForMqttMessage(host: string, port: number, topic: string): ExperimentNode {
+  return { ...createNode("wait_mqtt", 0, 0), type: "wait_mqtt", host, port, topic, mode: "any", pattern: "", timeout_ms: 2000, variable: "reply" };
 }
 
 /** Every output a node can have, in the order they are drawn. */
@@ -47,7 +72,7 @@ export function validPortsFor(type: NodeType): Port[] {
   switch (type) {
     case "branch_status": case "branch_value": return ["yes", "no"];
     case "fork": return ["branch1", "branch2"];
-    case "wait_osc": case "wait_udp": return ["matched", "timeout"];
+    case "wait_osc": case "wait_udp": case "wait_mqtt": return ["matched", "timeout"];
     case "end": return [];
     default: return ["next"];
   }

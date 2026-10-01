@@ -15,8 +15,9 @@ use super::experiment::NodeKind;
 use super::experiment_actions as actions;
 use super::experiment_data as data;
 use super::http::HttpResponse;
-use super::listen::{Listener, Listeners, WaitOutcome};
+use super::listen::{Inbox, Listener, Listeners, WaitOutcome};
 use super::matching::{self, Datagram, Matcher, OscMatcher, UdpMatcher};
+use super::subscribe::{self, Subscription, Subscriptions};
 
 /// The state a branch carries from step to step. A Join merges the states of
 /// its inputs.
@@ -58,11 +59,13 @@ pub struct StepOutcome {
     pub detail: String,
     pub message: Option<(&'static str, Value)>,
     pub written: Option<BTreeMap<String, Value>>,
+    /// The Inspector frame of the message a wait matched.
+    pub frame: Option<u64>,
 }
 
 impl StepOutcome {
     fn next(detail: impl Into<String>) -> Self {
-        StepOutcome { port: "next", detail: detail.into(), message: None, written: None }
+        StepOutcome { port: "next", detail: detail.into(), message: None, written: None, frame: None }
     }
 
     fn said(mut self, key: &'static str, params: Value) -> Self {
@@ -77,6 +80,8 @@ pub struct StepEnv<'a> {
     pub client_id: String,
     pub seed: u64,
     pub listeners: Listeners,
+    /// The MQTT subscriptions of the run's *Wait for MQTT* steps.
+    pub subscriptions: Subscriptions,
     /// The node's Timeout output is connected.
     pub has_timeout: bool,
     /// Inputs of the node (a Join reports how many it merged).
@@ -119,12 +124,13 @@ fn check_response(kind: &NodeKind, response: Option<&HttpResponse>) -> EngineRes
 
 /// One line for the timeline about a matched reply.
 fn reply_summary(reply: &Value) -> String {
-    match reply.get("address").and_then(Value::as_str) {
-        Some(address) => {
+    match (reply.get("address").and_then(Value::as_str), reply.get("topic").and_then(Value::as_str)) {
+        (Some(address), _) => {
             let args: Vec<String> = reply["args"].as_array().into_iter().flatten().map(|arg| arg.to_string()).collect();
             if args.is_empty() { address.to_string() } else { format!("{address} {}", args.join(" ")) }
         }
-        None => matching::shorten(reply["text"].as_str().unwrap_or_default()),
+        (None, Some(topic)) => format!("{topic} {}", matching::shorten(reply["text"].as_str().unwrap_or_default())),
+        (None, None) => matching::shorten(reply["text"].as_str().unwrap_or_default()),
     }
 }
 
@@ -132,7 +138,7 @@ fn reply_summary(reply: &Value) -> String {
 fn matcher(kind: &NodeKind) -> EngineResult<Box<dyn Matcher>> {
     match kind {
         NodeKind::WaitOsc { address, args, .. } => Ok(Box::new(OscMatcher::new(address, args)?)),
-        NodeKind::WaitUdp { mode, pattern, .. } => Ok(Box::new(UdpMatcher::new(*mode, pattern)?)),
+        NodeKind::WaitUdp { mode, pattern, .. } | NodeKind::WaitMqtt { mode, pattern, .. } => Ok(Box::new(UdpMatcher::new(*mode, pattern)?)),
         _ => Err(EngineError::new("run.not_a_wait")),
     }
 }
@@ -144,6 +150,28 @@ fn listener_for(listeners: &Listeners, bind: &str, field: &'static str) -> Engin
         .ok()
         .and_then(|address| listeners.get(&address).cloned())
         .ok_or_else(|| EngineError::new("wait.not_listening").with("target", bind).in_field(Field::new(field)))
+}
+
+/// What a wait listens to: one of the run's UDP sockets or MQTT subscriptions.
+enum Source {
+    Socket(Arc<Listener>),
+    Broker(Arc<Subscription>),
+}
+
+impl Source {
+    fn inbox(&self) -> &Inbox {
+        match self {
+            Source::Socket(listener) => listener.inbox(),
+            Source::Broker(subscription) => subscription.inbox(),
+        }
+    }
+
+    fn target(&self) -> String {
+        match self {
+            Source::Socket(listener) => listener.local().to_string(),
+            Source::Broker(subscription) => subscription.broker().to_string(),
+        }
+    }
 }
 
 /// A matched reply: its value with the time it took since `since`, and how the
@@ -158,26 +186,41 @@ struct Reply {
 fn reply_of(datagram: &Datagram, mut value: Value, since: Instant) -> Reply {
     let ms = datagram.at.saturating_duration_since(since).as_millis() as u64;
     value["ms"] = ms.into();
+    if let Some(topic) = &datagram.topic {
+        value["topic"] = topic.clone().into();
+    }
     Reply { summary: reply_summary(&value), from: datagram.from.to_string(), ms, value }
 }
 
-fn timed_out(listener: &Listener, timeout_ms: u64, unmatched: usize) -> EngineError {
-    let error = EngineError::new("wait.timeout").with("ms", timeout_ms).with("unmatched", unmatched).with("target", listener.local());
+fn timed_out(source: &Source, timeout_ms: u64, unmatched: usize) -> EngineError {
+    let error = EngineError::new("wait.timeout").with("ms", timeout_ms).with("unmatched", unmatched).with("target", source.target());
     // A full queue may have pushed the reply out; say so for diagnosis.
-    match listener.dropped() {
+    match source.inbox().dropped() {
         0 => error,
         dropped => error.because(format!("listener queue full: {dropped} older datagrams dropped")),
     }
 }
 
-async fn wait(listeners: &Listeners, has_timeout: bool, run_started: Instant, kind: &NodeKind, context: &BranchContext) -> EngineResult<StepOutcome> {
-    let (Some(bind), NodeKind::WaitOsc { timeout_ms, variable, .. } | NodeKind::WaitUdp { timeout_ms, variable, .. }) = (kind.bind(), kind) else {
+/// The source a wait node listens to.
+fn source_of(env: &StepEnv<'_>, kind: &NodeKind) -> EngineResult<Source> {
+    if let Some((host, port, topic)) = kind.subscription() {
+        let key = subscribe::key(host, port, topic);
+        return env.subscriptions.get(&key).cloned().map(Source::Broker).ok_or_else(|| {
+            EngineError::new("wait.not_listening").with("target", format!("{} {}", key.0, key.1)).in_field(Field::new("topic"))
+        });
+    }
+    let bind = kind.bind().ok_or_else(|| EngineError::new("run.not_a_wait"))?;
+    listener_for(&env.listeners, bind, "bind").map(Source::Socket)
+}
+
+async fn wait(env: &StepEnv<'_>, kind: &NodeKind, context: &BranchContext) -> EngineResult<StepOutcome> {
+    let (NodeKind::WaitOsc { timeout_ms, variable, .. } | NodeKind::WaitUdp { timeout_ms, variable, .. } | NodeKind::WaitMqtt { timeout_ms, variable, .. }) = kind else {
         return Err(EngineError::new("run.not_a_wait"));
     };
     let matcher = matcher(kind)?;
-    let listener = listener_for(listeners, bind, "bind")?;
-    let since = context.last_action.unwrap_or(run_started);
-    match listener.wait(matcher.as_ref(), since, Duration::from_millis(*timeout_ms)).await? {
+    let source = source_of(env, kind)?;
+    let since = context.last_action.unwrap_or(env.run_started);
+    match source.inbox().wait(matcher.as_ref(), since, Duration::from_millis(*timeout_ms)).await? {
         WaitOutcome::Matched(datagram, value) => {
             let Reply { value, summary, from, ms } = reply_of(&datagram, value, since);
             Ok(StepOutcome {
@@ -185,15 +228,17 @@ async fn wait(listeners: &Listeners, has_timeout: bool, run_started: Instant, ki
                 detail: format!("{summary} ← {from} · {ms} ms"),
                 message: Some(("exp.step.matched", json!({ "summary": summary, "from": from, "ms": ms }))),
                 written: Some(BTreeMap::from([(variable.clone(), value)])),
+                frame: datagram.frame,
             })
         }
-        WaitOutcome::TimedOut { unmatched } if has_timeout => Ok(StepOutcome {
+        WaitOutcome::TimedOut { unmatched } if env.has_timeout => Ok(StepOutcome {
             port: "timeout",
             detail: format!("No match in {timeout_ms} ms · {unmatched} other"),
             message: Some(("exp.step.timedOut", json!({ "ms": timeout_ms, "unmatched": unmatched }))),
             written: None,
+            frame: None,
         }),
-        WaitOutcome::TimedOut { unmatched } => Err(timed_out(&listener, *timeout_ms, unmatched)),
+        WaitOutcome::TimedOut { unmatched } => Err(timed_out(&source, *timeout_ms, unmatched)),
     }
 }
 
@@ -226,9 +271,10 @@ async fn send_and_wait(env: &StepEnv<'_>, kind: &NodeKind, context: &mut BranchC
                 detail: format!("{} · {summary} ← {from} · {ms} ms", sent.detail),
                 message: Some(("exp.step.replied", json!({ "summary": summary, "from": from, "ms": ms }))),
                 written: Some(BTreeMap::from([(variable.to_string(), value)])),
+                frame: datagram.frame,
             })
         }
-        WaitOutcome::TimedOut { unmatched } => Err(timed_out(&listener, timeout_ms, unmatched).in_field(Field::new("reply_bind"))),
+        WaitOutcome::TimedOut { unmatched } => Err(timed_out(&Source::Socket(listener), timeout_ms, unmatched).in_field(Field::new("reply_bind"))),
     }
 }
 
@@ -266,7 +312,7 @@ pub async fn execute(env: &StepEnv<'_>, kind: &NodeKind, context: &mut BranchCon
         NodeKind::BranchStatus { status } => {
             let actual = context.last_status.ok_or_else(|| EngineError::new("check.no_response"))?;
             let (port, key) = if actual == *status { ("yes", "exp.step.yes") } else { ("no", "exp.step.no") };
-            Ok(StepOutcome { port, detail: format!("HTTP {actual} = {status} → {port}"), message: Some((key, json!({ "status": actual }))), written: None })
+            Ok(StepOutcome { port, detail: format!("HTTP {actual} = {status} → {port}"), message: Some((key, json!({ "status": actual }))), written: None, frame: None })
         }
         NodeKind::Extract { variable, from, expr } => {
             let value = data::extract(*from, expr, context.last_response.as_ref()).map_err(|error| error.in_field(data::extract_field(*from)))?;
@@ -277,6 +323,7 @@ pub async fn execute(env: &StepEnv<'_>, kind: &NodeKind, context: &mut BranchCon
                 detail: format!("{variable} = {preview}"),
                 message: Some(("exp.step.extracted", json!({ "name": variable, "value": preview }))),
                 written: Some(BTreeMap::from([(variable.clone(), value)])),
+                frame: None,
             })
         }
         NodeKind::AssertValue { value, op, expected } => {
@@ -289,10 +336,10 @@ pub async fn execute(env: &StepEnv<'_>, kind: &NodeKind, context: &mut BranchCon
         NodeKind::BranchValue { value, op, expected } => {
             let (holds, comparison) = data::compare(value, *op, expected).map_err(|error| error.in_field(Field::new("expected")))?;
             let (port, key) = if holds { ("yes", "exp.step.valueYes") } else { ("no", "exp.step.valueNo") };
-            Ok(StepOutcome { port, detail: comparison.text(), message: Some((key, comparison.params())), written: None })
+            Ok(StepOutcome { port, detail: comparison.text(), message: Some((key, comparison.params())), written: None, frame: None })
         }
-        NodeKind::WaitOsc { .. } | NodeKind::WaitUdp { .. } => {
-            let outcome = wait(&env.listeners, env.has_timeout, env.run_started, kind, context).await?;
+        NodeKind::WaitOsc { .. } | NodeKind::WaitUdp { .. } | NodeKind::WaitMqtt { .. } => {
+            let outcome = wait(env, kind, context).await?;
             if let Some(written) = &outcome.written {
                 context.vars.extend(written.iter().map(|(name, value)| (name.clone(), value.clone())));
             }
@@ -370,6 +417,16 @@ mod tests {
     async fn send_osc(to: SocketAddr, address: &str, args: &[crate::osc_codec::OscArg]) {
         let socket = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
         socket.send_to(&crate::osc_codec::encode_message(address, args), to).await.unwrap();
+    }
+
+    fn env<'a>(host: &'a Host, listeners: &Listeners, has_timeout: bool, started: Instant) -> StepEnv<'a> {
+        StepEnv { host, client_id: "test".into(), seed: 0, listeners: listeners.clone(), subscriptions: Subscriptions::new(), has_timeout, inputs: 1, run_started: started }
+    }
+
+    /// `wait` as the old signature read, for the tests below.
+    async fn wait(listeners: &Listeners, has_timeout: bool, started: Instant, kind: &NodeKind, context: &BranchContext) -> EngineResult<StepOutcome> {
+        let host = Host::new(Arc::new(crate::host::NoEvents), crate::inspect::Capture::new());
+        super::wait(&env(&host, listeners, has_timeout, started), kind, context).await
     }
 
     #[tokio::test]

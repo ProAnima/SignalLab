@@ -35,7 +35,7 @@ fn sent(detail: String) -> ActionOutcome {
 }
 
 /// `host:port`, with brackets around an IPv6 address.
-fn host_port(host: &str, port: u16) -> String {
+pub(crate) fn host_port(host: &str, port: u16) -> String {
     match host.trim().parse::<IpAddr>() {
         Ok(IpAddr::V6(ip)) => format!("[{ip}]:{port}"),
         _ => format!("{}:{port}", host.trim()),
@@ -46,7 +46,7 @@ fn io_error(error: std::io::Error, target: &str) -> EngineError {
     transport::of_io(&error).error(target).because(error)
 }
 
-fn mqtt_error(failure: MqttFailure, broker: &str) -> EngineError {
+pub(crate) fn mqtt_error(failure: MqttFailure, broker: &str) -> EngineError {
     let error = match failure.cause {
         MqttCause::Transport(cause) => cause.error(broker),
         MqttCause::Refused(code) => EngineError::new("mqtt.refused").with("broker", broker).with("code", code),

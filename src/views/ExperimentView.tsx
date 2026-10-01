@@ -25,6 +25,8 @@ import { useT } from "../lib/i18n";
 export interface ExperimentHandle {
   /** Append an action built from a direct instrument; false when the editor cannot take it now. */
   add: (body: SignalBody) => boolean;
+  /** Append a node made elsewhere (Wait for this); placed and selected like `add`. */
+  addNode: (node: ExperimentNode) => boolean;
 }
 
 /** `branch`: the node goes on a new wire of the anchor's output (parallel work), not into its flow. */
@@ -38,7 +40,7 @@ type Outcome = { kind: "passed" | "failed" | "stopped"; error?: Failure } | null
 const GROUP_GLYPH: Record<NodeGroup, string> = { action: "↗", observe: "⇠", data: "{}", check: "✓", flow: "◇" };
 /** `:9001` from `127.0.0.1:9001`: the port is what tells waits apart on the canvas. */
 const bindPort = (bind: string) => { const at = bind.lastIndexOf(":"); return at >= 0 ? bind.slice(at) : bind; };
-const isWait = (node: ExperimentNode) => node.type === "wait_osc" || node.type === "wait_udp";
+const isWait = (node: ExperimentNode) => node.type === "wait_osc" || node.type === "wait_udp" || node.type === "wait_mqtt";
 /** A node heading's tooltip: what the node does; for the parallel nodes, how they are wired. */
 const nodeHelp = (type: NodeType) => type === "fork" ? "exp.forkHint" as const : type === "join" ? "exp.joinHint" as const : NODE_CATALOG[type].description;
 const OP_TEXT: Record<string, string> = { eq: "=", ne: "≠", lt: "<", le: "≤", gt: ">", ge: "≥", contains: "⊃", matches: "~", empty: "= ∅", not_empty: "≠ ∅" };
@@ -58,6 +60,7 @@ function previewLines(node: ExperimentNode): string[] {
     case "assert_value": case "branch_value": return [`${node.value} ${OP_TEXT[node.op]} ${node.op === "empty" || node.op === "not_empty" ? "" : node.expected}`.trim()];
     case "wait_osc": return [`${node.address} ⇠ ${node.bind}`, ...node.args.map((rule) => `args[${rule.index}] ${OP_TEXT[rule.op]} ${rule.op === "empty" || rule.op === "not_empty" ? "" : rule.value}`.trim())];
     case "wait_udp": return [`${node.mode === "any" ? "*" : node.pattern} ⇠ ${node.bind}`];
+    case "wait_mqtt": return [`${node.topic} ⇠ ${node.host}:${node.port}`, ...(node.mode === "any" ? [] : [node.pattern])];
     default: return [];
   }
 }
@@ -83,6 +86,7 @@ function summary(node: ExperimentNode, t: (key: any) => string): string {
     case "branch_value": return `${node.value} ${OP_TEXT[node.op]} ${node.op === "empty" || node.op === "not_empty" ? "" : node.expected} ?`;
     case "wait_osc": return `${node.address} ⇠ ${bindPort(node.bind)} · ${node.timeout_ms} ms`;
     case "wait_udp": return `${node.mode === "any" ? "*" : node.pattern || "∅"} ⇠ ${bindPort(node.bind)} · ${node.timeout_ms} ms`;
+    case "wait_mqtt": return `${node.topic} ⇠ ${node.host}:${node.port} · ${node.timeout_ms} ms`;
     default: return "";
   }
 }
@@ -90,7 +94,7 @@ function summary(node: ExperimentNode, t: (key: any) => string): string {
 const outputPorts = validPortsFor;
 const editable = (target: EventTarget | null) => target instanceof HTMLElement && !!target.closest("input, textarea, select, [contenteditable=true]");
 
-export function ExperimentView({ active, focusMode, setFocusMode, ref }: { active: boolean; focusMode: boolean; setFocusMode: (value: boolean) => void; ref?: Ref<ExperimentHandle> }) {
+export function ExperimentView({ active, focusMode, setFocusMode, onShowFrame, ref }: { active: boolean; focusMode: boolean; setFocusMode: (value: boolean) => void; onShowFrame?: (seq: number) => void; ref?: Ref<ExperimentHandle> }) {
   const t = useT();
   const { refreshJobs, library, pushLog, pushError } = useStore();
   const { document: doc, history, dispatch, save: saveDocument, replace, saveState, validationError, profileIssues, revalidate, error: documentError } = useExperimentDocument();
@@ -539,23 +543,26 @@ export function ExperimentView({ active, focusMode, setFocusMode, ref }: { activ
     inserted(node.id);
   };
 
+  /** A node from a direct instrument, as the next step before End (the selection is only a fallback). */
+  const appendNode = (make: (x: number, y: number) => ExperimentNode | null): boolean => {
+    if (!doc || busy) return false;
+    // The end of the flow is the predictable place; the selection is only a fallback.
+    const end = doc.nodes.find((node) => node.type === "end");
+    const anchor = (end && anchorAfter(doc, end.id)) || (selected ? anchorAfter(doc, selected) : null);
+    const spot = anchor ? placeAfter(doc, anchor)
+      : { x: Math.min(...doc.nodes.map((node) => node.x)), y: Math.max(...doc.nodes.map((node) => node.y)) + NODE_H + 48 };
+    const node = make(spot.x, spot.y);
+    if (!node) return false;
+    commitEdit();
+    edit((current) => addAfter(current, anchor, node));
+    setSelected(node.id); setPropertiesOpen(true);
+    pendingReveal.current = node.id;
+    pushLog("ok", "experiment", "log.addedToExperiment", { node: label(node.type), name: doc.name });
+    return true;
+  };
   useImperativeHandle(ref, () => ({
-    add: (body) => {
-      if (!doc || busy) return false;
-      // The end of the flow is the predictable place; the selection is only a fallback.
-      const end = doc.nodes.find((node) => node.type === "end");
-      const anchor = (end && anchorAfter(doc, end.id)) || (selected ? anchorAfter(doc, selected) : null);
-      const spot = anchor ? placeAfter(doc, anchor)
-        : { x: Math.min(...doc.nodes.map((node) => node.x)), y: Math.max(...doc.nodes.map((node) => node.y)) + NODE_H + 48 };
-      const node = nodeFromSignal(body, spot.x, spot.y);
-      if (!node) return false;
-      commitEdit();
-      edit((current) => addAfter(current, anchor, node));
-      setSelected(node.id); setPropertiesOpen(true);
-      pendingReveal.current = node.id;
-      pushLog("ok", "experiment", "log.addedToExperiment", { node: label(node.type), name: doc.name });
-      return true;
-    },
+    add: (body) => appendNode((x, y) => nodeFromSignal(body, x, y)),
+    addNode: (node) => appendNode((x, y) => ({ ...node, id: `${node.type}-${crypto.randomUUID()}`, x, y })),
   }));
 
   const toggleLink = (from: string, port: Port) => {
@@ -830,6 +837,8 @@ export function ExperimentView({ active, focusMode, setFocusMode, ref }: { activ
       ? <button className="ghost sm experiment-seed-chip pinned" data-tip={t("exp.unpinSeedHint")} onClick={() => edit((current) => ({ ...current, seed: null }))}>{t("exp.runSeed", { seed: doc.seed })} · {t("exp.unpinSeed")}</button>
       : lastSeed !== null && <button className="ghost sm experiment-seed-chip" data-tip={t("exp.pinSeedHint")} disabled={busy} onClick={() => edit((current) => ({ ...current, seed: lastSeed }))}>{t("exp.runSeed", { seed: lastSeed })} · {t("exp.pinSeed")}</button>}<strong className={outcome?.kind === "failed" ? "fail" : ""} data-tip={outcome?.kind === "failed" ? describe(outcome.error) : undefined}>{outcomeText}</strong></div>
       {timelineOpen && <div className="experiment-events">{events.length === 0 ? <span className="experiment-empty">{t("exp.noEvents")}</span> : events.map((event, index) => <button key={index} onClick={() => { const node = doc.nodes.find((item) => item.id === event.node_id); if (node) showNode(node); }} className={event.state}><time>{new Date(event.ts).toLocaleTimeString()}</time><b>{label(doc.nodes.find((node) => node.id === event.node_id)?.type ?? "end")}</b><span data-tip={event.error?.detail}>{t(`exp.${event.state}`)}{stepText(event) && ` · ${stepText(event)}`}</span></button>)}</div>}
+      {timelineOpen && onShowFrame && events.some((event) => event.frame !== undefined) && <div className="experiment-frame-links">{events.filter((event) => event.frame !== undefined).map((event) =>
+        <button key={`${event.node_id}-${event.frame}`} className="ghost sm" data-tip={t("exp.openFrameHint")} onClick={() => onShowFrame(event.frame!)}>◫ {label(doc.nodes.find((node) => node.id === event.node_id)?.type ?? "end")} · {t("exp.openFrame", { seq: event.frame! })}</button>)}</div>}
     </div>
     {menu && <div className="experiment-menu-backdrop" onPointerDown={() => setMenu(null)}><div className="experiment-add-menu" role="dialog" aria-label={t("exp.addNode")} style={{ left: Math.max(8, menu.screenX), top: Math.max(8, menu.screenY) }} onPointerDown={(event) => event.stopPropagation()}>
       {menu.anchor && <p className="experiment-menu-context">{t(menu.branch ? "exp.addingBranch" : "exp.addingAfter", { node: anchorLabel(menu.anchor) })}</p>}

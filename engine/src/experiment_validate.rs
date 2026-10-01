@@ -224,6 +224,28 @@ fn check_node(kind: &NodeKind, params: &BTreeMap<String, String>) -> EngineResul
             check_rules(args.len(), args.iter().map(|rule| rule.index))?;
             check_timeout(*timeout_ms)?;
         }
+        NodeKind::WaitMqtt { host, port, topic, mode, pattern, timeout_ms, .. } => {
+            if host.trim().is_empty() {
+                return Err(required(Field::new("broker")));
+            }
+            check_port(*port)?;
+            if topic.is_empty() {
+                return Err(required(Field::new("topic")));
+            }
+            // Subscribed before the first step: only parameters are known then.
+            for (field, text) in [("broker", host), ("topic", topic)] {
+                if fixed(text).is_none() {
+                    return Err(EngineError::new("node.params_only").in_field(Field::new(field)));
+                }
+            }
+            if fixed(topic).is_some_and(|topic| !crate::subscribe::filter_valid(&topic)) {
+                return Err(EngineError::new("node.topic_filter").with("value", topic).in_field(Field::new("topic")));
+            }
+            if *mode != UdpMode::Any && pattern.is_empty() {
+                return Err(required(Field::new("pattern")));
+            }
+            check_timeout(*timeout_ms)?;
+        }
         NodeKind::WaitUdp { bind, mode, pattern, timeout_ms, .. } => {
             check_bind(bind)?;
             if *mode != UdpMode::Any && pattern.is_empty() {

@@ -206,6 +206,21 @@ pub enum NodeKind {
         #[serde(default = "default_reply_variable")]
         variable: String,
     },
+    /// Wait for an MQTT message published to `topic` (a filter: `+`, `#`) at a
+    /// broker, whose payload matches. Subscribed when the run starts.
+    WaitMqtt {
+        host: String,
+        port: u16,
+        topic: String,
+        #[serde(default)]
+        mode: UdpMode,
+        #[serde(default)]
+        pattern: String,
+        #[serde(default = "default_wait_timeout")]
+        timeout_ms: u64,
+        #[serde(default = "default_reply_variable")]
+        variable: String,
+    },
     /// Wait for a UDP datagram on `bind` whose payload matches.
     WaitUdp {
         bind: String,
@@ -233,12 +248,12 @@ impl NodeKind {
             NodeKind::End => &[],
             NodeKind::BranchStatus { .. } | NodeKind::BranchValue { .. } => &["yes", "no"],
             NodeKind::Fork => &["branch1", "branch2"],
-            NodeKind::WaitOsc { .. } | NodeKind::WaitUdp { .. } => &["matched"],
+            NodeKind::WaitOsc { .. } | NodeKind::WaitUdp { .. } | NodeKind::WaitMqtt { .. } => &["matched"],
             _ => &["next"],
         };
         let optional: &'static [&'static str] = match self {
             // Without a Timeout wire, a timeout fails the step.
-            NodeKind::WaitOsc { .. } | NodeKind::WaitUdp { .. } => &["timeout"],
+            NodeKind::WaitOsc { .. } | NodeKind::WaitUdp { .. } | NodeKind::WaitMqtt { .. } => &["timeout"],
             _ => &[],
         };
         Outputs { required, optional }
@@ -250,7 +265,15 @@ impl NodeKind {
     }
 
     pub fn is_wait(&self) -> bool {
-        matches!(self, NodeKind::WaitOsc { .. } | NodeKind::WaitUdp { .. })
+        matches!(self, NodeKind::WaitOsc { .. } | NodeKind::WaitUdp { .. } | NodeKind::WaitMqtt { .. })
+    }
+
+    /// The broker and topic filter a *Wait for MQTT* subscribes to.
+    pub fn subscription(&self) -> Option<(&str, u16, &str)> {
+        match self {
+            NodeKind::WaitMqtt { host, port, topic, .. } => Some((host, *port, topic)),
+            _ => None,
+        }
     }
 
     /// Reads the latest HTTP response, so an earlier request is required.

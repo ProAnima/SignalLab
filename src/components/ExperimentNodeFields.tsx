@@ -67,11 +67,16 @@ export function ExperimentNodeFields({ node, patch }: { node: ExperimentNode; pa
       <label data-tip={t("exp.addressPatternHint")}>{t("exp.addressPattern")}<TemplateField primary value={node.address} onChange={address => patch({ address })} /></label>
       <ArgRules rules={node.args} onChange={args => patch({ args })} />
     </>}
-    {node.type === "wait_udp" && <>
+    {node.type === "wait_mqtt" && <>
+      <label data-tip={t("exp.mqttWaitHint")}>{t("exp.broker")}<TemplateField value={node.host} onChange={host => patch({ host })} /></label>
+      <label>{t("exp.port")}<input type="number" min="1" max="65535" value={node.port} onChange={event => patch({ port: Number(event.target.value) })} /></label>
+      <label data-tip={t("exp.topicFilterHint")}>{t("exp.topicFilter")}<TemplateField primary value={node.topic} placeholder="lab/+/state" onChange={topic => patch({ topic })} /></label>
+    </>}
+    {(node.type === "wait_udp" || node.type === "wait_mqtt") && <>
       <label>{t("exp.waitMode")}<select value={node.mode} onChange={event => patch({ mode: event.target.value as UdpMode })}>{UDP_MODES.map(mode => <option key={mode} value={mode}>{t(`exp.mode.${mode}` as TKey)}</option>)}</select></label>
       {node.mode !== "any" && <label>{t("field.pattern")}<TemplateField primary value={node.pattern} placeholder={MODE_PLACEHOLDER[node.mode]} onChange={pattern => patch({ pattern })} /></label>}
     </>}
-    {(node.type === "wait_osc" || node.type === "wait_udp") && <>
+    {(node.type === "wait_osc" || node.type === "wait_udp" || node.type === "wait_mqtt") && <>
       <label>{t("exp.waitTimeout")}<input type="number" min="1" max="120000" value={node.timeout_ms} onChange={event => patch({ timeout_ms: Number(event.target.value) })} /></label>
       <label>{t("exp.replyVariable")}<input value={node.variable} spellCheck={false} onChange={event => patch({ variable: event.target.value.replace(/\s+/g, "_") })} /></label>
     </>}

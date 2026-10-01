@@ -101,6 +101,8 @@ export type ExperimentNode = {
   | { type: "branch_value"; value: string; op: CompareOp; expected: string }
   | { type: "wait_osc"; bind: string; address: string; args: ArgRule[]; timeout_ms: number; variable: string }
   | { type: "wait_udp"; bind: string; mode: UdpMode; pattern: string; timeout_ms: number; variable: string }
+  /** `topic` is a subscription filter (`+`, `#`); broker and topic may use parameters only. */
+  | { type: "wait_mqtt"; host: string; port: number; topic: string; mode: UdpMode; pattern: string; timeout_ms: number; variable: string }
 );
 
 /** `args[index] <op> value` on a received OSC message; the value is a template. */
@@ -142,6 +144,8 @@ export interface ExperimentStep {
   message_key?: string | null; message_params?: Record<string, string | number>;
   /** Variables this step wrote. */
   vars?: Record<string, unknown>;
+  /** The Inspector frame of the message a wait matched (when capture was armed). */
+  frame?: number;
   /** Why the step failed. */
   error?: EngineError;
 }

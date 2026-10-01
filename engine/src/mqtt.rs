@@ -67,7 +67,7 @@ fn default_true() -> bool {
     true
 }
 
-const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(6);
+pub(crate) const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(6);
 const FLUSH_EVERY: Duration = Duration::from_millis(100);
 /// Beyond this the accumulator sheds oldest and reports the count: the alternative
 /// is unbounded memory while the UI is behind.
@@ -265,7 +265,7 @@ impl From<MqttFailure> for String {
 /// Dial and complete CONNECT/CONNACK before the job exists, so a wrong password
 /// or a closed port is an error on the button rather than a job that dies a
 /// moment later somewhere else.
-async fn dial(cfg: &MqttConfig) -> Result<(TcpStream, String), MqttFailure> {
+pub(crate) async fn dial(cfg: &MqttConfig) -> Result<(TcpStream, String), MqttFailure> {
     if cfg.client_id.trim().is_empty() {
         return Err(MqttFailure::new(MqttCause::Protocol, "a client id is required — brokers reject an empty one"));
     }

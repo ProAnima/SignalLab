@@ -214,6 +214,14 @@ fn texts_mut(kind: &mut NodeKind) -> Vec<(Field, &mut String)> {
             }
         }
         NodeKind::WaitUdp { mode, pattern, .. } if *mode != UdpMode::Any => fields.push((Field::new("pattern"), pattern)),
+        // Broker and topic may use parameters (validation allows nothing else): the run subscribes before its first step.
+        NodeKind::WaitMqtt { host, topic, mode, pattern, .. } => {
+            fields.push((Field::new("broker"), host));
+            fields.push((Field::new("topic"), topic));
+            if *mode != UdpMode::Any {
+                fields.push((Field::new("pattern"), pattern));
+            }
+        }
         _ => {}
     }
     fields
@@ -238,7 +246,7 @@ pub fn written_var(kind: &NodeKind) -> Option<(&str, &'static str)> {
     match kind {
         NodeKind::Extract { variable, .. } => Some((variable, "next")),
         // A timeout has no reply, so the variable exists on Matched only.
-        NodeKind::WaitOsc { variable, .. } | NodeKind::WaitUdp { variable, .. } => Some((variable, "matched")),
+        NodeKind::WaitOsc { variable, .. } | NodeKind::WaitUdp { variable, .. } | NodeKind::WaitMqtt { variable, .. } => Some((variable, "matched")),
         // A send that expects a reply passes only with one.
         NodeKind::Osc { reply: Some(reply), .. } => Some((&reply.variable, "next")),
         NodeKind::Udp { reply: Some(reply), .. } => Some((&reply.variable, "next")),
@@ -331,7 +339,7 @@ fn check_literals(node: &Node, params: &BTreeMap<String, String>) -> EngineResul
         },
         NodeKind::WaitOsc { address, args, .. } => check_osc_reply(address, args, Field::new("address"), params),
         NodeKind::Osc { reply: Some(reply), .. } => check_osc_reply(&reply.address, &reply.args, Field::new("reply_address"), params),
-        NodeKind::WaitUdp { mode, pattern, .. } => check_udp_pattern(*mode, pattern, Field::new("pattern"), params),
+        NodeKind::WaitUdp { mode, pattern, .. } | NodeKind::WaitMqtt { mode, pattern, .. } => check_udp_pattern(*mode, pattern, Field::new("pattern"), params),
         NodeKind::Udp { reply: Some(reply), .. } => check_udp_pattern(reply.mode, &reply.pattern, Field::new("reply_pattern"), params),
         _ => Ok(()),
     }

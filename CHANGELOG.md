@@ -12,6 +12,12 @@ release notes — so what is written here is what users read. See
 
 ### Added
 
+- **Wait for MQTT.** Wait for a message on a topic filter (`+`, `#`) whose payload
+  matches; the run subscribes before its first step, so a quick answer is not
+  missed, and retained values replayed on subscribing are ignored.
+- **Wait for this** on a message in the OSC monitor or a topic in the MQTT tree
+  builds the wait for it in the experiment; and a wait that matched links from the
+  timeline to its frame in the Inspector.
 - **A reply in the same node, and Retry.** An OSC message or a UDP datagram can
   wait for its answer — sent from the port it listens on, so a device that
   answers the sender is heard too — and the reply is a variable for later steps.

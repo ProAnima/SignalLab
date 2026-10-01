@@ -205,6 +205,11 @@ Dockerfile, deploy/compose.yaml, scripts/image.mjs   the server image and its sm
   branch. An OSC/UDP node with `reply` sends from the listener on `reply.bind`
   (`Listener::send_to`, port 0 allowed) and waits there in the same step; its
   variable is written on Next. Both are document version 4.
+- **Waits read an `Inbox`.** A UDP `Listener` and an MQTT `Subscription`
+  (`subscribe.rs`) each fill one; matching and consumption are the same.
+  Subscriptions open before the first step, so their broker and topic take
+  parameters only; retained replays are ignored. A matched datagram carries its
+  Inspector frame number (`Datagram::frame`), reported as the step's `frame`.
 - **Waits listen from the start of the run.** `listen::Listener`s are opened in
   `experiment_run::start` before the job exists (a taken port is a Run error at
   the wait), shared per bind, and dropped with the run. A wait counts datagrams

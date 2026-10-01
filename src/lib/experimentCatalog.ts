@@ -14,6 +14,7 @@ export const NODE_CATALOG = {
   log: { title: "exp.node.log", description: "exp.description.log", group: "action" },
   wait_osc: { title: "exp.node.wait_osc", description: "exp.description.wait_osc", group: "observe" },
   wait_udp: { title: "exp.node.wait_udp", description: "exp.description.wait_udp", group: "observe" },
+  wait_mqtt: { title: "exp.node.wait_mqtt", description: "exp.description.wait_mqtt", group: "observe" },
   assert_status: { title: "exp.node.assert_status", description: "exp.description.assert_status", group: "check" },
   assert_body: { title: "exp.node.assert_body", description: "exp.description.assert_body", group: "check" },
   assert_header: { title: "exp.node.assert_header", description: "exp.description.assert_header", group: "check" },

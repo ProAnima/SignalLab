@@ -1300,6 +1300,8 @@ kbd {
 }
 .experiment-node.retry { border-color: var(--amber); }
 .experiment-events button.retry { color: var(--amber); }
+/* Frames the run's waits matched, each opening the Inspector on it. */
+.experiment-frame-links { display: flex; flex-wrap: wrap; gap: var(--space-1); padding: var(--space-1) var(--space-2) var(--space-2); }
 /* How many attempts a step may make: ↻3 next to its type. */
 .experiment-node-retry { margin-left: auto; padding: 0 5px; border-radius: 4px; font: 600 10px var(--mono); color: var(--amber); background: rgba(255, 192, 105, 0.1); }
 @keyframes pulseDot {

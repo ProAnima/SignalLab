@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { api, EV, type JobInfo, type OscArg, type OscInbound, type GenTick, type SignalBody, type Waveform } from "../lib/api";
+import { api, EV, type ExperimentNode, type JobInfo, type OscArg, type OscInbound, type GenTick, type SignalBody, type Waveform } from "../lib/api";
+import { waitForOscMessage } from "../lib/experimentGraph";
 import { useStore } from "../lib/store";
 import { describeError, type Failure } from "../lib/errors";
 import { useT, type TKey } from "../lib/i18n";
@@ -12,7 +13,7 @@ interface FlatMsg { ts: number; from: string; address: string; args: OscArg[]; e
 
 const WAVEFORMS: Waveform[] = ["sine", "triangle", "saw", "square", "ramp", "random", "constant"];
 
-export function OscView({ onToExperiment }: { onToExperiment?: (body: SignalBody) => void }) {
+export function OscView({ onToExperiment, onWaitFor }: { onToExperiment?: (body: SignalBody) => void; onWaitFor?: (node: ExperimentNode) => void }) {
   const { pushLog, pushError, refreshJobs, stopJob, jobGone } = useStore();
   const t = useT();
 
@@ -185,6 +186,7 @@ export function OscView({ onToExperiment }: { onToExperiment?: (body: SignalBody
                   <th style={{ width: 130 }}>{t("osc.from")}</th>
                   <th>{t("osc.address")}</th>
                   <th>{t("osc.args")}</th>
+                  {onWaitFor && <th style={{ width: 40 }} aria-label={t("osc.waitForThis")} />}
                 </tr>
               </thead>
               <tbody>
@@ -196,10 +198,12 @@ export function OscView({ onToExperiment }: { onToExperiment?: (body: SignalBody
                       {m.error ? t("osc.decodeError") : m.address}
                     </td>
                     <td>{m.error ?? m.args.map(fmtArg).join("  ")}</td>
+                    {onWaitFor && <td>{!m.error && <button className="ghost xs" aria-label={t("osc.waitForThis")}
+                      data-tip={t("osc.waitForThisHint", { bind })} onClick={() => onWaitFor(waitForOscMessage(bind, m.address, m.args))}>⇠</button>}</td>}
                   </tr>
                 ))}
                 {msgs.length === 0 && (
-                  <tr><td colSpan={4} className="empty-state">{t("osc.noPackets")}</td></tr>
+                  <tr><td colSpan={onWaitFor ? 5 : 4} className="empty-state">{t("osc.noPackets")}</td></tr>
                 )}
               </tbody>
             </table>

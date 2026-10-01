@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { historyReducer, newHistory, HISTORY_LIMIT } from "../src/lib/editHistory.ts";
-import { addAfter, addBranch, anchorAfter, arrangeNodes, connect, createNode, disconnect, duplicateNode, insertOnEdge, isWired, missingOutputs, placeAfter, removeNode, requiredPortsFor, unreachableNodes, validPortsFor, NODE_WIDTH, NODE_HEIGHT } from "../src/lib/experimentGraph.ts";
+import { addAfter, addBranch, anchorAfter, arrangeNodes, connect, createNode, disconnect, duplicateNode, insertOnEdge, isWired, missingOutputs, placeAfter, removeNode, requiredPortsFor, unreachableNodes, validPortsFor, waitForMqttMessage, waitForOscMessage, NODE_WIDTH, NODE_HEIGHT } from "../src/lib/experimentGraph.ts";
 import { ADDABLE_NODES, NODE_CATALOG } from "../src/lib/experimentCatalog.ts";
 import { jsonPath, suggestVariableName, templateAt, variablesBefore, isIdent, effectiveParams, renameParam, removeParam, setParamValue, addProfile, renameProfile, removeProfile, secretNames, replyFields, writtenVariable, canRetry, defaultReply, DEFAULT_RETRY } from "../src/lib/experimentData.ts";
 import { describeError, failureNode, fieldLabel, isEngineError, messageParams, responseFailure } from "../src/lib/errors.ts";
@@ -437,5 +437,22 @@ test("a node added after a lower branch stays in that branch's row instead of la
   const spot = placeAfter(doc, { from: "lower", port: "next" });
   assert.equal(spot.y, lower.y, "in the source's row, not End's");
   assert.ok(!doc.nodes.some((node) => Math.abs(node.x - spot.x) < NODE_WIDTH && Math.abs(node.y - spot.y) < NODE_HEIGHT), "on a free spot");
+});
+
+test("Wait for this: a received OSC message or MQTT topic becomes a wait that recognises it", () => {
+  const wait = waitForOscMessage("0.0.0.0:9000", "/mixer/fader", [
+    { type: "int", value: 3 }, { type: "float", value: 0.75 }, { type: "str", value: "main" }, { type: "bool", value: true },
+  ]);
+  assert.equal(wait.type, "wait_osc");
+  assert.equal(wait.bind, "0.0.0.0:9000", "on the port the monitor heard it on");
+  assert.equal(wait.address, "/mixer/fader");
+  assert.deepEqual(wait.args, [
+    { index: 0, op: "eq", value: "3" }, { index: 2, op: "eq", value: "main" }, { index: 3, op: "eq", value: "true" },
+  ], "the float, a measurement, is left out");
+  assert.deepEqual(validPortsFor(wait.type), ["matched", "timeout"]);
+  const many = waitForOscMessage("0.0.0.0:9000", "/x", Array.from({ length: 40 }, (_, value) => ({ type: "int", value })));
+  assert.equal(many.args.length, 16, "no more rules than the engine accepts");
+  const topic = waitForMqttMessage("192.168.1.20", 1883, "lights/hall/state");
+  assert.deepEqual([topic.type, topic.host, topic.port, topic.topic, topic.mode], ["wait_mqtt", "192.168.1.20", 1883, "lights/hall/state", "any"]);
 });
 

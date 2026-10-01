@@ -27,6 +27,10 @@ pub struct Datagram {
     pub bytes: Vec<u8>,
     pub from: SocketAddr,
     pub at: Instant,
+    /// The MQTT topic it was published to; `None` for a datagram.
+    pub topic: Option<String>,
+    /// Its frame in the Inspector, when capture was armed as it arrived.
+    pub frame: Option<u64>,
 }
 
 /// Decides whether a datagram is the awaited reply. On a match it returns the
@@ -510,7 +514,7 @@ mod tests {
     use crate::osc_codec::encode_message;
 
     fn datagram(bytes: Vec<u8>) -> Datagram {
-        Datagram { bytes, from: "127.0.0.1:9000".parse().unwrap(), at: Instant::now() }
+        Datagram { bytes, from: "127.0.0.1:9000".parse().unwrap(), at: Instant::now(), topic: None, frame: None }
     }
 
     #[test]

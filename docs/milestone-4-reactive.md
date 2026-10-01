@@ -1,6 +1,6 @@
 # Milestone 4 — reactive flows: detailed design
 
-Status: PR 4.1 delivered, 2026-10-01; PR 4.2 part 1 (a reply in the same node, Retry) delivered, 2026-10-02. Parent plan: [ROADMAP.md](../ROADMAP.md#4-reactive-flows-wait-for-replies-retry-repeat).
+Status: PR 4.1 delivered, 2026-10-01; PR 4.2 (a reply in the same node, Retry, Wait for MQTT, Wait for this, frames from the timeline) delivered, 2026-10-02. Parent plan: [ROADMAP.md](../ROADMAP.md#4-reactive-flows-wait-for-replies-retry-repeat).
 
 PR 4.1 lets an experiment **wait for a device's reply**. Waiting is where most things go wrong — a port is taken, a reply never comes, a pattern is mistyped — so the same PR replaces the engine's English error strings with **structured, localized errors** everywhere the experiment engine reports a problem.
 
@@ -182,7 +182,48 @@ Every action and wait may retry (`retry` in the node): `attempts` 1–10 in all,
 properties that open their fields; the canvas shows `⇠ /pong` after a send that
 waits and `↻3` for the attempts. Suggestions offer `reply.…` after such a send.
 
-## 5. Tests
+## 5. PR 4.2, part 2 — Wait for MQTT, Wait for this, the matched frame
+
+### Wait for MQTT
+
+| Field | |
+| --- | --- |
+| `host`, `port` | the broker; parameters only (`{{broker}}`) |
+| `topic` | a subscription filter: `+` a whole level, `#` the whole last level; parameters only |
+| `mode`, `pattern` | the payload rule of *Wait for UDP* (any, contains, regex, hex); the pattern is a template |
+| `timeout_ms`, `variable` | as every wait; outputs Matched and optional Timeout |
+
+- The run connects and subscribes **before its first step** (`subscribe.rs`, one
+  connection per broker and filter, QoS 0, clean session), so a reply published
+  right after the run's own action is not missed. That is why broker and topic
+  take parameters only (`node.params_only`). A refused subscription
+  (`mqtt.subscribe_refused` at *Topic*) or an absent broker (`transport.*` at
+  *Broker*) stops the run before any traffic.
+- **Retained messages** the broker replays on subscribing describe the past and
+  are ignored; what counts is published after the run started.
+- Messages fill the same `Inbox` as a UDP socket, so matching, consumption, the
+  queue bound and the count of unmatched messages behave the same. The reply has
+  `topic` besides `text`, `hex`, `bytes`, `match`, `from` and `ms`.
+- The connection pings at half its 30 s keep-alive and closes with the run.
+
+### Wait for this
+
+The OSC monitor's rows and the MQTT screen's selected topic offer *Wait for
+this*: a Wait for OSC on the monitor's port with the message's address and its
+text, whole-number and true/false arguments as rules (floats are measurements
+and are left out), or a Wait for MQTT on that topic at that broker. The node is
+added before End like *Add to experiment*. The monitor must be stopped before a
+run, since the run listens on its port itself.
+
+### The frame a wait matched
+
+Every received datagram and MQTT message the Inspector records keeps its frame
+number; a matched wait (or reply) reports it as `frame` in its step. The
+timeline lists those frames, and one opens the Inspector with that frame
+selected and the filters cleared. Without capture armed there is no frame and
+no link.
+
+## 6. Tests
 
 - Error: builders, masking of params and detail, serialization; a scan that every code and field key used by the engine has an English text and no text is stale.
 - Matching: OSC patterns (wildcards, sets, alternatives, malformed patterns with positions), argument rules with numbers and text, UDP modes, hex parsing.

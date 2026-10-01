@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   api, on, EV,
-  type JobInfo, type MqttAck, type MqttConfig, type MqttGrant, type MqttStateEvent,
+  type ExperimentNode, type JobInfo, type MqttAck, type MqttConfig, type MqttGrant, type MqttStateEvent,
 } from "../lib/api";
 import { useStore } from "../lib/store";
 import { useT } from "../lib/i18n";
 import { fmtNum, fmtTime } from "../lib/format";
 import { signalFromMqttTopic } from "../lib/signals";
+import { waitForMqttMessage } from "../lib/experimentGraph";
 import { flattenTopics, sortedChildren, type TopicNode } from "../lib/topics";
 
 const QOS = [0, 1, 2];
@@ -15,7 +16,7 @@ function defaultClientId(): string {
   return `signal-lab-${Math.random().toString(16).slice(2, 8)}`;
 }
 
-export function MqttView() {
+export function MqttView({ onWaitFor }: { onWaitFor?: (node: ExperimentNode) => void } = {}) {
   const {
     pushLog, pushError, jobGone, stopJob, refreshJobs, library, setLibrary,
     mqttTopics, mqttVersion, mqttDropped, clearMqttTopics,
@@ -403,6 +404,8 @@ export function MqttView() {
                   })}>
                   {t("mq.editHere")}
                 </button>
+                {onWaitFor && <button className="ghost sm" data-tip={t("mq.waitForThisHint")}
+                  onClick={() => onWaitFor(waitForMqttMessage(cfg.host, cfg.port, pickedNode.path))}>⇠ {t("mq.waitForThis")}</button>}
                 {/* Two steps: this writes to the broker for every client at once. */}
                 <button
                   className="danger sm"
