@@ -106,8 +106,7 @@ export function HttpView({ onToExperiment }: { onToExperiment?: (body: SignalBod
   return (
     <div>
       <div className="view-head">
-        <h1>{t("http.title")}</h1>
-        <p>{t("http.blurb")}</p>
+        <h1 data-tip={t("http.blurb")}>{t("http.title")}</h1>
       </div>
 
       <div className="cols side">
@@ -161,11 +160,11 @@ export function HttpView({ onToExperiment }: { onToExperiment?: (body: SignalBod
             <input type="number" value={timeout} onChange={(e) => setTimeoutMs(+e.target.value)} onKeyDown={onEnterSend} />
           </div>
           <div className="btn-row">
-            <button className="primary" onClick={send} disabled={busy} title={`${t("common.send")} · Enter / Ctrl+Enter`}>
+            <button className="primary" onClick={send} disabled={busy} data-tip={`${t("common.send")} · Enter / Ctrl+Enter`}>
               {busy ? t("common.sending") : t("common.send")}
             </button>
             {onToExperiment && (
-              <button className="ghost" title={t("common.toExperimentHint")}
+              <button className="ghost" data-tip={t("common.toExperimentHint")}
                 onClick={() => onToExperiment({ transport: "http", request: buildReq() })}>
                 {t("common.toExperiment")}
               </button>
@@ -240,11 +239,11 @@ export function HttpView({ onToExperiment }: { onToExperiment?: (body: SignalBod
                 <input type="number" value={concurrency} onChange={(e) => setConcurrency(+e.target.value)} />
               </div>
               <div className="field">
-                <label>{t("http.total")}</label>
+                <label data-tip={t("http.totalHint")}>{t("http.total")}</label>
                 <input type="number" value={total} onChange={(e) => setTotal(+e.target.value)} />
               </div>
               <div className="field">
-                <label>{t("http.duration")}</label>
+                <label data-tip={t("http.durationHint")}>{t("http.duration")}</label>
                 <input type="number" value={duration} onChange={(e) => setDuration(+e.target.value)} />
               </div>
             </div>
@@ -252,7 +251,7 @@ export function HttpView({ onToExperiment }: { onToExperiment?: (body: SignalBod
               <div className="metric"><div className="k">{t("http.sent")}</div><div className="v">{fmtNum(prog?.sent ?? 0)}</div></div>
               <div className="metric"><div className="k">{t("http.ok")}</div><div className="v accent">{fmtNum(prog?.ok ?? 0)}</div></div>
               <div className="metric"><div className="k">{t("http.failed")}</div><div className="v red">{fmtNum(prog?.failed ?? 0)}</div></div>
-              <div className="metric"><div className="k">{t("http.rps")}</div><div className="v accent">{fmtNum(prog?.rps ?? 0)}</div></div>
+              <div className="metric" data-tip={t("http.rpsCaption")}><div className="k">{t("http.rps")}</div><div className="v accent">{fmtNum(prog?.rps ?? 0)}</div></div>
               <div className="metric"><div className="k">{t("http.avg")}</div><div className="v">{(prog?.avg_latency_ms ?? 0).toFixed(0)}<small>ms</small></div></div>
               <div className="metric">
                 <div className="k">{t("http.minMax")}</div>
@@ -267,11 +266,8 @@ export function HttpView({ onToExperiment }: { onToExperiment?: (body: SignalBod
               </button>
             </div>
           </div>
-          <div>
+          <div data-tip={t("http.rpsCaption")}>
             <Scope data={rpsSeries} height={200} color="#6aa9ff" min={0} />
-            <div style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--text-faint)", marginTop: 8, textAlign: "right" }}>
-              {t("http.rpsCaption")}
-            </div>
           </div>
         </div>
       </div>

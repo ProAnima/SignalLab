@@ -86,14 +86,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev librsvg2-dev libxdo-dev libssl-dev patchelf
 
-      # The toolchain pinned in src-tauri/rust-toolchain.toml, with its components.
+      # The toolchain pinned in rust-toolchain.toml, with its components.
       - name: Rust toolchain
-        working-directory: src-tauri
         run: rustup toolchain install
 
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: src-tauri
           key: release
 
       - run: npm ci --no-audit --no-fund

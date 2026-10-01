@@ -83,7 +83,7 @@ function PayloadEditor({
 
       {value.kind === "text" && (
         <div className="field">
-          <label>{t("bc.textHint")}</label>
+          <label data-tip={t("bc.textHint")}>{t("bc.text")}</label>
           <textarea
             value={value.text}
             disabled={disabled}
@@ -95,7 +95,7 @@ function PayloadEditor({
 
       {value.kind === "hex" && (
         <div className="field">
-          <label>{t("bc.hexHint")}</label>
+          <label data-tip={t("bc.hexHint")}>{t("bc.hex")}</label>
           <textarea
             value={value.hex}
             disabled={disabled}
@@ -282,8 +282,7 @@ export function BroadcastView() {
   return (
     <div>
       <div className="view-head">
-        <h1>{t("bc.title")}</h1>
-        <p>{t("bc.blurb")}</p>
+        <h1 data-tip={t("bc.blurb")}>{t("bc.title")}</h1>
       </div>
 
       <div className="cols side">
@@ -300,6 +299,7 @@ export function BroadcastView() {
                   className={"chip" + (mode === m ? " on" : "")}
                   role="radio"
                   aria-checked={mode === m}
+                  data-tip={t(`bc.blurb.${m}` as TKey)}
                   onClick={() => setMode(m)}
                 >
                   {t(`bc.mode.${m}` as TKey)}
@@ -312,14 +312,14 @@ export function BroadcastView() {
             {/* The shortcut is a sibling of the label, not a child: a click
                 target inside a <label> also activates the labelled input. */}
             <div className="label-row">
-              <label htmlFor="bc-target">
+              <label htmlFor="bc-target" data-tip={mode === "list" ? t("bc.targetListHint") : undefined}>
                 {mode === "sweep" ? t("bc.targetCidr") : mode === "list" ? t("bc.targetList") : t("bc.targetAddress")}
               </label>
               {suggestion && (
                 <button
                   className="link-btn"
                   onClick={() => setTarget(suggestion)}
-                  title={t("bc.useSubnetHint", { ip: host?.local_ip ?? "" })}
+                  data-tip={t("bc.useSubnetHint", { ip: host?.local_ip ?? "" })}
                 >
                   {t("bc.useSubnet")}
                 </button>
@@ -385,11 +385,11 @@ export function BroadcastView() {
               <input type="number" step="0.5" value={rate} disabled={!!beaconJob} onChange={(e) => setRate(+e.target.value)} />
             </div>
             <div className="field">
-              <label>{t("bc.beaconRounds")}</label>
+              <label data-tip={t("common.zeroUnlimited")}>{t("bc.beaconRounds")}</label>
               <input type="number" value={count} disabled={!!beaconJob} onChange={(e) => setCount(+e.target.value)} />
             </div>
             <div className="field">
-              <label>{t("bc.beaconSeconds")}</label>
+              <label data-tip={t("common.zeroUnlimited")}>{t("bc.beaconSeconds")}</label>
               <input type="number" value={duration} disabled={!!beaconJob} onChange={(e) => setDuration(+e.target.value)} />
             </div>
           </div>
@@ -399,7 +399,6 @@ export function BroadcastView() {
             </button>
           </div>
 
-          <div className="hint info">{t(`bc.blurb.${mode}` as TKey)}</div>
         </div>
 
         {/* ---- right column ---- */}
@@ -448,7 +447,7 @@ export function BroadcastView() {
           </div>
 
           <div className="panel">
-            <p className="section-label">{t("bc.discovery")}</p>
+            <p className="section-label" data-tip={t("bc.firewallHint")}>{t("bc.discovery")}</p>
             <div className="row">
               <div className="field">
                 <label>{t("common.bind")}</label>
@@ -461,11 +460,11 @@ export function BroadcastView() {
             </div>
             <div className="row">
               <div className="field">
-                <label>{t("bc.interface")}</label>
+                <label data-tip={t("bc.interfaceHint")}>{t("bc.interface")}</label>
                 <input value={iface} disabled={!!discJob} placeholder={host?.local_ip ?? "0.0.0.0"} onChange={(e) => setIface(e.target.value)} />
               </div>
               <div className="field check">
-                <label className="checkbox">
+                <label className="checkbox" data-tip={t("bc.reuseHint")}>
                   <input type="checkbox" checked={reuse} disabled={!!discJob} onChange={(e) => setReuse(e.target.checked)} />
                   {t("bc.reuse")}
                 </label>
@@ -473,7 +472,7 @@ export function BroadcastView() {
             </div>
 
             <div className="field">
-              <label className="checkbox">
+              <label className="checkbox" data-tip={t("bc.respondHint")}>
                 <input type="checkbox" checked={respond} disabled={!!discJob} onChange={(e) => setRespond(e.target.checked)} />
                 {t("bc.respond")}
               </label>
@@ -545,7 +544,6 @@ export function BroadcastView() {
               </table>
             </div>
 
-            <div className="hint info">{t("bc.firewallHint")}</div>
           </div>
         </div>
       </div>

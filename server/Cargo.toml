@@ -1,0 +1,30 @@
+[package]
+name = "signal-lab-server"
+description = "Signal Lab without a window: the engine and its interface over HTTP and WebSocket, for a browser"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "signal-lab-server"
+path = "src/main.rs"
+
+[dependencies]
+signal-lab-engine.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["signal"] }
+tracing.workspace = true
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+axum = { version = "0.8", features = ["ws"] }
+tower-http = { version = "0.6", features = ["fs", "set-header"] }
+clap = { version = "4", features = ["derive", "env"] }
+rand = "0.8"
+reqwest = { version = "0.12", default-features = false }
+
+[dev-dependencies]
+reqwest = { version = "0.12", features = ["json"] }
+tokio-tungstenite = "0.28"
+futures-util = "0.3"

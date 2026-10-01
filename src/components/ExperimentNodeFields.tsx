@@ -17,8 +17,6 @@ export function ExperimentNodeFields({ node, patch }: { node: ExperimentNode; pa
     {node.type === "assert_body" && <label>{t("exp.contains")}<TemplateField multiline primary value={node.contains} onChange={contains => patch({ contains })} /></label>}
     {node.type === "assert_header" && <><label>{t("exp.headerName")}<TemplateField primary value={node.name} onChange={name => patch({ name })} /></label><label>{t("exp.contains")}<TemplateField value={node.contains} onChange={contains => patch({ contains })} /></label></>}
     {node.type === "assert_latency" && <label>{t("exp.maxLatency")}<input data-primary type="number" min="1" max="120000" value={node.max_ms} onChange={event => patch({ max_ms: Number(event.target.value) })} /></label>}
-    {node.type === "fork" && <div className="experiment-field-info"><p>{t("exp.forkHint")}</p></div>}
-    {node.type === "join" && <div className="experiment-field-info"><p>{t("exp.joinHint")}</p></div>}
     {node.type === "log" && <label>{t("exp.logMessage")}<TemplateField multiline primary value={node.message} onChange={message => patch({ message })} /></label>}
     {node.type === "tcp" && <>
       <label>{t("exp.host")}<TemplateField primary value={node.host} onChange={host => patch({ host })} /></label>
@@ -51,23 +49,20 @@ export function ExperimentNodeFields({ node, patch }: { node: ExperimentNode; pa
     {node.type === "osc" && <div className="experiment-osc-args"><p>{t("exp.arguments")}</p><ExperimentOscFields key={node.id} args={node.args} onChange={args => patch({ args })} /></div>}
     {node.type === "udp" && <><label>{t("common.target")}<TemplateField value={node.target} onChange={target => patch({ target })} /></label><label>{t("exp.payload")}<TemplateField multiline primary value={node.text} onChange={text => patch({ text })} /></label></>}
     {node.type === "extract" && <>
-      <label>{t("exp.variable")}<input data-primary value={node.variable} spellCheck={false} onChange={event => patch({ variable: event.target.value.replace(/\s+/g, "_") })} /></label>
+      <label data-tip={t("exp.extractHint", { name: node.variable || "name" })}>{t("exp.variable")}<input data-primary value={node.variable} spellCheck={false} onChange={event => patch({ variable: event.target.value.replace(/\s+/g, "_") })} /></label>
       <label>{t("exp.extractFrom")}<select value={node.from} onChange={event => patch({ from: event.target.value as ExtractFrom })}>{SOURCES.map(source => <option key={source} value={source}>{t(`exp.from.${source}` as TKey)}</option>)}</select></label>
       {node.from !== "status" && node.from !== "body" && <label>{node.from === "json" ? t("exp.jsonPath") : node.from === "header" ? t("exp.headerName") : t("exp.pattern")}
         <input value={node.expr} spellCheck={false} placeholder={EXPR_PLACEHOLDER[node.from]} onChange={event => patch({ expr: event.target.value })} /></label>}
-      <p className="experiment-hint">{t("exp.extractHint", { name: node.variable || "name" })}</p>
     </>}
     {(node.type === "assert_value" || node.type === "branch_value") && <>
       <label>{t("exp.value")}<TemplateField primary value={node.value} onChange={value => patch({ value })} /></label>
-      <label>{t("exp.operator")}<select value={node.op} onChange={event => patch({ op: event.target.value as CompareOp })}>{OPERATORS.map(op => <option key={op} value={op}>{t(`exp.op.${op}` as TKey)}</option>)}</select></label>
+      <label data-tip={t("exp.valueHint")}>{t("exp.operator")}<select value={node.op} onChange={event => patch({ op: event.target.value as CompareOp })}>{OPERATORS.map(op => <option key={op} value={op}>{t(`exp.op.${op}` as TKey)}</option>)}</select></label>
       {node.op !== "empty" && node.op !== "not_empty" && <label>{t("exp.expected")}<TemplateField value={node.expected} onChange={expected => patch({ expected })} /></label>}
-      <p className="experiment-hint">{t("exp.valueHint")}</p>
     </>}
-    {(node.type === "wait_osc" || node.type === "wait_udp") && <label>{t("exp.listenOn")}
+    {(node.type === "wait_osc" || node.type === "wait_udp") && <label data-tip={t("exp.waitHint", { name: node.variable || "reply" })}>{t("exp.listenOn")}
       <input value={node.bind} spellCheck={false} placeholder="0.0.0.0:9001" onChange={event => patch({ bind: event.target.value.trim() })} /></label>}
     {node.type === "wait_osc" && <>
-      <label>{t("exp.addressPattern")}<TemplateField primary value={node.address} onChange={address => patch({ address })} /></label>
-      <p className="experiment-hint">{t("exp.addressPatternHint")}</p>
+      <label data-tip={t("exp.addressPatternHint")}>{t("exp.addressPattern")}<TemplateField primary value={node.address} onChange={address => patch({ address })} /></label>
       <ArgRules rules={node.args} onChange={args => patch({ args })} />
     </>}
     {node.type === "wait_udp" && <>
@@ -77,7 +72,6 @@ export function ExperimentNodeFields({ node, patch }: { node: ExperimentNode; pa
     {(node.type === "wait_osc" || node.type === "wait_udp") && <>
       <label>{t("exp.waitTimeout")}<input type="number" min="1" max="120000" value={node.timeout_ms} onChange={event => patch({ timeout_ms: Number(event.target.value) })} /></label>
       <label>{t("exp.replyVariable")}<input value={node.variable} spellCheck={false} onChange={event => patch({ variable: event.target.value.replace(/\s+/g, "_") })} /></label>
-      <p className="experiment-hint">{t("exp.waitHint", { name: node.variable || "reply" })}</p>
     </>}
   </>;
 }
@@ -87,16 +81,15 @@ function ArgRules({ rules, onChange }: { rules: ArgRule[]; onChange: (rules: Arg
   const t = useT();
   const update = (index: number, change: Partial<ArgRule>) => onChange(rules.map((rule, i) => i === index ? { ...rule, ...change } : rule));
   const next = rules.length ? Math.min(63, rules[rules.length - 1].index + 1) : 0;
-  return <div className="experiment-rule-fields"><p>{t("exp.argRules")}</p>
+  return <div className="experiment-rule-fields"><p data-tip={t("exp.argRulesHint")}>{t("exp.argRules")}</p>
     {rules.map((rule, index) => <div key={index} className="experiment-rule">
-      <input type="number" min="0" max="63" aria-label={`${t("exp.argIndex")} ${index + 1}`} title={`args[${rule.index}]`} value={rule.index}
+      <input type="number" min="0" max="63" aria-label={`${t("exp.argIndex")} ${index + 1}`} data-tip={`args[${rule.index}]`} value={rule.index}
         onChange={event => update(index, { index: Math.max(0, Math.floor(Number(event.target.value) || 0)) })} />
       <select aria-label={t("exp.operator")} value={rule.op} onChange={event => update(index, { op: event.target.value as CompareOp })}>
         {OPERATORS.map(op => <option key={op} value={op}>{t(`exp.op.${op}` as TKey)}</option>)}</select>
       {!unary(rule.op) && <TemplateField label={t("field.rule_value")} placeholder={t("field.value")} value={rule.value} onChange={value => update(index, { value })} />}
-      <button className="ghost sm" aria-label={t("exp.removeRule")} title={t("exp.removeRule")} onClick={() => onChange(rules.filter((_, i) => i !== index))}>×</button>
+      <button className="ghost sm" aria-label={t("exp.removeRule")} data-tip={t("exp.removeRule")} onClick={() => onChange(rules.filter((_, i) => i !== index))}>×</button>
     </div>)}
-    {rules.length > 0 && <p className="experiment-hint">{t("exp.argRulesHint")}</p>}
     <button className="ghost sm" disabled={rules.length >= 16} onClick={() => onChange([...rules, { index: next, op: "eq", value: "" }])}>＋ {t("exp.addRule")}</button>
   </div>;
 }

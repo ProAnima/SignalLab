@@ -10,7 +10,7 @@
 //
 // Used by `npm run check`, CI, the release workflow and `npm run release`.
 
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { isMain, root } from "./lib.mjs";
 
@@ -21,8 +21,11 @@ const write = (path, text) => writeFileSync(file(path), text);
 /** Semantic version: 1.2.3 or 1.2.3-rc.1. */
 export const SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$/;
 
-const CARGO_PACKAGE = /(\[package\][^[]*?\nversion\s*=\s*")([^"]+)(")/;
-const CARGO_LOCK = /(\[\[package\]\]\r?\nname = "signal-lab"\r?\nversion = ")([^"]+)(")/;
+const CARGO_WORKSPACE = /(\[workspace\.package\][^[]*?\nversion\s*=\s*")([^"]+)(")/;
+/** The workspace's own packages in Cargo.lock: signal-lab, signal-lab-engine, signal-lab-server. */
+const CARGO_LOCK = /(\[\[package\]\]\r?\nname = "signal-lab(?:-[a-z]+)?"\r?\nversion = ")([^"]+)(")/g;
+/** Crates of the workspace; each takes its version from the workspace. */
+export const MEMBERS = ["engine/Cargo.toml", "src-tauri/Cargo.toml", "server/Cargo.toml"];
 
 /** Every place a version is written, and how to read and replace it. */
 export const COPIES = [
@@ -38,13 +41,14 @@ export const COPIES = [
     set: (text, version) => { let left = 2; return text.replace(/("version"\s*:\s*")[^"]+(")/g, (match, a, b) => left-- > 0 ? `${a}${version}${b}` : match); },
   },
   {
-    path: "src-tauri/Cargo.toml",
-    get: (text) => CARGO_PACKAGE.exec(text)?.[2],
-    set: (text, version) => text.replace(CARGO_PACKAGE, `$1${version}$3`),
+    path: "Cargo.toml",
+    get: (text) => CARGO_WORKSPACE.exec(text)?.[2],
+    set: (text, version) => text.replace(CARGO_WORKSPACE, `$1${version}$3`),
   },
   {
-    path: "src-tauri/Cargo.lock",
-    get: (text) => CARGO_LOCK.exec(text)?.[2],
+    path: "Cargo.lock",
+    // Every workspace package must carry the same version; a mix reads as such.
+    get: (text) => { const found = [...new Set([...text.matchAll(CARGO_LOCK)].map((match) => match[2]))]; return found.length ? found.join(" / ") : undefined; },
     set: (text, version) => text.replace(CARGO_LOCK, `$1${version}$3`),
   },
 ];
@@ -61,6 +65,9 @@ export function versionProblems(tag) {
   for (const copy of COPIES) {
     const found = copy.get(read(copy.path));
     if (found !== version) problems.push(`${copy.path}: ${found ?? "no version"} (package.json says ${version})`);
+  }
+  for (const member of MEMBERS.filter((path) => existsSync(file(path)))) {
+    if (!/^version\.workspace\s*=\s*true$/m.test(read(member))) problems.push(`${member}: must take the workspace version (version.workspace = true)`);
   }
   const tauri = JSON.parse(read("src-tauri/tauri.conf.json")).version;
   if (tauri !== "../package.json") problems.push(`src-tauri/tauri.conf.json: "version" must be "../package.json", found "${tauri}"`);

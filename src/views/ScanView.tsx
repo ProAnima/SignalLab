@@ -56,8 +56,7 @@ export function ScanView() {
   return (
     <div>
       <div className="view-head">
-        <h1>{t("sc.title")}</h1>
-        <p>{t("sc.blurb")}</p>
+        <h1 data-tip={t("sc.blurb")}>{t("sc.title")}</h1>
       </div>
 
       <div className="cols side">

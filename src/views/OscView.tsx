@@ -122,8 +122,7 @@ export function OscView({ onToExperiment }: { onToExperiment?: (body: SignalBody
   return (
     <div>
       <div className="view-head">
-        <h1>{t("osc.title")}</h1>
-        <p>{t("osc.blurb")}</p>
+        <h1 data-tip={t("osc.blurb")}>{t("osc.title")}</h1>
       </div>
 
       <div className="cols side">
@@ -143,11 +142,11 @@ export function OscView({ onToExperiment }: { onToExperiment?: (body: SignalBody
             <OscArgsEditor args={args} onChange={setArgs} onSubmit={send} />
           </div>
           <div className="btn-row">
-            <button className="primary" onClick={send} title={`${t("common.send")} · Enter`}>{t("common.send")}</button>
+            <button className="primary" onClick={send} data-tip={`${t("common.send")} · Enter`}>{t("common.send")}</button>
             {onToExperiment && (
               <button
                 className="ghost"
-                title={t("common.toExperimentHint")}
+                data-tip={t("common.toExperimentHint")}
                 onClick={() => onToExperiment({ transport: "osc", target, address, args: args.map(toOscArg) })}
               >
                 {t("common.toExperiment")}

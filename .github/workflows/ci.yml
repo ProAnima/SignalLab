@@ -1,6 +1,8 @@
 # Every check of `npm run check` (scripts/check.mjs), on Windows and on Linux,
-# for every push to main and every pull request. The release workflow runs this
-# first, on the tag it is about to build. See docs/delivery.md.
+# and the server image built and smoke-tested for x64 and arm64
+# (`npm run check:image`), for every push to main and every pull request. The
+# release workflow runs this first, on the tag it is about to build. See
+# docs/delivery.md.
 name: CI
 
 on:
@@ -53,16 +55,64 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev librsvg2-dev libxdo-dev libssl-dev patchelf
 
-      # The toolchain pinned in src-tauri/rust-toolchain.toml, with its components.
+      # The toolchain pinned in rust-toolchain.toml, with its components.
       - name: Rust toolchain
-        working-directory: src-tauri
         run: rustup toolchain install
 
       - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
 
       - run: npm ci --no-audit --no-fund
 
       - name: npm run check
         run: node scripts/check.mjs
+
+      # The Linux desktop app's webview: tooltips driven with real pointer and key events.
+      - name: Tooltips in WebKitGTK
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get install -y --no-install-recommends webkit2gtk-driver xvfb
+          xvfb-run -a node scripts/webkit.mjs --native
+
+  # The image the image workflow publishes when a release is published, built
+  # the same way and run through the same smoke test, so a release never finds
+  # out at publication that it does not build.
+  image:
+    name: Server image (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: x64
+            os: ubuntu-24.04
+            platform: linux/amd64
+          - name: arm64
+            os: ubuntu-24.04-arm
+            platform: linux/arm64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          # The checked-out files, not the event's commit: a release checks its tag.
+          context: .
+          platforms: ${{ matrix.platform }}
+          load: true
+          tags: signallab:ci
+          # Attestations are for the pushed image; a loaded one cannot carry them.
+          provenance: false
+          cache-from: type=gha,scope=image-${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=image-${{ matrix.name }}
+
+      - name: Smoke test
+        run: node scripts/image.mjs smoke signallab:ci

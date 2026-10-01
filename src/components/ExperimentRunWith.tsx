@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { Experiment, ProfileIssue } from "../lib/api";
 import { effectiveParams } from "../lib/experimentData";
 import { useT } from "../lib/i18n";
@@ -27,6 +27,7 @@ export function ExperimentRunWith({ doc, issues, lastSeed, initial, anchor, onRu
 }) {
   const t = useT();
   const form = useRef<HTMLFormElement>(null);
+  const seedId = useId();
   const known = (name: string | null) => name === null || doc.profiles.some((profile) => profile.name === name);
   const [profile, setProfile] = useState<string | null>(initial && known(initial.profile) ? initial.profile : doc.profile);
   const [values, setValues] = useState<Record<string, string>>(() => Object.fromEntries(
@@ -49,8 +50,7 @@ export function ExperimentRunWith({ doc, issues, lastSeed, initial, anchor, onRu
       onPointerDown={(event) => event.stopPropagation()}
       onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); onClose(); } }}
       onSubmit={(event) => { event.preventDefault(); submit(); }}>
-      <header><strong>{t("exp.runWith")}</strong><button type="button" className="ghost sm" aria-label={t("exp.close")} onClick={onClose}>×</button></header>
-      <p className="experiment-hint">{t("exp.runWithHint")}</p>
+      <header><strong data-tip={t("exp.runWithHint")}>{t("exp.runWith")}</strong><button type="button" className="ghost sm" aria-label={t("exp.close")} onClick={onClose}>×</button></header>
       {doc.profiles.length > 0 && <label>{t("exp.profile")}
         <select value={profile ?? ""} onChange={(event) => setProfile(event.target.value || null)}>
           {[null, ...doc.profiles.map((item) => item.name)].map((name) => <option key={name ?? ""} value={name ?? ""}>
@@ -60,14 +60,16 @@ export function ExperimentRunWith({ doc, issues, lastSeed, initial, anchor, onRu
         <input value={values[param.name] ?? ""} placeholder={placeholders[param.name] ?? ""}
           className={values[param.name] ? "overridden" : undefined}
           onChange={(event) => setValues((prior) => ({ ...prior, [param.name]: event.target.value }))} /></label>)}
-      <label className="experiment-run-seed">{t("exp.seed")}
+      {/* The "last seed" button sits beside the label, not in it: a click inside a label also focuses its input. */}
+      <div className="experiment-run-seed">
+        <label htmlFor={seedId}>{t("exp.seed")}</label>
         <span>
-          <input inputMode="numeric" value={seed} className={seedValid ? undefined : "invalid"}
+          <input id={seedId} inputMode="numeric" value={seed} className={seedValid ? undefined : "invalid"}
             placeholder={doc.seed !== null ? t("exp.pinnedSeedPlaceholder", { seed: doc.seed }) : t("exp.seedRandom")}
             onChange={(event) => setSeed(event.target.value)} />
           {lastSeed !== null && <button type="button" className="ghost sm" onClick={() => setSeed(String(lastSeed))}>{t("exp.lastSeed", { seed: lastSeed })}</button>}
         </span>
-      </label>
+      </div>
       <footer>
         <button type="button" className="ghost sm" onClick={() => { setValues({}); setSeed(""); setProfile(doc.profile); }}>{t("exp.resetOverrides")}</button>
         <button type="submit" className="primary" disabled={!seedValid}>{t("exp.run")}</button>

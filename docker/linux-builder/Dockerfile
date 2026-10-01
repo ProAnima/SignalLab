@@ -16,13 +16,13 @@ RUN apt-get update \
 
 # Node from nodejs.org, checked against its published SHA-256.
 ARG NODE_VERSION=24.13.0
-RUN curl -fsSLO "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz" \
- && curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/SHASUMS256.txt" | grep " node-v${NODE_VERSION}-linux-x64.tar.xz\$" | sha256sum -c - \
+RUN curl -fsSLO --retry 5 --retry-all-errors "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz" \
+ && curl -fsSL --retry 5 --retry-all-errors "https://nodejs.org/dist/v${NODE_VERSION}/SHASUMS256.txt" | grep " node-v${NODE_VERSION}-linux-x64.tar.xz\$" | sha256sum -c - \
  && tar -xJf "node-v${NODE_VERSION}-linux-x64.tar.xz" -C /usr/local --strip-components=1 \
  && rm "node-v${NODE_VERSION}-linux-x64.tar.xz" \
  && node --version
 
-# The toolchain pinned in src-tauri/rust-toolchain.toml (scripts/linux.mjs
+# The toolchain pinned in rust-toolchain.toml (scripts/linux.mjs
 # passes it in), with its components, so nothing is downloaded per run.
 ARG RUST_TOOLCHAIN=stable
 ARG RUST_COMPONENTS=clippy

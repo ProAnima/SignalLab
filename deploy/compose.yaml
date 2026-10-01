@@ -1,0 +1,51 @@
+# Signal Lab server with Docker Compose, on a Linux host.
+#
+#   1. A token, in a file next to this one that only the container's user reads:
+#        docker run --rm ghcr.io/proanima/signallab token > signallab_token.txt
+#        sudo chown 10001 signallab_token.txt && sudo chmod 400 signallab_token.txt
+#   2. docker compose up -d          (in this folder)
+#   3. Open http://<this-host>:1430 and sign in with the token.
+#
+# Host networking lets OSC, UDP, broadcast, multicast and discovery reach the
+# physical network, and lets waits and monitors listen on real ports. It works
+# on Linux hosts only; on Windows and macOS use the desktop app.
+# More: docs/delivery.md, section 7.
+
+name: signallab
+
+services:
+  signallab:
+    # Pin a version for anything that matters: SIGNALLAB_IMAGE=ghcr.io/proanima/signallab:X.Y.Z
+    image: ${SIGNALLAB_IMAGE:-ghcr.io/proanima/signallab:latest}
+    network_mode: host
+    environment:
+      SIGNALLAB_TOKEN_FILE: /run/secrets/signallab_token
+      # Listen on one interface instead of all of them:
+      # SIGNALLAB_LISTEN: 10.0.0.5:1430
+      # Only answer to these names (a guard against DNS rebinding):
+      # SIGNALLAB_ALLOWED_HOSTS: lab-pc.local,10.0.0.5
+      # Behind an HTTPS reverse proxy:
+      # SIGNALLAB_SECURE_COOKIE: "true"
+    secrets:
+      - signallab_token
+      # Experiment secrets ({{secret.API_TOKEN}}) are read-only files, one per name:
+      # - source: api_token
+      #   target: /run/secrets/signallab/API_TOKEN
+    volumes:
+      - signallab-data:/data
+    # It writes only to /data and needs no privileges.
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+    # SIGTERM closes every page's connection and stops every job first.
+    stop_grace_period: 15s
+
+secrets:
+  signallab_token:
+    file: ./signallab_token.txt
+  # api_token:
+  #   file: ./api_token.txt
+
+volumes:
+  signallab-data:

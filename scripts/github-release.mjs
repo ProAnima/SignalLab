@@ -4,6 +4,8 @@
 //   node scripts/github-release.mjs draft v1.2.3       create (or refresh) the draft release, notes from CHANGELOG.md
 //   node scripts/github-release.mjs checksums v1.2.3   SHA256SUMS.txt of every asset, uploaded next to them
 //
+// publishedReleases() is used by scripts/image.mjs to tag the server image.
+//
 // Needs GITHUB_TOKEN (or GH_TOKEN) with contents: write. GITHUB_REPOSITORY
 // defaults to ProAnima/SignalLab. A published release is never modified:
 // publishing is a person's decision, made on the releases page.
@@ -22,7 +24,7 @@ const SUMS = "SHA256SUMS.txt";
 async function github(url, { method = "GET", body, headers = {}, raw = false } = {}) {
   const response = await fetch(url, {
     method,
-    headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28", ...headers },
+    headers: { ...(token && { Authorization: `Bearer ${token}` }), Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28", ...headers },
     body,
   });
   if (!response.ok) throw new Error(`${method} ${url} → ${response.status} ${await response.text()}`);
@@ -37,6 +39,19 @@ async function findRelease(tag) {
     if (found || releases.length < 100) return found ?? null;
   }
   return null;
+}
+
+/** Every published release (no drafts) as `{version, prerelease}`. */
+export async function publishedReleases() {
+  const found = [];
+  for (let page = 1; page < 20; page++) {
+    const releases = await github(`${API}/releases?per_page=100&page=${page}`);
+    for (const release of releases.filter((item) => !item.draft)) {
+      found.push({ version: release.tag_name.replace(/^v/, ""), prerelease: release.prerelease });
+    }
+    if (releases.length < 100) break;
+  }
+  return found;
 }
 
 function output(name, value) {

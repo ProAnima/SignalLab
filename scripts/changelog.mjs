@@ -60,6 +60,8 @@ export function releaseNotes(version, text = read()) {
 **Downloads.** Windows: \`*-setup.exe\` (per-user or per-machine) or \`*.msi\`. Linux: \`.deb\`, \`.rpm\` or \`.AppImage\` (x64).
 Verify a download against \`SHA256SUMS.txt\`. Installers are not code-signed yet, so Windows SmartScreen may warn about an unknown publisher.
 
+**Server image.** \`docker pull ghcr.io/proanima/signallab:${version}\` (x64 and arm64), published a few minutes after this release. On a Linux host run it with \`--network host\` so broadcast, multicast and discovery reach the network; see \`deploy/compose.yaml\`.
+
 **Responsible use.** Storm, Scanner and Broadcast send real traffic to real hosts. Point them only at equipment you own or are authorised to test.
 `;
 }

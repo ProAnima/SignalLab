@@ -6,18 +6,16 @@
 //   node scripts/check.mjs            all steps
 //   node scripts/check.mjs --list     print the steps
 
-import { join } from "node:path";
 import { isMain, root, run, seconds } from "./lib.mjs";
-
-const engine = join(root, "src-tauri");
 
 /** `--locked`: lock files are part of a change; the checks must not rewrite them. */
 export const STEPS = [
   { name: "versions agree", cwd: root, command: "node", args: ["scripts/version.mjs", "check"] },
   { name: "UI unit tests", cwd: root, command: "npm", args: ["test"] },
   { name: "UI type check and build", cwd: root, command: "npm", args: ["run", "build"] },
-  { name: "engine lints (clippy, warnings are errors)", cwd: engine, command: "cargo", args: ["clippy", "--all-targets", "--locked", "--", "-D", "warnings"] },
-  { name: "engine tests", cwd: engine, command: "cargo", args: ["test", "--locked"] },
+  // The whole workspace: the engine, the desktop shell and the server.
+  { name: "Rust lints (clippy, warnings are errors)", cwd: root, command: "cargo", args: ["clippy", "--workspace", "--all-targets", "--locked", "--", "-D", "warnings"] },
+  { name: "Rust tests", cwd: root, command: "cargo", args: ["test", "--workspace", "--locked"] },
 ];
 
 /** Runs every step; returns false at the first failure. */

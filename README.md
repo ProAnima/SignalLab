@@ -1,7 +1,7 @@
 # Signal Lab
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-3ee6b0.svg)](LICENSE)
-[![Rust](https://img.shields.io/badge/engine-Rust-b7410e.svg)](src-tauri)
+[![Rust](https://img.shields.io/badge/engine-Rust-b7410e.svg)](engine)
 [![Tauri 2](https://img.shields.io/badge/shell-Tauri%202-24c8db.svg)](https://tauri.app)
 
 *An open-source tool by [ProAnimaStudio](https://github.com/ProAnima).*
@@ -12,7 +12,10 @@ scanning** —
 with live signal display, a cross-protocol packet inspector, and a library of
 named signals you can fire again. Built with
 **Tauri 2 + React/TypeScript** on a native **Rust** networking engine, so it
-ships as a small binary yet has full raw UDP/TCP access.
+ships as a small binary yet has full raw UDP/TCP access. The same engine and
+interface also run **headless as a server, used from a browser** — on a rack PC or
+a Linux box next to the gear, or as the Docker image `ghcr.io/proanima/signallab`
+(see [Run as a server](#run-as-a-server-browser-docker)).
 
 The interface is a dark instrument panel and ships **bilingual (English /
 Russian)**; it picks the language from the OS on first run and remembers the
@@ -132,7 +135,9 @@ session, including while switching between protocol instruments.
 
 ```
 src/                     React + TypeScript UI (Vite)
-  lib/api.ts             typed wrappers over Tauri invoke + event channels
+  lib/transport.ts       desktop (Tauri invoke) or browser (fetch + one WebSocket)
+  lib/platform.ts        fullscreen, downloads, sign-out on either platform
+  lib/api.ts             typed command wrappers + event channels
   lib/store.tsx          shared jobs, console and signal-library state
   lib/signals.ts         firing, describing and capturing library signals
   lib/experimentGraph.ts graph editing, duplication and DAG layout
@@ -151,7 +156,10 @@ src/                     React + TypeScript UI (Vite)
   components/Palette.tsx Ctrl+K palette that fires a signal from any screen
   components/Brand.tsx   ProAnimaStudio inline-SVG mark + lockup
   views/*.tsx            one screen per module
-src-tauri/src/engine/    the Rust engine
+engine/src/              the Rust engine (crate signal-lab-engine, no Tauri)
+  service.rs             the command table both front doors forward to
+  host.rs                where events go (Tauri, WebSockets, a test recorder) + the capture bus
+  paths.rs               the data folder
   osc_codec.rs           self-contained OSC 1.0 encoder/decoder (no deps)
   osc.rs                 monitor + waveform generator
   broadcast.rs           broadcast / multicast / sweep emitter + discovery listener
@@ -167,7 +175,7 @@ src-tauri/src/engine/    the Rust engine
   matching.rs            OSC address patterns, argument rules, UDP payloads, comparisons
   listen.rs              wait listeners: armed per bind, bounded queues
   template.rs            the {{template}} language and seeded generators
-  secrets.rs             credential-store secrets, masking, Inspector redaction
+  secrets.rs             secrets: OS credential store or read-only files, masking, redaction
   experiment_files.rs    JSON parsing, atomic working-file replacement and exports
   http.rs                request runner + concurrent burst
   netsim.rs              UDP impairment relay
@@ -177,8 +185,14 @@ src-tauri/src/engine/    the Rust engine
   scan.rs                TCP connect scanner
   signals.rs             signal library file + starter set (storage only)
   jobs.rs                job registry (start / list / stop)
-  commands.rs            thin #[tauri::command] layer
+src-tauri/src/lib.rs     the desktop shell: one Tauri command into the engine, Tauri events back
+server/src/              signal-lab-server (axum): HTTP commands, WebSocket events, sign-in, static UI
 ```
+
+The three Rust crates form one Cargo workspace (one version, one `Cargo.lock`, one
+`target/`). The desktop shell and the server are thin: both hand a command name and
+its JSON arguments to `engine::Service`, so a command behaves the same in the app and
+in a browser.
 
 Bundled definitions live in `experiments/templates/`. The starter experiment and
 template chooser use these same files; Rust tests check that each can run and
@@ -255,6 +269,11 @@ Worth knowing before editing the interface:
   that hands ~146px back to the module.
 - Click targets that belong next to a field go *beside* the `<label>`, never
   inside it — a click inside a label also activates the labelled input.
+- **No captions, tooltips instead.** The screen shows labels, values, states and
+  errors. An explanation, a shortcut or what `0` means goes in `data-tip` on the
+  control or its label; `components/TooltipLayer.tsx` shows it on hover and on
+  keyboard focus, in the current language. The native `title` attribute is not
+  used (a test fails on it).
 - **Switching screens loses nothing.** A screen is mounted the first time it is
   opened and then kept, hidden, for the session: typed values, the last
   response, a running monitor's list and its job, and the scroll position are
@@ -280,9 +299,9 @@ UI and automatic Rust rebuilds.
 
 Before pushing, run **`npm run check`** — the same checks CI runs on Windows and
 Linux, in order: versions agree, UI tests, TypeScript + production build, `clippy`
-with warnings as errors, engine tests. `npm run check:linux` runs them on Linux in
-Docker. How CI, releases and the planned server mode work:
-[docs/delivery.md](docs/delivery.md).
+with warnings as errors, Rust tests for the whole workspace. `npm run check:linux` runs
+them on Linux in Docker, and `npm run check:image` builds and smoke-tests the server
+image. How CI, releases and server mode work: [docs/delivery.md](docs/delivery.md).
 
 ## Build a desktop bundle
 
@@ -290,14 +309,14 @@ Docker. How CI, releases and the planned server mode work:
 npm run tauri build
 ```
 
-Produces two Windows installers under `src-tauri/target/release/bundle/`:
+Produces two Windows installers under `target/release/bundle/`:
 
 | Artifact | Use |
 | --- | --- |
 | `nsis/Signal Lab_<version>_x64-setup.exe` | normal install — asks per-user or per-machine, English/Russian |
 | `msi/Signal Lab_<version>_x64_en-US.msi` | unattended / group-policy deployment |
 
-`src-tauri/target/release/signal-lab.exe` is the bare executable and needs no
+`target/release/signal-lab.exe` is the bare executable and needs no
 installation at all — handy for a USB stick on a show site. The release profile
 is size-optimized (`opt-level = "s"`, LTO, stripped).
 
@@ -308,6 +327,48 @@ platform set.
 **Linux packages** from this machine: `npm run build:linux` builds `.deb`, `.rpm`
 and `.AppImage` in Docker on Ubuntu 22.04 (the system CI uses) into
 `artifacts/linux/`, with `SHA256SUMS.txt`. Installed packages need WebKitGTK 4.1.
+
+## Run as a server (browser, Docker)
+
+`signal-lab-server` is the engine and the interface without a window: open it in
+Chrome, Firefox or Edge and every screen works as in the app — runs, the Inspector,
+reports and exports download from the browser.
+
+**Docker, on a Linux host** (the image is published with each release, x64 and arm64):
+
+```bash
+docker run --rm ghcr.io/proanima/signallab token > signallab_token.txt
+sudo chown 10001 signallab_token.txt && sudo chmod 400 signallab_token.txt
+docker run -d --name signallab --network host --restart unless-stopped \
+  -v signallab-data:/data \
+  -v "$PWD/signallab_token.txt:/run/secrets/signallab_token:ro" \
+  -e SIGNALLAB_TOKEN_FILE=/run/secrets/signallab_token \
+  --read-only --cap-drop ALL --security-opt no-new-privileges \
+  ghcr.io/proanima/signallab:latest
+```
+
+Then open `http://<host>:1430` and sign in with the token. The same as a Compose file:
+[`deploy/compose.yaml`](deploy/compose.yaml).
+
+| Networking | What works |
+| --- | --- |
+| `--network host` (Linux) | everything: OSC/UDP/TCP/HTTP/MQTT to the LAN, listening ports, **broadcast, multicast, discovery** |
+| bridge with published ports | unicast, and listeners on published ports — no broadcast or multicast |
+| Docker Desktop (Windows/macOS) | unicast only — use the desktop app on those systems |
+
+**Without Docker** (from a checkout): `npm run build`, then
+`cargo run --release -p signal-lab-server` — it serves `dist/` on
+`http://127.0.0.1:1430` for this machine only, no token needed.
+
+**Security.** Without a token the server listens only on loopback and refuses to
+start on any other address. With one (`--token-file`, 24+ characters,
+`signal-lab-server token` makes one) a browser signs in once and gets an `HttpOnly`,
+`SameSite=Strict` session; scripts send `Authorization: Bearer`. Requests must come
+from the server's own origin and host name, every job start is logged with the
+client's address, and experiment secrets are read-only files in
+`/run/secrets/signallab/`. Put TLS in a reverse proxy and add `--secure-cookie`.
+All options and their environment variables: `signal-lab-server --help` and
+[docs/delivery.md](docs/delivery.md#7-server-mode-and-docker-image).
 
 ## Releases
 
@@ -320,7 +381,8 @@ npm run release -- 0.4.0 --push      # version, changelog, commit, tag, push
 
 The tag builds the Windows and Linux installers into a **draft** release with
 `SHA256SUMS.txt` and notes taken from `CHANGELOG.md`; review it and publish it on
-the releases page. Write user-visible changes under *Unreleased* in `CHANGELOG.md`
+the releases page. Publishing builds the server image for x64 and arm64, smoke-tests
+it and pushes it to `ghcr.io/proanima/signallab` with an SBOM and signed provenance. Write user-visible changes under *Unreleased* in `CHANGELOG.md`
 as they land — that text is the release notes. Details and the rules the release
 script enforces: [docs/delivery.md](docs/delivery.md).
 
@@ -368,8 +430,10 @@ guard rails, not permission.
 
 Issues and pull requests are welcome. A few things worth knowing:
 
-- `cargo test` in `src-tauri/` covers the OSC codec, the CIDR/target resolver,
-  the socket-option paths and the capture ring. Please keep it green.
+- `cargo test --workspace` covers the OSC codec, the CIDR/target resolver, the
+  socket-option paths, the capture ring, an experiment run end to end and the
+  server's security rules. `npm run check` runs it with everything else; please
+  keep it green.
 - `npm run build` runs `tsc` in strict mode — it will catch a missing
   translation key for you.
 - The UI has invariants that are easy to undo by accident (keyboard-reachable

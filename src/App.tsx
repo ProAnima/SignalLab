@@ -3,6 +3,7 @@ import { StoreProvider, useStore, logText } from "./lib/store";
 import { I18nProvider, LANGS, useI18n, type TKey } from "./lib/i18n";
 import { Brand } from "./components/Brand";
 import { Palette } from "./components/Palette";
+import { TooltipLayer } from "./components/TooltipLayer";
 import { ExperimentView, type ExperimentHandle } from "./views/ExperimentView";
 import { SignalsView } from "./views/SignalsView";
 import { MqttView } from "./views/MqttView";
@@ -15,6 +16,7 @@ import { StormView } from "./views/StormView";
 import { ScanView } from "./views/ScanView";
 import { fmtTime } from "./lib/format";
 import { usePersistentState } from "./lib/hooks";
+import { isDesktop, serverNeedsSignIn, signOut } from "./lib/platform";
 import type { SignalBody } from "./lib/api";
 
 type ViewKey =
@@ -42,7 +44,7 @@ function LanguageSwitch() {
         <button
           key={l.code}
           className={lang === l.code ? "on" : ""}
-          title={l.label}
+          data-tip={l.label}
           aria-pressed={lang === l.code}
           onClick={() => setLang(l.code)}
         >
@@ -56,7 +58,10 @@ function LanguageSwitch() {
 const isView = (value: unknown) => NAV.some((item) => item.key === value);
 
 function Shell() {
-  const { host, jobs, stopJob, stopAll, log, clearLog, pushLog } = useStore();
+  const { host, info, connection, jobs, stopJob, stopAll, log, clearLog, pushLog } = useStore();
+  // In a browser: whether this server asks for a token, so Sign out makes sense.
+  const [signedIn, setSignedIn] = useState(false);
+  useEffect(() => { serverNeedsSignIn().then(setSignedIn); }, []);
   const { t } = useI18n();
   // Reopen on the screen last used: someone who only ever sends OSC lands on OSC.
   const [view, setView] = usePersistentState<ViewKey>("signal-lab.view", "experiment", isView);
@@ -110,7 +115,7 @@ function Shell() {
   return (
     <div className={"app" + (consoleOpen ? "" : " console-collapsed") + (compactNav ? " sidebar-compact" : "") + (view === "experiment" ? " experiment-active" : "") + (focusMode && view === "experiment" ? " experiment-focus" : "")}>
       <aside className="sidebar">
-        <Brand name={t("app.name")} tagline={t("app.tagline")} by={t("app.by")} />
+        <Brand name={t("app.name")} by={t("app.by")} />
         {NAV.map((n) => {
           const running = jobs.filter((j) => n.kinds.includes(j.kind)).length;
           return (
@@ -118,7 +123,7 @@ function Shell() {
               key={n.key}
               className={"nav-item" + (view === n.key ? " active" : "")}
               aria-current={view === n.key ? "page" : undefined}
-              title={t(n.label)}
+              data-tip={compactNav ? t(n.label) : undefined}
               aria-label={t(n.label)}
               onClick={() => go(n.key)}
             >
@@ -126,7 +131,7 @@ function Shell() {
               <span className="label">{t(n.label)}</span>
               <span className="short" aria-hidden="true">{t(n.short ?? n.label)}</span>
               {running > 0 && (
-                <span className="badge" title={t("app.activeJobs", { n: running })}>{running}</span>
+                <span className="badge" data-tip={t("app.activeJobs", { n: running })}>{running}</span>
               )}
             </button>
           );
@@ -139,21 +144,25 @@ function Shell() {
       </aside>
 
       <header className="header">
-        <button className="ghost sm nav-toggle" aria-label={compactNav ? t("app.expandNav") : t("app.collapseNav")} title={compactNav ? t("app.expandNav") : t("app.collapseNav")} onClick={() => setCompactNav((value) => !value)}>☰</button>
+        <button className="ghost sm nav-toggle" aria-label={compactNav ? t("app.expandNav") : t("app.collapseNav")} data-tip={compactNav ? t("app.expandNav") : t("app.collapseNav")} onClick={() => setCompactNav((value) => !value)}>☰</button>
         <div className="title">Signal <b>Lab</b></div>
         <div className="spacer" />
         {host && (
-          <div className="host-chip">
-            <span className="live-dot" />
+          <div className="host-chip" data-tip={!isDesktop ? t("app.serverHint", { dir: info?.data_dir ?? "" }) : undefined}>
+            <span className={"live-dot" + (connection === "lost" ? " lost" : "")} />
+            {!isDesktop && <span className="server-badge">{t("app.server")}</span>}
             {t("app.host")} <b>{host.hostname}</b> · <b>{host.local_ip}</b>
           </div>
         )}
         <LanguageSwitch />
+        {signedIn && <button className="ghost sm" onClick={() => void signOut()}>{t("app.signOut")}</button>}
         <button className="danger sm" onClick={stopAll} disabled={jobs.length === 0}>
           {t("app.stopAll")}
         </button>
       </header>
 
+      {/* In a browser the engine is on the server; say when it cannot be reached. */}
+      {connection === "lost" && <div className="connection-banner" role="status">{t("app.connectionLost")}</div>}
       <main className="main" ref={mainRef}>
         <div className="experiment-host" hidden={view !== "experiment"}>
           <ExperimentView ref={experiment} active={view === "experiment"} focusMode={focusMode} setFocusMode={setFocusMode} />
@@ -175,14 +184,14 @@ function Shell() {
             className="ghost sm console-toggle"
             onClick={() => setConsoleOpen(!consoleOpen)}
             aria-expanded={consoleOpen}
-            title={consoleOpen ? t("console.collapse") : t("console.expand")}
+            data-tip={consoleOpen ? t("console.collapse") : t("console.expand")}
           >
             {consoleOpen ? "▾" : "▸"}
           </button>
           <p className="section-label">{t("console.title")}</p>
           <div className="jobs-strip">
             {jobs.map((j) => (
-              <div className="job-pill" key={j.id} title={j.label}>
+              <div className="job-pill" key={j.id} data-tip={j.label}>
                 <span className="pulse" />
                 <span>#{j.id} {j.label}</span>
                 <button className="danger" onClick={() => stopJob(j.id)}>
@@ -198,7 +207,7 @@ function Shell() {
           </div>
           {/* Collapsed, the console still says what the last action did. */}
           {!consoleOpen && lastLine ? (
-            <button className={"console-last " + lastLine.level} title={t("console.expand")} onClick={() => setConsoleOpen(true)}>
+            <button className={"console-last " + lastLine.level} data-tip={t("console.expand")} onClick={() => setConsoleOpen(true)}>
               <span className="t">{fmtTime(lastLine.ts).slice(0, 8)}</span>
               <span className="tag">{lastLine.tag}</span>
               <span className="msg">{logText(lastLine, t)}</span>
@@ -227,6 +236,7 @@ function Shell() {
       </section>
 
       <Palette />
+      <TooltipLayer />
     </div>
   );
 }

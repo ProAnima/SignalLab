@@ -31,12 +31,13 @@ This decides what we build and what we leave to others:
 - **Nodes:** Start/End, HTTP, OSC, UDP, TCP, MQTT publish, Log, Delay, HTTP status/body/header/latency checks, status branch, parallel branch and join.
 - **Feedback:** per-node *Send now* (`Ctrl+Enter`) with formatted response, canvas markers for unwired outputs and unreachable nodes, validation that names and reveals the node, timeline with step highlighting, JSON run reports.
 - **Runner:** one job per run; Stop cancels every branch; a Join that never fills fails at that Join.
+- **Data and replies** (milestones 3 and 4.1): parameters, profiles, secrets, `{{templates}}`, Extract / Check value / Branch on value, Wait for OSC and Wait for UDP with Matched and Timeout outputs.
+- **Server mode** (delivery D1–D4): the same engine and interface in a browser, and a Docker image.
 
 ### Known gaps in what exists
 
-- Values cannot flow between steps: no variables, no extraction, no templating.
-- A run can only act; it cannot wait for a device's reply.
-- Checks exist only for the last HTTP response.
+- A request and its reply take two nodes; nothing retries, repeats or loops (milestone 4, PR 4.2 onwards).
+- No wait for MQTT, HTTP requests or other protocols yet; SignalLab cannot play a dependency (milestone 5).
 - HTTP burst reports min/avg/max, not percentiles; there is no rate control.
 - The Inspector ring truncates payloads at 1 KiB and holds 8192 frames: good for looking, not for replay.
 - Remaining editor work: multi-selection and copy/paste.
@@ -252,7 +253,7 @@ Added when a real experiment needs them, each on the same node/wait/template mod
 - **SSE** listener: events as waitable messages, reconnect detection.
 - **Scripted TCP/UDP exchange**: `SEND HEX`, `WAIT`, `EXPECT` with wildcards, `READ n`, `EXTRACT bytes[4:8]` — for proprietary binary protocols.
 - **Protocol bridge**: a job that maps OSC ↔ MQTT ↔ HTTP ↔ UDP with templates (`/sensor/temp $1` → topic `sensor/temp`, payload `{"t": $1}`), useful as a temporary integration gateway.
-- **Headless runner** for CI: `signal-lab run experiment.json --profile stage --param k=v --report out.json`, exit code by outcome, JUnit output. This is the point to introduce an event-sink interface in the engine instead of the Tauri `AppHandle` — not earlier.
+- **Headless runner** for CI: `signal-lab run experiment.json --profile stage --param k=v --report out.json`, exit code by outcome, JUnit output. The engine already runs without Tauri (`engine::Host`, `engine::Service`, delivered with server mode), so this is a thin binary over the same command table.
 - **gRPC**, distributed agents and a topology canvas are separate projects, considered only with concrete demand.
 
 ## Delivery
@@ -260,7 +261,7 @@ Added when a real experiment needs them, each on the same node/wait/template mod
 Detailed design: [docs/delivery.md](docs/delivery.md).
 
 - **Delivered:** `npm run check` as the single definition of the checks, run by CI on Windows and Linux for every push and pull request; one version source; `CHANGELOG.md` as the release notes; `npm run release` cutting a tag from `main`; a release workflow that builds Windows (NSIS, MSI) and Linux (deb, rpm, AppImage) installers into a draft release with checksums for a person to publish; Linux checks and packages from a Windows machine through Docker.
-- **Next — server mode (D1–D4):** the engine independent of Tauri, a `signal-lab-server` binary with the same commands over HTTP and WebSocket, the interface in a browser, and a Docker image on GHCR. Loopback by default, a token for anything else; `--network host` on Linux for broadcast, multicast and discovery.
+- **Delivered — server mode (D1–D4):** the engine independent of Tauri (a Cargo workspace: `engine`, `server`, `src-tauri`), `signal-lab-server` with the same commands over HTTP and WebSocket, the interface in a browser, and the image `ghcr.io/proanima/signallab` (amd64 + arm64, smoke-tested in CI, published when a release is published, with SBOM and attested provenance). Loopback by default, a token for anything else; `--network host` on Linux for broadcast, multicast and discovery.
 - **Later:** code signing for Windows installers and signed checksums.
 
 ## Cross-cutting work

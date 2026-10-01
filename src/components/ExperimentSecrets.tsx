@@ -13,7 +13,9 @@ import { ErrorMessage } from "./ErrorMessage";
  */
 export function ExperimentSecrets({ doc, onChanged }: { doc: Experiment; onChanged: (stored?: string) => void }) {
   const t = useT();
-  const { pushLog } = useStore();
+  const { pushLog, info } = useStore();
+  // On a server, secrets come from its environment or files and cannot be set here.
+  const readOnly = info !== null && !info.secrets_writable;
   const [extra, setExtra] = useState<string[]>([]);
   const [status, setStatus] = useState<Record<string, boolean>>({});
   const [error, setError] = useState<Failure | null>(null);
@@ -57,12 +59,15 @@ export function ExperimentSecrets({ doc, onChanged }: { doc: Experiment; onChang
     onChange={(event) => setDraft(event.target.value)} onKeyDown={keys(name)} />;
 
   return <section className="experiment-secrets" aria-label={t("exp.secrets")}>
-    <h3>{t("exp.secrets")}</h3>
-    <p className="experiment-hint">{t("exp.secretsHint")}</p>
+    <h3 data-tip={t(readOnly ? "exp.secretsReadOnly" : "exp.secretsHint")}>{t("exp.secrets")}</h3>
     {error !== null && <ErrorMessage className="experiment-file-error" error={error} />}
     {names.length === 0 && !adding && <p className="experiment-empty">{t("exp.noSecrets")}</p>}
-    {names.map((name) => <div className="experiment-secret-row" key={name}>
-      <code title={`{{secret.${name}}}`}>{name}</code>
+    {readOnly && names.map((name) => <div className="experiment-secret-row" key={name}>
+      <code data-tip={`{{secret.${name}}}`}>{name}</code>
+      <span className={status[name] ? "stored" : "missing"}>{status[name] ? `● ${t("exp.secretOnServer")}` : `⚠ ${t("exp.secretNotOnServer")}`}</span>
+    </div>)}
+    {!readOnly && names.map((name) => <div className="experiment-secret-row" key={name}>
+      <code data-tip={`{{secret.${name}}}`}>{name}</code>
       {editing === name ? <>
         {valueInput(name)}
         <button className="ghost sm" disabled={!draft} onClick={() => save(name)}>{t("exp.secretSave")}</button>
@@ -73,7 +78,7 @@ export function ExperimentSecrets({ doc, onChanged }: { doc: Experiment; onChang
         {status[name] && <button className="ghost sm experiment-delete" onClick={() => remove(name)}>{t("exp.secretRemove")}</button>}
       </>}
     </div>)}
-    {adding ? <div className="experiment-secret-row adding">
+    {readOnly ? null : adding ? <div className="experiment-secret-row adding">
       <input autoFocus spellCheck={false} aria-label={t("exp.secretName")} placeholder={t("exp.secretName")} value={newName}
         className={newName && !isIdent(newName) ? "invalid" : undefined} onChange={(event) => setNewName(event.target.value.trim())}
         onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); close(); } }} />

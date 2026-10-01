@@ -11,6 +11,8 @@
     "check:linux": "node scripts/linux.mjs check",
     "build:linux": "node scripts/linux.mjs build",
     "clean:linux": "node scripts/linux.mjs clean",
+    "check:image": "node scripts/image.mjs check",
+    "check:webkit": "node scripts/webkit.mjs",
     "release": "node scripts/release.mjs",
     "preview": "vite preview",
     "tauri": "tauri"

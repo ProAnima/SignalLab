@@ -76,6 +76,7 @@ export function Palette() {
           ref={inputRef}
           value={query}
           placeholder={t("sig.paletteTitle")}
+          data-tip={t("sig.paletteHint")}
           onChange={(e) => { setQuery(e.target.value); setCursor(0); }}
           onKeyDown={onKeyDown}
         />
@@ -94,7 +95,6 @@ export function Palette() {
           ))}
           {matches.length === 0 && <div className="empty-state">{t("sig.paletteEmpty")}</div>}
         </div>
-        <p className="palette-hint">{t("sig.paletteHint")}</p>
       </div>
     </div>
   );

@@ -20,7 +20,7 @@ import { fail, isMain, must, root, run } from "./lib.mjs";
 import { SEMVER, currentVersion, setVersion, versionProblems } from "./version.mjs";
 
 const REPO = "https://github.com/ProAnima/SignalLab";
-const FILES = ["package.json", "package-lock.json", "src-tauri/Cargo.toml", "src-tauri/Cargo.lock", "CHANGELOG.md"];
+const FILES = ["package.json", "package-lock.json", "Cargo.toml", "Cargo.lock", "CHANGELOG.md"];
 
 /** Semantic-version order: numbers, then a pre-release sorts before its release. */
 export function compareVersions(a, b) {
@@ -84,7 +84,7 @@ function main() {
   setVersion(version);
   promote(version, new Date().toISOString().slice(0, 10));
   // The lock file was edited by hand above; cargo must still accept it as is.
-  must("cargo", ["metadata", "--locked", "--format-version", "1", "--no-deps"], { cwd: join(root, "src-tauri"), capture: true });
+  must("cargo", ["metadata", "--locked", "--format-version", "1", "--no-deps"], { cwd: root, capture: true });
 
   releaseNotes(version); // throws if the promoted section is missing
   const folder = mkdtempSync(join(tmpdir(), "signallab-release-"));

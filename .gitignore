@@ -25,3 +25,9 @@ dist-ssr
 
 # Local release builds (npm run build:linux)
 artifacts/
+
+# Cargo workspace build output
+/target/
+
+# Tokens and secrets next to deploy/compose.yaml are someone's credentials
+deploy/*.txt

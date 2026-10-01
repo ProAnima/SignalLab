@@ -202,8 +202,7 @@ export function MqttView() {
   return (
     <div>
       <div className="view-head">
-        <h1>{t("mq.title")}</h1>
-        <p>{t("mq.blurb")}</p>
+        <h1 data-tip={t("mq.blurb")}>{t("mq.title")}</h1>
       </div>
 
       <div className="cols side">
@@ -256,7 +255,7 @@ export function MqttView() {
 
           <div className="row">
             <div className="field">
-              <label htmlFor="mq-scan">{t("mq.scanFilter")}</label>
+              <label htmlFor="mq-scan" data-tip={t("mq.scanHint")}>{t("mq.scanFilter")}</label>
               <input id="mq-scan" value={scanFilter} disabled={!!job}
                 onChange={(e) => setScanFilter(e.target.value)} />
             </div>
@@ -270,14 +269,13 @@ export function MqttView() {
           </div>
 
           <div className="field">
-            <label className="checkbox">
+            {/* The concept has a name nobody outside MQTT knows, so the label
+                says what it does and the tooltip how presence is built on it. */}
+            <label className="checkbox" data-tip={t("mq.willHint")}>
               <input type="checkbox" checked={willOn} disabled={!!job}
                 onChange={(e) => setWillOn(e.target.checked)} />
               {t("mq.willEnable")}
             </label>
-            {/* The concept has a name nobody outside MQTT knows, so the screen
-                explains it instead of using it. */}
-            <p className="field-hint">{t("mq.willHint")}</p>
           </div>
           {willOn && (
             <div className="row">
@@ -409,7 +407,7 @@ export function MqttView() {
                 <button
                   className="danger sm"
                   disabled={!job || !pickedNode.last.retain}
-                  title={pickedNode.last.retain ? t("mq.clearHint") : t("mq.nothingRetained")}
+                  data-tip={pickedNode.last.retain ? t("mq.clearHint") : t("mq.nothingRetained")}
                   onClick={() => {
                     if (confirmClear === pickedNode.path) {
                       void publish(pickedNode.path, "", 1, true);
@@ -445,7 +443,7 @@ export function MqttView() {
                 </select>
               </div>
               <div className="field check" style={{ flex: "0 0 108px" }}>
-                <label className="checkbox">
+                <label className="checkbox" data-tip={t("mq.emptyClears")}>
                   <input type="checkbox" checked={pub.retain}
                     onChange={(e) => setPub({ ...pub, retain: e.target.checked })} />
                   {t("mq.retain")}
@@ -455,7 +453,6 @@ export function MqttView() {
             <div className="field">
               <label htmlFor="mq-pub-payload">{t("sig.payload")}</label>
               <textarea id="mq-pub-payload" value={pub.payload}
-                placeholder={pub.retain ? t("mq.emptyClears") : undefined}
                 onChange={(e) => setPub({ ...pub, payload: e.target.value })} />
             </div>
             <div className="btn-row">

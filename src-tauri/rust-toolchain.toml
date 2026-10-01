@@ -1,8 +1,0 @@
-# The Rust toolchain for the engine, the same everywhere: this machine, the
-# Linux builder (docker/linux-builder) and CI. rustup installs it on first use.
-# Bump it on purpose — a newer clippy can bring new lints — and run
-# `npm run check` and `npm run check:linux` before pushing the bump.
-[toolchain]
-channel = "1.98.1"
-profile = "minimal"
-components = ["clippy", "rustfmt", "rust-src"]

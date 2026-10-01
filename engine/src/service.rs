@@ -1,0 +1,416 @@
+//! The one command table. The desktop shell and the server both hand a command
+//! name and its JSON arguments to [`Service::invoke`] and get back the JSON
+//! result or the failure the interface shows — so the two front doors cannot
+//! drift apart. Adding a command is one arm in `invoke` and one wrapper in
+//! `src/lib/api.ts`.
+//!
+//! Arguments arrive as the interface writes them (camelCase, `nodeId`), and an
+//! argument the command does not know is an error, not something to ignore.
+
+use std::collections::BTreeMap;
+use std::sync::Arc;
+
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+use crate::broadcast::{self, DiscoveryConfig, EmitConfig};
+use crate::error::EngineError;
+use crate::experiment::{Experiment, Node};
+use crate::experiment_data;
+use crate::experiment_files;
+use crate::experiment_run;
+use crate::experiment_validate;
+use crate::host::Host;
+use crate::http::{self, BurstConfig, HttpRequest};
+use crate::inspect::{self, Capture};
+use crate::jobs::JobRegistry;
+use crate::mqtt::{self, Cmd, MqttConfig, MqttHub, Sub};
+use crate::net;
+use crate::netsim::{self, ProxyConfig};
+use crate::osc::{self, GenConfig};
+use crate::osc_codec::OscArg;
+use crate::paths;
+use crate::scan::{self, ScanConfig};
+use crate::secrets::{self, SecretStore};
+use crate::signals::{self, Library};
+use crate::storm::{self, StormConfig};
+
+/// How a command failed: a structured engine error (experiments, secrets,
+/// arguments), or the text the older modules report. Serialized as it is, so
+/// the interface receives exactly what the desktop app always received.
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+pub enum Failure {
+    Engine(EngineError),
+    Text(String),
+}
+
+impl From<EngineError> for Failure {
+    fn from(error: EngineError) -> Self {
+        Failure::Engine(error)
+    }
+}
+
+impl From<String> for Failure {
+    fn from(text: String) -> Self {
+        Failure::Text(text)
+    }
+}
+
+pub type Reply = Result<Value, Failure>;
+
+/// Where the engine is running, for the interface to adapt to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Mode {
+    Desktop,
+    Server,
+}
+
+/// What `app_info` reports.
+#[derive(Clone, Debug, Serialize)]
+pub struct AppInfo {
+    pub version: &'static str,
+    pub mode: Mode,
+    /// Secrets can be set and removed from the interface (false: read-only store).
+    pub secrets_writable: bool,
+    /// Where files are written; on a server this is a folder on that machine.
+    pub data_dir: String,
+}
+
+/// Everything a command can reach. One per process.
+pub struct Service {
+    host: Host,
+    jobs: JobRegistry,
+    mqtt: MqttHub,
+    secrets: Arc<dyn SecretStore>,
+    mode: Mode,
+    pump: tokio::task::JoinHandle<()>,
+}
+
+impl Drop for Service {
+    fn drop(&mut self) {
+        self.jobs.stop_all();
+        self.pump.abort();
+    }
+}
+
+/// The engine's version, the same as the app's (one version, see docs/delivery.md).
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+fn parse<T: DeserializeOwned>(command: &str, args: Value) -> Result<T, Failure> {
+    // No arguments arrive as null from Tauri and as {} from a browser.
+    let args = if args.is_null() { Value::Object(Default::default()) } else { args };
+    serde_json::from_value(args).map_err(|error| EngineError::new("command.args_invalid").with("name", command).because(error).into())
+}
+
+fn reply(value: impl Serialize) -> Reply {
+    serde_json::to_value(value).map_err(|error| EngineError::new("command.reply_invalid").because(error).into())
+}
+
+/// The arguments of one command: a struct named after its fields, read from
+/// camelCase JSON, unknown fields refused.
+macro_rules! args {
+    ($command:expr, $value:expr, { $($field:ident : $ty:ty),* $(,)? }) => {{
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        #[allow(dead_code)]
+        struct Args { $($field: $ty),* }
+        let parsed: Args = parse($command, $value)?;
+        parsed
+    }};
+}
+
+/// Commands that start a long-running job; a server logs who started them.
+pub const JOB_COMMANDS: &[&str] = &[
+    "experiment_start", "osc_monitor_start", "osc_generator_start", "http_burst_start", "netsim_start",
+    "storm_start", "scan_start", "broadcast_beacon_start", "discovery_start", "mqtt_connect",
+];
+
+impl Service {
+    /// Must be called inside a Tokio runtime: it starts the Inspector's pump.
+    pub fn new(host: Host, mode: Mode, secrets: Arc<dyn SecretStore>) -> Self {
+        let pump = inspect::spawn_pump(host.clone());
+        Service { host, jobs: JobRegistry::new(), mqtt: MqttHub::new(), secrets, mode, pump }
+    }
+
+    pub fn jobs(&self) -> &JobRegistry {
+        &self.jobs
+    }
+
+    fn capture(&self) -> &Capture {
+        self.host.capture()
+    }
+
+    pub fn info(&self) -> AppInfo {
+        AppInfo {
+            version: VERSION,
+            mode: self.mode,
+            secrets_writable: self.secrets.writable(),
+            data_dir: paths::data_dir().display().to_string(),
+        }
+    }
+
+    /// Run `command` with its JSON arguments.
+    pub async fn invoke(&self, command: &str, value: Value) -> Reply {
+        let host = || self.host.clone();
+        let jobs = || self.jobs.clone();
+        let store = self.secrets.as_ref();
+        match command {
+            "app_info" => reply(self.info()),
+            "get_host_info" => reply(net::host_info().await),
+
+            // ---- jobs
+            "jobs_list" => reply(self.jobs.list()),
+            "job_stop" => {
+                let a = args!(command, value, { id: u64 });
+                reply(self.jobs.stop(a.id))
+            }
+            "jobs_stop_all" => {
+                self.jobs.stop_all();
+                reply(())
+            }
+
+            // ---- experiments: failures are EngineErrors
+            "experiment_load" => reply(experiment_files::load()?),
+            "experiment_save" => {
+                let a = args!(command, value, { document: Experiment });
+                reply(experiment_files::save(&a.document)?)
+            }
+            "experiment_parse" => {
+                let a = args!(command, value, { text: String });
+                reply(experiment_files::parse(&a.text)?)
+            }
+            "experiment_export" => {
+                let a = args!(command, value, { document: Experiment });
+                reply(experiment_files::export(&a.document)?)
+            }
+            // Blocking problems are the error; problems of the other profiles come
+            // back on success, so the switcher can warn before anyone switches.
+            "experiment_validate" => {
+                let a = args!(command, value, { document: Experiment, overrides: Option<BTreeMap<String, String>> });
+                experiment_validate::validate_run(&a.document, &a.overrides.unwrap_or_default())?;
+                experiment_data::load_secrets(&a.document.nodes, store)?;
+                reply(experiment_validate::profile_issues(&a.document))
+            }
+            "experiment_resolve" => {
+                let a = args!(command, value, { document: Experiment, node_id: String, vars: BTreeMap<String, Value> });
+                #[derive(Serialize)]
+                struct Resolved {
+                    node: Node,
+                    missing: Vec<String>,
+                }
+                let node = experiment_data::find_node(&a.document, &a.node_id)?;
+                let status = secrets::status(store, &experiment_data::node_secrets(&node.kind))?;
+                let stored: Vec<String> = status.into_iter().filter(|(_, stored)| *stored).map(|(name, _)| name).collect();
+                let (node, missing) = experiment_data::resolve_node(&a.document, &a.node_id, &a.vars, &stored)?;
+                reply(Resolved { node, missing })
+            }
+            // Send now: an action is sent, a wait listens.
+            "experiment_send_node" => {
+                let a = args!(command, value, { document: Experiment, node_id: String, vars: BTreeMap<String, Value> });
+                reply(experiment_run::send_node(&self.host, &a.document, &a.node_id, &a.vars, store).await?)
+            }
+            // The wait listeners open before the job exists: a taken port is an
+            // error on the Run button, like a validation problem.
+            "experiment_start" => {
+                let a = args!(command, value, { document: Experiment, overrides: Option<BTreeMap<String, String>>, seed: Option<u64> });
+                reply(experiment_run::start(host(), jobs(), a.document, a.overrides.unwrap_or_default(), a.seed, store).await?)
+            }
+
+            // ---- secrets: values never leave the engine
+            "secret_status" => {
+                let a = args!(command, value, { names: Vec<String> });
+                reply(secrets::status(store, &a.names)?)
+            }
+            "secret_set" => {
+                let a = args!(command, value, { name: String, value: String });
+                secrets::set(store, &a.name, &a.value)?;
+                reply(())
+            }
+            "secret_delete" => {
+                let a = args!(command, value, { name: String });
+                secrets::delete(store, &a.name)?;
+                reply(())
+            }
+
+            // ---- OSC
+            "osc_send" => {
+                let a = args!(command, value, { target: String, address: String, args: Vec<OscArg> });
+                reply(osc::send_once(host(), a.target, a.address, a.args).await?)
+            }
+            "osc_monitor_start" => {
+                let a = args!(command, value, { bind: String });
+                reply(osc::start_monitor(host(), jobs(), a.bind).await?)
+            }
+            "osc_generator_start" => {
+                let a = args!(command, value, { config: GenConfig });
+                reply(osc::start_generator(host(), jobs(), a.config).await?)
+            }
+
+            // ---- HTTP
+            "http_request" => {
+                let a = args!(command, value, { request: HttpRequest });
+                reply(http::request_once(host(), a.request).await?)
+            }
+            "http_burst_start" => {
+                let a = args!(command, value, { config: BurstConfig });
+                reply(http::start_burst(host(), jobs(), a.config).await?)
+            }
+
+            // ---- impairment, load, scan
+            "netsim_start" => {
+                let a = args!(command, value, { config: ProxyConfig });
+                reply(netsim::start_proxy(host(), jobs(), a.config).await?)
+            }
+            "storm_start" => {
+                let a = args!(command, value, { config: StormConfig });
+                reply(storm::start_storm(host(), jobs(), a.config).await?)
+            }
+            "scan_start" => {
+                let a = args!(command, value, { config: ScanConfig });
+                reply(scan::start_scan(host(), jobs(), a.config).await?)
+            }
+
+            // ---- broadcast, multicast, discovery
+            "broadcast_send" => {
+                let a = args!(command, value, { config: EmitConfig });
+                reply(broadcast::send_once(host(), a.config).await?)
+            }
+            "broadcast_beacon_start" => {
+                let a = args!(command, value, { config: EmitConfig });
+                reply(broadcast::start_beacon(host(), jobs(), a.config).await?)
+            }
+            "discovery_start" => {
+                let a = args!(command, value, { config: DiscoveryConfig });
+                reply(broadcast::start_discovery(host(), jobs(), a.config).await?)
+            }
+
+            // ---- Inspector
+            "inspect_set_enabled" => {
+                let a = args!(command, value, { enabled: bool });
+                self.capture().set_enabled(a.enabled);
+                reply(self.capture().stats())
+            }
+            "inspect_stats" => reply(self.capture().stats()),
+            "inspect_snapshot" => {
+                let a = args!(command, value, { limit: usize });
+                reply(self.capture().snapshot(a.limit.clamp(1, inspect::RING_CAPACITY)))
+            }
+            "inspect_clear" => {
+                self.capture().clear();
+                reply(self.capture().stats())
+            }
+            "inspect_export" => {
+                let a = args!(command, value, { format: String });
+                reply(self.capture().export(&a.format)?)
+            }
+
+            // ---- MQTT: one live connection per job, plus a one-shot publish
+            "mqtt_connect" => {
+                let a = args!(command, value, { config: MqttConfig });
+                reply(mqtt::start_client(host(), jobs(), self.mqtt.clone(), a.config).await?)
+            }
+            // An empty payload with `retain` is how a retained value is cleared.
+            "mqtt_publish" => {
+                let a = args!(command, value, { job_id: u64, topic: String, payload: String, qos: u8, retain: bool });
+                let publish = Cmd::Publish { topic: a.topic, payload: a.payload.into_bytes(), qos: a.qos, retain: a.retain };
+                self.mqtt.send(a.job_id, publish)?;
+                reply(())
+            }
+            "mqtt_subscribe" => {
+                let a = args!(command, value, { job_id: u64, filters: Vec<Sub> });
+                if a.filters.is_empty() {
+                    return Err(Failure::Text("nothing to subscribe to".into()));
+                }
+                self.mqtt.send(a.job_id, Cmd::Subscribe(a.filters))?;
+                reply(())
+            }
+            "mqtt_unsubscribe" => {
+                let a = args!(command, value, { job_id: u64, filters: Vec<String> });
+                if a.filters.is_empty() {
+                    return Err(Failure::Text("nothing to unsubscribe from".into()));
+                }
+                self.mqtt.send(a.job_id, Cmd::Unsubscribe(a.filters))?;
+                reply(())
+            }
+            "mqtt_publish_once" => {
+                let a = args!(command, value, { config: MqttConfig, topic: String, payload: String, qos: u8, retain: bool });
+                reply(mqtt::publish_once(host(), a.config, a.topic, a.payload, a.qos, a.retain).await?)
+            }
+
+            // ---- signal library: storage only; firing goes through the commands above
+            "signals_load" => reply(signals::load()?),
+            "signals_save" => {
+                let a = args!(command, value, { library: Library });
+                reply(signals::save(&a.library)?)
+            }
+
+            _ => Err(EngineError::new("command.unknown").with("name", command).into()),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::host::Recorder;
+    use crate::secrets::MemoryStore;
+    use serde_json::json;
+
+    fn service() -> (Service, Arc<Recorder>) {
+        let recorder = Recorder::new();
+        let host = Host::new(recorder.clone(), Capture::new());
+        (Service::new(host, Mode::Server, Arc::new(MemoryStore::default())), recorder)
+    }
+
+    fn code(reply: Reply) -> String {
+        match reply {
+            Err(Failure::Engine(error)) => error.into_code(),
+            other => panic!("expected an engine error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn commands_answer_and_refuse_what_they_do_not_know() {
+        let (service, _) = service();
+        let info = service.invoke("app_info", Value::Null).await.unwrap();
+        assert_eq!((info["mode"].as_str(), info["version"].as_str(), info["secrets_writable"].as_bool()), (Some("server"), Some(VERSION), Some(true)));
+        assert_eq!(service.invoke("jobs_list", json!({})).await.unwrap(), json!([]));
+        assert_eq!(code(service.invoke("no_such_command", Value::Null).await), "command.unknown");
+        // A misspelled or extra argument is a clear error, not silently ignored.
+        assert_eq!(code(service.invoke("job_stop", json!({ "jobid": 1 })).await), "command.args_invalid");
+        assert_eq!(code(service.invoke("job_stop", json!({ "id": 1, "force": true })).await), "command.args_invalid");
+        assert_eq!(service.invoke("job_stop", json!({ "id": 99 })).await.unwrap(), json!(false));
+        // camelCase arguments, as the interface sends them.
+        let parsed = service.invoke("experiment_parse", json!({ "text": serde_json::to_string(&crate::experiment::starter()).unwrap() })).await.unwrap();
+        assert_eq!(parsed["version"], crate::experiment::VERSION);
+        let failure = service.invoke("experiment_parse", json!({ "text": "{" })).await.unwrap_err();
+        assert!(matches!(&failure, Failure::Engine(error) if error.is("file.json_invalid")), "{failure:?}");
+        // Legacy modules still fail with their text.
+        let text = service.invoke("mqtt_subscribe", json!({ "jobId": 1, "filters": [] })).await.unwrap_err();
+        assert_eq!(serde_json::to_value(text).unwrap(), json!("nothing to subscribe to"));
+    }
+
+    #[tokio::test]
+    async fn secrets_go_through_the_configured_store() {
+        let (service, _) = service();
+        service.invoke("secret_set", json!({ "name": "API_TOKEN", "value": "s3cret" })).await.unwrap();
+        let status = service.invoke("secret_status", json!({ "names": ["API_TOKEN", "OTHER"] })).await.unwrap();
+        assert_eq!(status, json!({ "API_TOKEN": true, "OTHER": false }));
+        assert_eq!(code(service.invoke("secret_set", json!({ "name": "bad name", "value": "x" })).await), "secret.name_invalid");
+    }
+
+    #[tokio::test]
+    async fn the_inspector_is_reached_through_the_host() {
+        let (service, _) = service();
+        let stats = service.invoke("inspect_set_enabled", json!({ "enabled": true })).await.unwrap();
+        assert_eq!(stats["enabled"], true);
+        let sent = service.invoke("osc_send", json!({ "target": "127.0.0.1:9", "address": "/x", "args": [] })).await.unwrap();
+        assert!(sent.as_u64().unwrap() > 0);
+        let frames = service.invoke("inspect_snapshot", json!({ "limit": 10 })).await.unwrap();
+        assert_eq!(frames.as_array().unwrap().len(), 1, "the send was captured");
+        assert_eq!(service.invoke("inspect_clear", Value::Null).await.unwrap()["buffered"], 0);
+    }
+}

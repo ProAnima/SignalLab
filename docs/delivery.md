@@ -3,8 +3,8 @@
 Status: 2026-10-01. Parent plan: [ROADMAP.md](../ROADMAP.md#delivery).
 
 How a change gets from this machine to a user: what is checked, where it is
-built, how a release is cut, and — declared here, built next — how Signal Lab
-runs headless in Docker with the interface in a browser.
+built, how a release is cut, and how Signal Lab runs headless — as a server or a
+Docker image — with the interface in a browser.
 
 ## 1. Principles
 
@@ -22,7 +22,8 @@ runs headless in Docker with the interface in a browser.
 - **Notes are written as work lands.** `CHANGELOG.md` → *Unreleased* is the next
   release's notes; the release turns it into the version's section.
 - **Safe defaults.** Installers are unsigned until signing is set up (§6) and say so on
-  the release page; the server mode listens on loopback unless given a token (§7).
+  the release page; the server listens on loopback unless given a token, and the image
+  runs without privileges (§7).
 
 ## 2. The local loop
 
@@ -31,8 +32,11 @@ runs headless in Docker with the interface in a browser.
 | `npm run tauri dev` | The app with hot reload — the normal development loop |
 | `npm run check` | Every check, in order, stopping at the first failure (see below) |
 | `npm run check:linux` | The same checks on Linux, in Docker (`docker/linux-builder`, Ubuntu 22.04 like CI) |
-| `npm run tauri build` | Windows installers (`.exe` NSIS, `.msi`) into `src-tauri/target/release/bundle/` |
+| `npm run tauri build` | Windows installers (`.exe` NSIS, `.msi`) into `target/release/bundle/` |
 | `npm run build:linux` | Linux packages (`.deb`, `.rpm`, `.AppImage`) and their checksums into `artifacts/linux/`, in Docker |
+| `npm run check:image` | The server image (`Dockerfile`) built as `signallab:dev` and smoke-tested (§7) |
+| `npm run check:webkit` | Tooltips in WebKitGTK — the Linux desktop webview — driven with real pointer and key events, in Docker (`docker/webkit`, Ubuntu 22.04) |
+| `cargo run -p signal-lab-server` | The server on `127.0.0.1:1430` against `dist/` (after `npm run build`) |
 | `npm run release -- X.Y.Z [--dry-run \| --push]` | Cut a release (§4) |
 | `node scripts/version.mjs [check \| set X.Y.Z]` | Print, check or set the version |
 
@@ -41,8 +45,10 @@ runs headless in Docker with the interface in a browser.
 1. **versions agree** — `package.json`, `package-lock.json`, `Cargo.toml`, `Cargo.lock`, and `tauri.conf.json` pointing at `package.json`;
 2. **UI unit tests** — `npm test`;
 3. **UI type check and build** — `tsc` (strict) and `vite build`;
-4. **engine lints** — `cargo clippy --all-targets --locked -- -D warnings`;
-5. **engine tests** — `cargo test --locked`.
+4. **Rust lints** — `cargo clippy --workspace --all-targets --locked -- -D warnings`;
+5. **Rust tests** — `cargo test --workspace --locked`: the engine (including an
+   experiment run end to end over loopback), the desktop shell and the server (its
+   token, host and origin rules, sign-in, files and the event stream).
 
 `--locked` makes a stale lock file a failure instead of a silent rewrite. Formatting is
 not enforced: the code base predates `rustfmt` and a reformat would bury history; it can
@@ -62,7 +68,9 @@ the first stage of a release:
 | Job | Runner | Steps |
 | --- | --- | --- |
 | Checks (Windows) | `windows-latest` | Node 24, Rust stable + clippy, cached Cargo build, `npm ci`, `node scripts/check.mjs` |
-| Checks (Linux) | `ubuntu-22.04` | the same, plus WebKitGTK 4.1, librsvg, libxdo, OpenSSL, patchelf |
+| Checks (Linux) | `ubuntu-22.04` | the same, plus WebKitGTK 4.1, librsvg, libxdo, OpenSSL, patchelf; then tooltips in WebKitGTK (`xvfb-run -a node scripts/webkit.mjs --native`) |
+| Server image (x64) | `ubuntu-24.04` | the `Dockerfile` built with Buildx (layers cached in GitHub's cache), then `node scripts/image.mjs smoke` |
+| Server image (arm64) | `ubuntu-24.04-arm` | the same, natively on Arm |
 
 Linux runs on 22.04 rather than the newest image so packages built against its glibc
 also run on older distributions. A newer push to a pull request cancels the older run;
@@ -71,7 +79,7 @@ requests — Actions weekly, npm and Cargo monthly, majors separately — which 
 any change. `actionlint` validates the workflow files.
 
 **Recommended repository settings** (made by an owner, not by these files): protect
-`main` — require *Checks (Windows)* and *Checks (Linux)* to pass and branches to be up to
+`main` — require *Checks (Windows)*, *Checks (Linux)* and both *Server image* jobs to pass and branches to be up to
 date before merging; restrict who can push `v*` tags.
 
 ## 4. Releases
@@ -103,6 +111,10 @@ The tag starts `.github/workflows/release.yml`:
 Then a person reviews the draft — notes, assets, sizes, a quick install — and publishes it.
 To rebuild the assets of an unpublished tag, run the workflow by hand with that tag.
 
+Publishing starts `.github/workflows/image.yml`, which puts the server image on GHCR
+(§7). Nothing goes to the registry before a person has published the release; to rebuild
+the image of a published release, run that workflow by hand with its tag.
+
 **Versions.** Semantic versioning. Pre-releases (`-rc.N`) for builds handed out for
 testing. The document format version (`experiment.rs`) is independent of the app version.
 
@@ -114,8 +126,9 @@ testing. The document format version (`experiment.rs`) is independent of the app
 | CI on Windows and Linux, Dependabot | Done |
 | Release workflow: draft, Windows + Linux installers, checksums | Done |
 | `npm run release`, `npm run check:linux`, `npm run build:linux` | Done |
+| Server mode: engine without Tauri, `signal-lab-server`, the UI in a browser (§7) | Done — D1–D3 |
+| Server image on GHCR, smoke-tested in CI for x64 and arm64 (§7) | Done — D4; first image with the next release |
 | Code signing (§6) | Declared |
-| Server mode and Docker image (§7) | Declared — phases D1–D4 |
 
 ## 6. Code signing (declared)
 
@@ -126,7 +139,7 @@ environment secrets available only to tag builds. Linux packages get a detached 
 of `SHA256SUMS.txt` (minisign or GPG) and the public key in the README. Until then every
 release page states the installers are unsigned.
 
-## 7. Server mode and Docker image (declared)
+## 7. Server mode and Docker image
 
 **Goal.** Run the engine headless on a Linux machine — a rack PC next to the gear, a
 show-control VM, a shared lab box — and use the full interface from any browser on the
@@ -135,41 +148,91 @@ network. Same engine, same experiments, same files.
 ### Architecture
 
 ```
-browser ──HTTP──▶ signal-lab-server ── engine (unchanged behaviour)
-        ◀──WS───  /api/invoke/<command>   /api/events   static UI
+                 ┌ src-tauri  (desktop: one Tauri command `engine`, events over Tauri)
+engine (crate) ──┤
+                 └ server     (signal-lab-server: HTTP + WebSocket, static UI)
+
+browser ──HTTP──▶ POST /api/invoke/<command>  ─┐
+        ◀──WS───  GET  /api/events             ├─ engine::Service ── modules
+                  GET  /  (the built UI)      ─┘
 ```
 
-- **The engine stops depending on Tauri.** Today about a dozen modules take a Tauri
-  `AppHandle` to emit events and reach the Inspector. They will take an
-  `engine::host::Host` instead — emit an event, reach the capture bus — implemented by
-  the desktop app over Tauri and by the server over WebSockets. This also lets
-  `cargo test` run whole experiments against loopback without a window.
-- **One command table.** The commands are declared once and generate both the Tauri
-  handlers and the server's router, so "adding an engine command" stays a single list and
-  the two front doors cannot drift.
-- **`signal-lab-server`**, a second binary of the same crate (axum): serves the built UI,
-  `POST /api/invoke/<command>` with JSON arguments (an `EngineError` or text on failure,
-  exactly as the desktop app sees it), `GET /api/events` as a WebSocket of `{event,
-  payload}`, `GET /api/health`.
-- **The UI chooses its transport** in one place (`src/lib/transport.ts`): Tauri inside the
-  app, HTTP + WebSocket in a browser. Desktop-only features (fullscreen, the OS credential
-  store) are reported by the server as capabilities and hidden when absent.
+The Cargo workspace has three crates:
+
+- **`engine/`** (`signal-lab-engine`) — every protocol module, the capture bus, the
+  experiment runner. It knows nothing about Tauri: modules emit through
+  `engine::Host` (an `EventSink` plus the capture bus), and `engine::Service` is the
+  **one command table** — `invoke(name, json) → json | Failure` — used by both front
+  doors, so the desktop app and the server cannot drift. Engine tests run whole
+  experiments over loopback with a recording host (`engine/tests/ping_reply.rs`).
+- **`src-tauri/`** — the desktop shell: one Tauri command, `engine(command, args)`,
+  forwarding to the `Service`, and a Tauri `EventSink`.
+- **`server/`** (`signal-lab-server`) — axum: the same `Service`, events fanned out to
+  every connected page over a WebSocket, and the built UI as static files.
+
+The UI picks its transport in one place, `src/lib/transport.ts`: Tauri inside the app,
+`fetch` + one shared WebSocket (reconnecting with backoff, a banner while it is down) in
+a browser. Desktop-only abilities are not guessed: `app_info` reports the mode,
+whether secrets can be written and where the data folder is, and `src/lib/platform.ts`
+covers fullscreen and downloads for both.
+
+### HTTP API
+
+| Route | |
+| --- | --- |
+| `GET /api/health` | `{status, version, auth}` — open to all, for health checks |
+| `POST /api/invoke/<command>` | JSON arguments, exactly the desktop command's; `200` with the result, `422` with the same `EngineError` (or text) the desktop app gets |
+| `GET /api/events` | WebSocket of `{event, payload}`; a page that falls behind is told how many events it missed (`server://lagged`) |
+| `GET /api/files?path=` | download a file the engine wrote (reports, exports) — only inside the data folder |
+| `GET/POST /login`, `POST /logout` | the sign-in page (English or Russian by `Accept-Language`) |
+
+A script uses `Authorization: Bearer <token>`; a browser exchanges the token once at
+`/login` for a session cookie.
 
 ### Security
 
-- Listens on `127.0.0.1:1430` by default. Any other address requires a token
-  (`--token`, or `SIGNALLAB_TOKEN`); every request and the WebSocket must carry it, the
-  browser receives it once through a login link and keeps it in a cookie. Without a token
-  the server refuses to bind to anything but loopback.
-- No CORS; the WebSocket checks `Origin`. TLS is left to a reverse proxy (documented).
-- Every job start (storm, scan, broadcast, experiment run) is logged with the client
-  address. The engine's guard rails are unchanged — and are guard rails, not permission.
-- Secrets: there is no OS credential store in a container. The server reads them
-  read-only from files (`/run/secrets/signallab/<NAME>`, the Docker secrets layout) or
-  `SIGNALLAB_SECRET_<NAME>`; setting a secret from the browser is refused with a coded
-  error rather than stored somewhere weaker.
-- Data (`experiment.json`, `signals.json`, run reports) lives in `SIGNALLAB_DATA_DIR`
-  (`/data` in the image, a volume).
+- **Loopback by default.** Without options the server listens on `127.0.0.1:1430`
+  and needs no token. Any other address needs a token (`--token-file`, `SIGNALLAB_TOKEN_FILE`
+  or `SIGNALLAB_TOKEN`; at least 24 characters — `signal-lab-server token` prints a
+  64-character one); without it the server exits with code 2 instead of starting.
+- **Sessions.** The cookie is `HttpOnly`, `SameSite=Strict`, valid 7 days, `Secure`
+  with `--secure-cookie` (behind an HTTPS proxy). Sessions live in memory: a restart
+  signs everyone out. A wrong token costs a one-second delay and a warning in the log.
+- **Cross-site protection.** The `Host` header must be a loopback name, or — with a token
+  — any name unless `--allowed-host` narrows it (DNS rebinding). State-changing requests
+  and the WebSocket must come from the server's own `Origin`; commands accept only JSON,
+  so a form on another site cannot run one. No CORS.
+- **Headers.** A strict `Content-Security-Policy` (`default-src 'self'`), `nosniff`,
+  `X-Frame-Options: DENY`, `Referrer-Policy: same-origin` (`no-referrer` would make
+  browsers send `Origin: null` with the sign-in form), `no-store` on the API.
+- **Audit.** Every job start (storm, scan, broadcast, experiment run, …) is logged with
+  the client address; so is every sign-in. The engine's guard rails are unchanged — and
+  are guard rails, not permission.
+- **Secrets.** No OS credential store in a container: secrets are read, read-only, from
+  `/run/secrets/signallab/<NAME>` (the Docker secrets layout, `--secrets-dir`) or
+  `SIGNALLAB_SECRET_<NAME>`. Setting one from the browser is refused with
+  `secret.read_only`, never stored somewhere weaker; values still never leave the engine.
+- **TLS** is left to a reverse proxy (Caddy, nginx, Traefik) in front of the server; it
+  must pass WebSocket upgrades and the `Host` header. Set `--secure-cookie` there.
+
+### Options
+
+Every option has an environment variable, for containers.
+
+| Option | Variable | Default |
+| --- | --- | --- |
+| `--listen` | `SIGNALLAB_LISTEN` | `127.0.0.1:1430` (`0.0.0.0:1430` in the image) |
+| `--token-file` / `--token` | `SIGNALLAB_TOKEN_FILE` / `SIGNALLAB_TOKEN` | none — loopback only |
+| `--data-dir` | `SIGNALLAB_DATA_DIR` | `Documents/SignalLab` (`/data` in the image) |
+| `--secrets-dir` | `SIGNALLAB_SECRETS_DIR` | `/run/secrets/signallab` |
+| `--ui-dir` | `SIGNALLAB_UI_DIR` | `ui` next to the executable, else `./dist` |
+| `--allowed-host` | `SIGNALLAB_ALLOWED_HOSTS` (comma-separated) | any name with a token |
+| `--secure-cookie` | `SIGNALLAB_SECURE_COOKIE` | off |
+| `--log` | `SIGNALLAB_LOG` | `info` |
+| `--log-format` | `SIGNALLAB_LOG_FORMAT` (`text` or `json`) | `text`, coloured only on a terminal |
+
+`signal-lab-server healthcheck` exits 0 when a server answers on `--listen` (the image's
+health check). Ctrl+C or SIGTERM closes every page's connection, stops every job and exits 0.
 
 ### Networking — what works where
 
@@ -181,17 +244,74 @@ browser ──HTTP──▶ signal-lab-server ── engine (unchanged behaviour
 
 ### Image
 
-Multi-stage build: the UI (Node) and the server (Rust, release) in builder stages; the
-runtime is `debian:bookworm-slim` with CA certificates, a non-root user, `EXPOSE 1430`,
-`VOLUME /data` and a health check. Published by the release workflow to
-`ghcr.io/proanima/signallab` as `X.Y.Z`, `X.Y` and — for releases, not pre-releases —
-`latest`, for `linux/amd64` (arm64 to follow), with build provenance attested.
+`Dockerfile`, three stages:
+
+1. **interface** — `node:24-bookworm-slim`, `npm ci` and `npm run build`: the same `dist/`
+   as the desktop app.
+2. **server** — `rust:<rust-toolchain.toml>-bookworm`, `cargo build --release --locked
+   -p signal-lab-server`. Dependencies are compiled first against placeholder sources, so
+   a change to Signal Lab's own code reuses that layer; the desktop crate's manifest is
+   present for Cargo but nothing of Tauri or WebKit is built.
+3. **runtime** — `debian:bookworm-slim` with CA certificates and OpenSSL; the binary,
+   the UI in `/usr/share/signal-lab/ui`, user `signallab` (uid/gid 10001), `/data` as a
+   volume, `EXPOSE 1430`, a health check, OCI labels. About 35 MB to download, 140 MB
+   unpacked.
+
+The image runs with a read-only root filesystem and no capabilities (the smoke test does
+exactly that): it writes only to `/data`. A named volume starts out owned by uid 10001; a
+bind-mounted folder must be writable by it (`chown 10001:10001`).
+
+```
+docker run --rm ghcr.io/proanima/signallab token > signallab_token.txt
+sudo chown 10001 signallab_token.txt && sudo chmod 400 signallab_token.txt
+docker run -d --name signallab --network host \
+  -v signallab-data:/data \
+  -v "$PWD/signallab_token.txt:/run/secrets/signallab_token:ro" \
+  -e SIGNALLAB_TOKEN_FILE=/run/secrets/signallab_token \
+  --read-only --cap-drop ALL --security-opt no-new-privileges \
+  ghcr.io/proanima/signallab:latest
+```
+
+`deploy/compose.yaml` is the same as a Compose file with the token as a secret.
+
+**Smoke test** (`scripts/image.mjs smoke`, also `npm run check:image`): `--version` matches
+`package.json`; without a token the container exits 2; `token` prints 64 hex characters;
+started hardened with the token from a file and a fresh volume, it becomes healthy; health
+answers openly with the version; commands need the token and report server mode and
+`/data`; `/` sends a browser to `/login`, a wrong token is refused, the right one sets an
+`HttpOnly`, `SameSite=Strict` cookie that opens the UI; a saved experiment lands in `/data`
+owned by uid 10001; an OSC send reaches a signed-in page as an Inspector batch over the
+WebSocket; `docker stop` ends it with exit code 0; nothing panicked.
+
+### Publishing to GHCR
+
+`.github/workflows/image.yml` runs when a release is **published** (never on a push), or
+by hand for a published tag:
+
+1. **Build**, natively on `ubuntu-24.04` (amd64) and `ubuntu-24.04-arm` (arm64): the tag
+   must match the version and be a published release; build, smoke test, then push the
+   same build by digest with an SBOM and BuildKit provenance (`mode=max`). Either
+   architecture failing stops both.
+2. **Tag and attest**: one multi-architecture index, tagged by `scripts/image.mjs tags` —
+   `X.Y.Z` always; `X.Y` while it is the newest stable release of its line; `latest` while
+   it is the newest stable release (so rebuilding an old release never moves a tag
+   backwards). Pre-releases — by version (`-rc.1`) or marked so on the releases page —
+   get only their own tag. It must contain exactly
+   `linux/amd64` and `linux/arm64`; a signed GitHub attestation is pushed with it, and the
+   published image is pulled and started once.
+
+Verify an image: `gh attestation verify oci://ghcr.io/proanima/signallab:X.Y.Z -R ProAnima/SignalLab`.
+
+**One-time, by an owner:** after the first publish, open the package (GitHub → the
+organisation's *Packages* → `signallab` → *Package settings*), make it **public** if it is
+not, and check it is linked to this repository (the `org.opencontainers.image.source`
+label does that).
 
 ### Phases
 
-| Phase | Delivers | Done when |
+| Phase | Delivers | State |
 | --- | --- | --- |
-| **D1** Host abstraction | The engine independent of Tauri; desktop behaviour unchanged | `cargo test` runs the *OSC ping → reply* experiment end to end over loopback with a test host |
-| **D2** Server | `signal-lab-server`: command table, invoke + events + health, token rules, data dir, file secrets | A browser on Linux sends an HTTP request and runs an experiment through it; token and loopback rules are tested |
-| **D3** Browser UI | Transport selection, capabilities, desktop-only features hidden | Every screen works in Chrome and Firefox against the server; the desktop app is unchanged |
-| **D4** Docker | Image, `compose.yaml` example, GHCR publishing in the release workflow, documentation | `docker run --network host ghcr.io/proanima/signallab:X.Y.Z` on a Linux host runs *OSC ping → reply* against a device on the LAN from a browser |
+| **D1** Host abstraction | The engine independent of Tauri; desktop behaviour unchanged | Done — `engine/tests/ping_reply.rs` runs *OSC ping → reply* end to end over loopback |
+| **D2** Server | `signal-lab-server`: command table, invoke + events + health + files, token rules, data dir, file secrets | Done — `server/tests/server.rs` |
+| **D3** Browser UI | Transport selection, capabilities, desktop-only features adapted | Done — checked in a browser against the server: experiment run with report download, reconnect banner, sign-in and sign-out |
+| **D4** Docker | Image, `deploy/compose.yaml`, GHCR publishing, documentation | Done — the image is smoke-tested in CI on both architectures; first published with the next release |

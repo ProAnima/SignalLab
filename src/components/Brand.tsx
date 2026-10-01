@@ -43,13 +43,12 @@ export function BrandMark({ size = 30 }: { size?: number }) {
 }
 
 /** Full lockup for the sidebar: mark + product name + studio byline. */
-export function Brand({ name, tagline, by }: { name: string; tagline: string; by: string }) {
+export function Brand({ name, by }: { name: string; by: string }) {
   return (
     <div className="brand">
       <BrandMark />
       <div className="brand-text">
         <span className="brand-name">{name}</span>
-        <span className="brand-tagline">{tagline}</span>
         <span className="brand-by">{by}</span>
       </div>
     </div>

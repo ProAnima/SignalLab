@@ -42,7 +42,7 @@ export function ExperimentFinder({ nodes, label, summary, onSelect, onClose }: P
       }}>
       <input ref={input} role="combobox" aria-expanded="true" aria-controls="experiment-node-list"
         aria-activedescendant={matches[at] ? `node-option-${matches[at].id}` : undefined}
-        aria-label={t("exp.findNode")} placeholder={t("exp.findNode")} value={query}
+        aria-label={t("exp.findNode")} placeholder={t("exp.findNode")} data-tip={t("exp.findHint")} value={query}
         onChange={(event) => { setQuery(event.target.value); setCursor(0); }} />
       <div className="palette-list" ref={list} role="listbox" id="experiment-node-list" aria-label={t("exp.findNode")}>
         {matches.map((node, index) => <button key={node.id} id={`node-option-${node.id}`} role="option" aria-selected={index === at} tabIndex={-1}
@@ -52,7 +52,6 @@ export function ExperimentFinder({ nodes, label, summary, onSelect, onClose }: P
         </button>)}
         {!matches.length && <div className="empty-state">{t("exp.noMatchingNodes")}</div>}
       </div>
-      <p className="palette-hint">{t("exp.findHint")}</p>
     </div>
   </div>;
 }

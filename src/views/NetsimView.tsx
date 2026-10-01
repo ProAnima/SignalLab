@@ -62,19 +62,18 @@ export function NetsimView() {
   return (
     <div>
       <div className="view-head">
-        <h1>{t("ns.title")}</h1>
-        <p>{t("ns.blurb")}</p>
+        <h1 data-tip={t("ns.blurb")}>{t("ns.title")}</h1>
       </div>
 
       <div className="cols side">
         <div className="panel">
           <p className="section-label">{t("ns.relay")}</p>
           <div className="field">
-            <label>{t("ns.listen")}</label>
+            <label data-tip={t("ns.howToBody", { listen: listen.replace("0.0.0.0", "127.0.0.1"), target })}>{t("ns.listen")}</label>
             <input value={listen} onChange={(e) => setListen(e.target.value)} disabled={!!job} />
           </div>
           <div className="field">
-            <label>{t("ns.target")}</label>
+            <label data-tip={t("ns.targetHint")}>{t("ns.target")}</label>
             <input value={target} onChange={(e) => setTarget(e.target.value)} disabled={!!job} />
           </div>
 
@@ -102,12 +101,6 @@ export function NetsimView() {
             <div className="metric"><div className="k">{t("common.volume")}</div><div className="v">{fmtBytes(stat?.bytes ?? 0)}</div></div>
           </div>
 
-          <div className="hint info" style={{ marginTop: 20 }}>
-            <b>{t("ns.howTo")}</b>
-            <div style={{ marginTop: 6 }}>
-              {t("ns.howToBody", { listen: listen.replace("0.0.0.0", "127.0.0.1"), target })}
-            </div>
-          </div>
         </div>
       </div>
     </div>

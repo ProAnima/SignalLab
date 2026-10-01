@@ -63,13 +63,12 @@ export function ExperimentParams({ doc, issues, disabled, anchor, describe, onEd
       style={{ left: Math.max(8, Math.min(anchor.left, window.innerWidth - 448)), top: anchor.top }}
       onPointerDown={(event) => event.stopPropagation()}
       onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); onClose(); } }}>
-      <header><strong>{t("exp.params")}</strong><button className="ghost sm" aria-label={t("exp.close")} onClick={onClose}>×</button></header>
-      <p className="experiment-hint">{t("exp.paramsHint")} {t("exp.profilesHint")}</p>
+      <header><strong data-tip={`${t("exp.paramsHint")}\n${t("exp.profilesHint")}`}>{t("exp.params")}</strong><button className="ghost sm" aria-label={t("exp.close")} onClick={onClose}>×</button></header>
       <div className="experiment-profile-tabs" role="tablist" aria-label={t("exp.profile")}>
         {[null, ...doc.profiles.map((item) => item.name)].map((name) => {
           const issue = issueOf(name);
           return <button key={name ?? ""} role="tab" aria-selected={tab === name} className={tab === name ? "selected" : ""}
-            title={issue ? t("exp.profileIssue", { error: describe(issue.error) }) : undefined} onClick={() => setTab(name)}>
+            data-tip={issue ? t("exp.profileIssue", { error: describe(issue.error) }) : name !== null ? t("exp.profileHint") : undefined} onClick={() => setTab(name)}>
             {doc.profile === name && <span className="experiment-active-dot" aria-label={t("exp.activeProfile")}>●</span>}
             {name ?? t("exp.noProfile")}{issue && <span className="experiment-profile-warning" aria-hidden="true"> ⚠</span>}
           </button>;
@@ -88,40 +87,38 @@ export function ExperimentParams({ doc, issues, disabled, anchor, describe, onEd
         </div>}
         {tab === null && doc.profile !== null && <button className="ghost sm experiment-use-defaults" onClick={() => onEdit((current) => ({ ...current, profile: null }))}>{t("exp.makeActive")}</button>}
         {issueOf(tab) && <p className="experiment-profile-issue">{t("exp.profileIssue", { error: describe(issueOf(tab)!.error) })}</p>}
-        {profile && <p className="experiment-hint">{t("exp.profileHint")}</p>}
         {doc.params.length === 0 && <p className="experiment-empty">{t("exp.noParams")}</p>}
         {doc.params.map((param, index) => {
           if (profile) {
             const overridden = param.name in profile.values;
             return <div className="experiment-param-row profile" key={index}>
-              <code title={param.name}>{param.name}</code>
+              <code data-tip={param.name}>{param.name}</code>
               <input aria-label={param.name} value={profile.values[param.name] ?? ""}
                 placeholder={param.value ? t("exp.inherit", { value: param.value }) : t("exp.inheritEmpty")}
                 onChange={(event) => { const value = event.target.value; onEdit((current) => setParamValue(current, profile.name, param.name, value === "" ? null : value)); }} />
-              <button className="ghost sm" aria-label={t("exp.resetToDefault")} title={t("exp.resetToDefault")} disabled={!overridden}
+              <button className="ghost sm" aria-label={t("exp.resetToDefault")} data-tip={t("exp.resetToDefault")} disabled={!overridden}
                 onClick={() => onEdit((current) => setParamValue(current, profile.name, param.name, null))}>↺</button>
             </div>;
           }
           const invalid = !isIdent(param.name) || duplicate(param.name);
           return <div className="experiment-param-row" key={index}>
             <input data-param-name aria-label={t("exp.paramName")} placeholder={t("exp.paramName")} value={param.name}
-              className={invalid ? "invalid" : undefined} title={invalid ? t("exp.invalidParamName") : undefined} aria-invalid={invalid}
+              className={invalid ? "invalid" : undefined} data-tip={invalid ? t("exp.invalidParamName") : undefined} aria-invalid={invalid}
               onChange={(event) => { const name = event.target.value; onEdit((current) => renameParam(current, index, name)); }} />
             <input aria-label={t("exp.paramValue")} placeholder={t("exp.paramValue")} value={param.value}
               onChange={(event) => { const value = event.target.value; onEdit((current) => ({ ...current, params: current.params.map((item, i) => i === index ? { ...item, value } : item) })); }}
               onKeyDown={(event) => { if (event.key === "Enter" && index === doc.params.length - 1) { event.preventDefault(); addParam(); } }} />
-            <button className="ghost sm" aria-label={t("exp.removeParam")} title={t("exp.removeParam")} onClick={() => onEdit((current) => removeParam(current, index))}>×</button>
+            <button className="ghost sm" aria-label={t("exp.removeParam")} data-tip={t("exp.removeParam")} onClick={() => onEdit((current) => removeParam(current, index))}>×</button>
           </div>;
         })}
         {tab === null && <button className="ghost sm" onClick={addParam}>＋ {t("exp.addParam")}</button>}
-        <label className="experiment-seed">{t("exp.seed")}
+        <label className="experiment-seed" data-tip={t("exp.seedHint")}>{t("exp.seed")}
           <input inputMode="numeric" placeholder={t("exp.seedRandom")} value={doc.seed ?? ""}
             onChange={(event) => {
               const text = event.target.value.trim();
               if (!text) { onEdit((current) => ({ ...current, seed: null })); return; }
               if (/^\d+$/.test(text) && Number(text) <= MAX_SEED) onEdit((current) => ({ ...current, seed: Number(text) }));
             }} />
-          <small>{t("exp.seedHint")}</small>
         </label>
       </fieldset>
       <ExperimentSecrets doc={doc} onChanged={onSecretsChanged} />

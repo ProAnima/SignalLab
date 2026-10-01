@@ -1,62 +1,42 @@
-mod commands;
-mod engine;
+//! The desktop shell: a window, and one command that hands everything the
+//! interface asks for to the engine's command table. Events travel back as
+//! Tauri events. All behaviour lives in `signal-lab-engine`.
 
-use engine::{Capture, JobRegistry, MqttHub};
+use std::sync::Arc;
+
+use serde_json::Value;
+use signal_lab_engine::secrets::SystemStore;
+use signal_lab_engine::{Capture, EventSink, Failure, Host, Mode, Service};
+use tauri::{AppHandle, Emitter, Manager, State};
+
+/// Engine events become Tauri events of the same name.
+struct TauriEvents(AppHandle);
+
+impl EventSink for TauriEvents {
+    fn emit(&self, event: &str, payload: Value) {
+        if let Err(error) = self.0.emit(event, payload) {
+            tracing::warn!(event, %error, "could not deliver an event to the window");
+        }
+    }
+}
+
+/// Every engine command: `invoke("engine", { command, args })` from the interface.
+#[tauri::command]
+async fn engine(service: State<'_, Arc<Service>>, command: String, args: Option<Value>) -> Result<Value, Failure> {
+    service.invoke(&command, args.unwrap_or(Value::Null)).await
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let capture = Capture::new();
-    let pump_capture = capture.clone();
-
     tauri::Builder::default()
-        .manage(JobRegistry::new())
-        .manage(capture)
-        .manage(MqttHub::new())
-        .setup(move |app| {
-            // A single pump ships capture batches to the UI for the whole app.
-            engine::inspect::spawn_pump(app.handle().clone(), pump_capture);
+        .setup(|app| {
+            let host = Host::new(Arc::new(TauriEvents(app.handle().clone())), Capture::new());
+            // The service starts the Inspector's pump, which needs the runtime.
+            let service = tauri::async_runtime::block_on(async move { Service::new(host, Mode::Desktop, Arc::new(SystemStore)) });
+            app.manage(Arc::new(service));
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![
-            commands::get_host_info,
-            commands::jobs_list,
-            commands::job_stop,
-            commands::jobs_stop_all,
-            commands::experiment_load,
-            commands::experiment_save,
-            commands::experiment_parse,
-            commands::experiment_export,
-            commands::experiment_validate,
-            commands::experiment_resolve,
-            commands::experiment_send_node,
-            commands::secret_status,
-            commands::secret_set,
-            commands::secret_delete,
-            commands::experiment_start,
-            commands::osc_send,
-            commands::osc_monitor_start,
-            commands::osc_generator_start,
-            commands::http_request,
-            commands::http_burst_start,
-            commands::netsim_start,
-            commands::storm_start,
-            commands::scan_start,
-            commands::broadcast_send,
-            commands::broadcast_beacon_start,
-            commands::discovery_start,
-            commands::inspect_set_enabled,
-            commands::inspect_stats,
-            commands::inspect_snapshot,
-            commands::inspect_clear,
-            commands::inspect_export,
-            commands::signals_load,
-            commands::signals_save,
-            commands::mqtt_connect,
-            commands::mqtt_publish,
-            commands::mqtt_subscribe,
-            commands::mqtt_unsubscribe,
-            commands::mqtt_publish_once,
-        ])
+        .invoke_handler(tauri::generate_handler![engine])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

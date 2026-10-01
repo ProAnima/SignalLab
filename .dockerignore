@@ -1,0 +1,17 @@
+# The image build sees only what the Dockerfile copies: sources and lockfiles.
+# Everything else — build output, node_modules, local data, .git — stays out.
+**
+!Cargo.toml
+!Cargo.lock
+!engine/**
+!server/**
+!src-tauri/Cargo.toml
+!experiments/**
+!src/**
+!public/**
+!index.html
+!package.json
+!package-lock.json
+!tsconfig.json
+!tsconfig.node.json
+!vite.config.ts

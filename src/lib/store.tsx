@@ -4,8 +4,9 @@ import {
 } from "react";
 import {
   api, on, EV,
-  type JobInfo, type JobEnded, type HostInfo, type MqttBatch, type Signal,
+  type AppInfo, type JobInfo, type JobEnded, type HostInfo, type MqttBatch, type Signal,
 } from "./api";
+import { watchConnection, type ConnectionState } from "./transport";
 import { fireSignal } from "./signals";
 import { ingestTopic, makeTopicRoot, type TopicNode } from "./topics";
 import { describeError, type Failure } from "./errors";
@@ -56,6 +57,10 @@ export type SaveState = "idle" | "saving" | "saved" | "error";
 
 interface Store {
   host: HostInfo | null;
+  /** Where the engine runs (desktop or server) and what it allows; null until known. */
+  info: AppInfo | null;
+  /** The engine's event connection: always "open" in the desktop app. */
+  connection: ConnectionState;
   jobs: JobInfo[];
   refreshJobs: () => void;
   /**
@@ -110,6 +115,8 @@ const SAVE_DEBOUNCE_MS = 700;
 
 export function StoreProvider({ children }: { children: ReactNode }) {
   const [host, setHost] = useState<HostInfo | null>(null);
+  const [info, setInfo] = useState<AppInfo | null>(null);
+  const [connection, setConnection] = useState<ConnectionState>("connecting");
   const [jobs, setJobs] = useState<JobInfo[]>([]);
   // When the list currently in state was asked for, not when it arrived.
   const [jobsAt, setJobsAt] = useState(0);
@@ -265,9 +272,24 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       })
     );
 
+    // A page that fell behind is told how much it missed rather than nothing.
+    unlisteners.push(
+      on<{ skipped: number }>(EV.serverLagged, (e) => pushLog("warn", "server", "log.eventsLagged", { n: e.payload.skipped }))
+    );
+
+    api.appInfo().then(setInfo).catch(() => {});
+    let wasOpen = false;
+    const stopWatching = watchConnection((state) => {
+      setConnection(state);
+      if (state === "lost" && wasOpen) pushLog("warn", "server", "log.connectionLost");
+      if (state === "open" && wasOpen) { pushLog("ok", "server", "log.connectionBack"); refreshJobs(); }
+      if (state === "open") wasOpen = true;
+    });
+
     const poll = setInterval(refreshJobs, 2000);
     return () => {
       clearInterval(poll);
+      stopWatching();
       unlisteners.forEach((u) => u.then((f) => f()));
     };
   }, [pushLog, pushError, refreshJobs, loadLibrary]);
@@ -284,7 +306,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, [writeLibrary]);
 
   const value: Store = {
-    host, jobs, refreshJobs, jobGone, stopJob, stopAll, log, pushLog, pushError, clearLog,
+    host, info, connection, jobs, refreshJobs, jobGone, stopJob, stopAll, log, pushLog, pushError, clearLog,
     library, libraryPath, libraryError, saveState, setLibrary,
     reloadLibrary: loadLibrary, fire, lastFired,
     mqttTopics, mqttVersion, mqttDropped, clearMqttTopics,

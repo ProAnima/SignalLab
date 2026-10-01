@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { api, on, EV, type CaptureStats, type Frame, type InspectBatch } from "../lib/api";
 import { useStore } from "../lib/store";
+import { downloadUrl } from "../lib/platform";
 import { useT } from "../lib/i18n";
 import { fmtBytes, fmtNum, fmtTime } from "../lib/format";
 import { signalFromFrame } from "../lib/signals";
@@ -87,6 +88,9 @@ export function InspectView() {
     try {
       const path = await api.inspectExport(format);
       pushLog("ok", "inspect", "log.captureSaved", { path });
+      // In a browser the file is on the server: hand it to the browser to save.
+      const url = downloadUrl(path);
+      if (url) window.location.assign(url);
     } catch (e) {
       pushError("inspect", e);
     }
@@ -126,8 +130,7 @@ export function InspectView() {
   return (
     <div>
       <div className="view-head">
-        <h1>{t("ins.title")}</h1>
-        <p>{t("ins.blurb")}</p>
+        <h1 data-tip={t("ins.blurb")}>{t("ins.title")}</h1>
       </div>
 
       <div className="capture-bar">
@@ -148,7 +151,7 @@ export function InspectView() {
           {t("ins.buffer", { used: fmtNum(stats?.buffered ?? 0), cap: fmtNum(stats?.capacity ?? 0) })}
         </span>
         {!!stats?.skipped && (
-          <span className="tag-chip" style={{ color: "var(--amber)" }} title={t("ins.notShownHint")}>
+          <span className="tag-chip" style={{ color: "var(--amber)" }} data-tip={t("ins.notShownHint")}>
             {t("ins.notShown", { n: fmtNum(stats.skipped) })}
           </span>
         )}
@@ -220,7 +223,7 @@ export function InspectView() {
                     {/* Rows run newest-first, so the gap sits below the frame
                         that follows it in time. */}
                     {!!f.gap && (
-                      <tr className="gap">
+                      <tr className="gap" data-tip={t("ins.gapHint")}>
                         <td colSpan={7}>{t("ins.gap", { n: fmtNum(f.gap) })}</td>
                       </tr>
                     )}
@@ -263,7 +266,7 @@ export function InspectView() {
                 <button
                   className="ghost sm"
                   disabled={!canReplay}
-                  title={canReplay ? undefined : t("ins.noExactCopy")}
+                  data-tip={canReplay ? undefined : t("ins.noExactCopy")}
                   onClick={() => saveAsSignal(picked)}
                 >
                   {t("sig.fromFrame")}

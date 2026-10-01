@@ -48,15 +48,14 @@ export function StormView() {
   return (
     <div>
       <div className="view-head">
-        <h1>{t("st.title")}</h1>
-        <p>{t("st.blurb")}</p>
+        <h1 data-tip={t("st.blurb")}>{t("st.title")}</h1>
       </div>
 
       <div className="cols side">
         <div className="panel">
           <p className="section-label">{t("st.generator")}</p>
           <div className="field">
-            <label>{t("common.target")}</label>
+            <label data-tip={t("st.warning")}>{t("common.target")}</label>
             <input value={target} onChange={(e) => setTarget(e.target.value)} disabled={!!job} />
           </div>
           <div className="row">
@@ -74,34 +73,32 @@ export function StormView() {
           </div>
           <div className="row">
             <div className="field">
-              <label>{t("st.rate")}</label>
+              <label data-tip={t("st.rateHint")}>{t("st.rate")}</label>
               <input type="number" value={rate} onChange={(e) => setRate(+e.target.value)} disabled={!!job} />
             </div>
             <div className="field">
-              <label>{t("st.duration")}</label>
+              <label data-tip={t("st.durationHint")}>{t("st.duration")}</label>
               <input type="number" value={duration} onChange={(e) => setDuration(+e.target.value)} disabled={!!job} />
             </div>
           </div>
           <div className="btn-row">
-            <button className={job ? "danger" : "primary"} onClick={toggle}>
+            <button className={job ? "danger" : "primary"} onClick={toggle} data-tip={job ? undefined : t("st.warning")}>
               {job ? t("st.stop") : t("st.launch")}
             </button>
           </div>
-          <div className="hint amber">{t("st.warning")}</div>
         </div>
 
         <div className="panel">
           <p className="section-label">{t("st.throughput")}</p>
           <div className="metrics" style={{ marginBottom: 14 }}>
             <div className="metric"><div className="k">{t("common.packets")}</div><div className="v accent">{fmtNum(stat?.packets ?? 0)}</div></div>
-            <div className="metric"><div className="k">{t("st.pps")}</div><div className="v accent">{fmtNum(stat?.pps ?? 0)}</div></div>
+            <div className="metric" data-tip={t("st.ppsCaption")}><div className="k">{t("st.pps")}</div><div className="v accent">{fmtNum(stat?.pps ?? 0)}</div></div>
             <div className="metric"><div className="k">{t("st.rateLabel")}</div><div className="v amber">{(stat?.mbps ?? 0).toFixed(2)}<small>Mbps</small></div></div>
             <div className="metric"><div className="k">{t("common.volume")}</div><div className="v">{fmtBytes(stat?.bytes ?? 0)}</div></div>
             <div className="metric"><div className="k">{t("common.errors")}</div><div className="v red">{fmtNum(stat?.errors ?? 0)}</div></div>
           </div>
-          <Scope data={ppsSeries} height={220} color="#ffc069" min={0} />
-          <div style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--text-faint)", marginTop: 8, textAlign: "right" }}>
-            {t("st.ppsCaption")}
+          <div data-tip={t("st.ppsCaption")}>
+            <Scope data={ppsSeries} height={220} color="#ffc069" min={0} />
           </div>
         </div>
       </div>

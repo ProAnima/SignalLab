@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type PointerEvent, type Ref } from "react";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api, EV, on, type Experiment, type ExperimentEnded, type ExperimentNode, type ExperimentStep, type HttpResponse, type JobInfo, type Signal, type SignalBody } from "../lib/api";
 import { addAfter, anchorAfter, arrangeNodes, connect, createNode, disconnect, duplicateNode, missingOutputs, placeAfter, portOf, removeNode, unreachableNodes, validPortsFor, NODE_WIDTH as NODE_W, NODE_HEIGHT as NODE_H, STEP_X, type Anchor, type NodeType, type Port } from "../lib/experimentGraph";
 import { useExperimentDocument } from "../lib/useExperimentDocument";
@@ -15,6 +14,7 @@ import { TemplateSuggestions, type TemplateSuggestion } from "../components/Temp
 import { GENERATORS, jsonPath, replyFields, secretNames, suggestVariableName, variablesBefore, writtenVariable } from "../lib/experimentData";
 import { describeError, failureNode, messageParams, type Failure } from "../lib/errors";
 import { ErrorMessage } from "../components/ErrorMessage";
+import { downloadUrl, isFullscreen, onFullscreenChange, setFullscreen as setWindowFullscreen } from "../lib/platform";
 import { nodeFromSignal, signalBodyOfNode, signalTarget, transportKey } from "../lib/signals";
 import { fmtBytes, fmtTime, prettyJson } from "../lib/format";
 import { useStore } from "../lib/store";
@@ -37,6 +37,8 @@ const GROUP_GLYPH: Record<NodeGroup, string> = { action: "↗", observe: "⇠", 
 /** `:9001` from `127.0.0.1:9001`: the port is what tells waits apart on the canvas. */
 const bindPort = (bind: string) => { const at = bind.lastIndexOf(":"); return at >= 0 ? bind.slice(at) : bind; };
 const isWait = (node: ExperimentNode) => node.type === "wait_osc" || node.type === "wait_udp";
+/** A node heading's tooltip: what the node does; for the parallel nodes, how they are wired. */
+const nodeHelp = (type: NodeType) => type === "fork" ? "exp.forkHint" as const : type === "join" ? "exp.joinHint" as const : NODE_CATALOG[type].description;
 const OP_TEXT: Record<string, string> = { eq: "=", ne: "≠", lt: "<", le: "≤", gt: ">", ge: "≥", contains: "⊃", matches: "~", empty: "= ∅", not_empty: "≠ ∅" };
 
 /** What a node will put on the wire, one line per part, for the resolved preview. */
@@ -174,9 +176,8 @@ export function ExperimentView({ active, focusMode, setFocusMode, ref }: { activ
   }, [doc]);
 
   useEffect(() => {
-    getCurrentWindow().isFullscreen().then(setFullscreen).catch(() => {});
-    const syncFullscreen = () => { getCurrentWindow().isFullscreen().then(setFullscreen).catch(() => {}); };
-    window.addEventListener("resize", syncFullscreen);
+    isFullscreen().then(setFullscreen).catch(() => {});
+    const stopWatching = onFullscreenChange(() => { isFullscreen().then(setFullscreen).catch(() => {}); });
     const steps = on<ExperimentStep>(EV.experimentStep, (event) => {
       if (activeId.current === null || (activeId.current !== -1 && event.payload.job_id !== activeId.current)) return;
       setEvents((prior) => [...prior, event.payload]);
@@ -192,7 +193,7 @@ export function ExperimentView({ active, focusMode, setFocusMode, ref }: { activ
       if (event.payload.report_error) setProblem(event.payload.report_error);
       setJob(null); activeId.current = null; refreshJobs();
     });
-    return () => { steps.then((off) => off()); ended.then((off) => off()); window.removeEventListener("resize", syncFullscreen); };
+    return () => { steps.then((off) => off()); ended.then((off) => off()); stopWatching(); };
   }, [refreshJobs]);
 
   // The search field is focused by autoFocus as it mounts, so typing right after A is never lost.
@@ -298,7 +299,9 @@ export function ExperimentView({ active, focusMode, setFocusMode, ref }: { activ
       ...(secretsMissing.length ? [{ key: "exp.missingSecrets" as const, names: quote(secretsMissing) }] : []),
     ];
   };
-  const missingText = (missing: string[]): string => missingParts(missing).map(({ key, names }) => t(key, { names })).join(" ");
+  const missingText = (missing: string[]): string => missingParts(missing).map(({ key, names }) => t(key, { names })).join(" · ");
+  /** What to do about them, for the tooltip. */
+  const missingTip = (missing: string[]): string => missingParts(missing).map(({ key }) => t(key === "exp.missingValues" ? "exp.missingValuesHint" : "exp.missingSecretsHint")).join("\n");
 
   /** Send now applies to actions, and Listen now to waits. */
   const canSendNow = (node: ExperimentNode) => !!signalBodyOfNode(node) || isWait(node);
@@ -395,7 +398,7 @@ export function ExperimentView({ active, focusMode, setFocusMode, ref }: { activ
       if (event.key === "Escape") {
         if (menu) setMenu(null);
         else if (linkStart) cancelLink();
-        else if (fullscreen) { getCurrentWindow().setFullscreen(false).then(() => { setFullscreen(false); setFocusMode(focusBeforeFullscreen.current); }).catch(() => {}); }
+        else if (fullscreen) { setWindowFullscreen(false).then(() => { setFullscreen(false); setFocusMode(focusBeforeFullscreen.current); }).catch(() => {}); }
         else if (focusMode) setFocusMode(false);
         return;
       }
@@ -468,7 +471,7 @@ export function ExperimentView({ active, focusMode, setFocusMode, ref }: { activ
 
   const toggleFullscreen = async () => {
     try {
-      await getCurrentWindow().setFullscreen(!fullscreen);
+      await setWindowFullscreen(!fullscreen);
       if (fullscreen) setFocusMode(focusBeforeFullscreen.current);
       else { focusBeforeFullscreen.current = focusMode; setFocusMode(true); }
       setFullscreen(!fullscreen);
@@ -646,33 +649,33 @@ export function ExperimentView({ active, focusMode, setFocusMode, ref }: { activ
   const menuButton = (item: MenuItem, group: string, title: string, description: string, glyph: string) => {
     const index = menuCursor++;
     const id = item.kind === "node" ? `catalog-${item.type}` : `catalog-signal-${item.signal.id}`;
-    return <button key={id} id={id} className={menuIndex === index ? "highlighted" : ""} data-group={group} onClick={() => addFromMenu(item)} onMouseEnter={() => setMenuIndex(index)}>
-      <span className="experiment-kind">{glyph}</span><span><b>{title}</b><small>{description}</small></span></button>;
+    return <button key={id} id={id} className={menuIndex === index ? "highlighted" : ""} data-group={group} data-tip={description} onClick={() => addFromMenu(item)} onMouseEnter={() => setMenuIndex(index)}>
+      <span className="experiment-kind">{glyph}</span><span><b>{title}</b></span></button>;
   };
 
   return <div className={`experiment-view ${propertiesOpen ? "" : "properties-closed"} ${timelineOpen ? "" : "timeline-closed"}`}
     onFocusCapture={(event) => { if (event.target.matches("input, textarea, select")) editGroup.current = `field-${crypto.randomUUID()}`; }}
     onBlurCapture={(event) => { if (event.target.matches("input, textarea, select")) commitEdit(); }}>
     <div className="experiment-toolbar">
-      <button className="ghost sm experiment-document-button" title={t("exp.documents")} aria-label={t("exp.documents")} disabled={busy} onClick={() => { setMenu(null); setDocumentsOpen(true); }}>☰</button>
-      <div className="experiment-heading"><input aria-label={t("exp.name")} value={doc.name} disabled={busy} onChange={(event) => edit((old) => ({ ...old, name: event.target.value }))} /><span>{t("exp.subtitle")}</span></div>
+      <button className="ghost sm experiment-document-button" data-tip={t("exp.documents")} aria-label={t("exp.documents")} disabled={busy} onClick={() => { setMenu(null); setDocumentsOpen(true); }}>☰</button>
+      <div className="experiment-heading"><input aria-label={t("exp.name")} value={doc.name} disabled={busy} onChange={(event) => edit((old) => ({ ...old, name: event.target.value }))} /></div>
       <span className="experiment-save">{saveState === "saving" ? t("exp.saving") : saveState === "error" ? t("exp.saveError") : t("exp.saved")}</span>
-      {validationError !== null && <button className="ghost sm experiment-validation" title={describe(validationError)} onClick={() => revealProblem(validationError)}>⚠ {t("exp.needsLinks")}</button>}
-      <button className="ghost sm" title={`${addTitle} · A`} onClick={openAddMenu} disabled={busy}>＋ {t("exp.addNode")}</button>
-      {doc.profiles.length > 0 && <select className="experiment-profile-select" aria-label={t("exp.profile")} title={t("exp.profileSwitch")} disabled={busy}
+      {validationError !== null && <button className="ghost sm experiment-validation" data-tip={describe(validationError)} onClick={() => revealProblem(validationError)}>⚠ {t("exp.needsLinks")}</button>}
+      <button className="ghost sm" data-tip={`${addTitle} · A`} onClick={openAddMenu} disabled={busy}>＋ {t("exp.addNode")}</button>
+      {doc.profiles.length > 0 && <select className="experiment-profile-select" aria-label={t("exp.profile")} data-tip={t("exp.profileSwitch")} disabled={busy}
         value={doc.profile ?? ""} onChange={(event) => { const profile = event.target.value || null; commitEdit(); edit((current) => ({ ...current, profile })); }}>
         {[null, ...doc.profiles.map((profile) => profile.name)].map((name) => {
           const issue = profileIssues.find((item) => item.profile === name);
-          return <option key={name ?? ""} value={name ?? ""} title={issue ? t("exp.profileIssue", { error: describe(issue.error) }) : undefined}>{name ?? t("exp.noProfile")}{issue ? " ⚠" : ""}</option>;
+          return <option key={name ?? ""} value={name ?? ""}>{name ?? t("exp.noProfile")}{issue ? " ⚠" : ""}</option>;
         })}
       </select>}
-      <button className="ghost sm experiment-params-button" aria-pressed={!!paramsAt} aria-label={t("exp.params")} title={t("exp.paramsHint")} onClick={(event) => { const rect = event.currentTarget.getBoundingClientRect(); setMenu(null); setParamsAt({ left: rect.left, top: rect.bottom + 6 }); }}>{"{ }"} <span className="label">{t("exp.params")}</span>{doc.params.length > 0 && <span className="experiment-node-count">{doc.params.length}</span>}</button>
-      <button className="ghost sm" aria-pressed={propertiesOpen} title={t("exp.properties")} aria-label={t("exp.properties")} onClick={() => setPropertiesOpen(!propertiesOpen)}>☷</button>
-      <button className="ghost sm" aria-pressed={focusMode} title={focusMode ? t("exp.exitFocus") : t("exp.focus")} aria-label={focusMode ? t("exp.exitFocus") : t("exp.focus")} onClick={() => setFocusMode(!focusMode)}>{focusMode ? "▣" : "▢"}</button>
-      <button className="ghost sm" aria-pressed={fullscreen} title={fullscreen ? t("exp.exitFullscreen") : t("exp.fullscreen")} aria-label={fullscreen ? t("exp.exitFullscreen") : t("exp.fullscreen")} onClick={toggleFullscreen}>⛶</button>
+      <button className="ghost sm experiment-params-button" aria-pressed={!!paramsAt} aria-label={t("exp.params")} data-tip={t("exp.paramsHint")} onClick={(event) => { const rect = event.currentTarget.getBoundingClientRect(); setMenu(null); setParamsAt({ left: rect.left, top: rect.bottom + 6 }); }}>{"{ }"} <span className="label">{t("exp.params")}</span>{doc.params.length > 0 && <span className="experiment-node-count">{doc.params.length}</span>}</button>
+      <button className="ghost sm" aria-pressed={propertiesOpen} data-tip={t("exp.properties")} aria-label={t("exp.properties")} onClick={() => setPropertiesOpen(!propertiesOpen)}>☷</button>
+      <button className="ghost sm" aria-pressed={focusMode} data-tip={focusMode ? t("exp.exitFocus") : t("exp.focus")} aria-label={focusMode ? t("exp.exitFocus") : t("exp.focus")} onClick={() => setFocusMode(!focusMode)}>{focusMode ? "▣" : "▢"}</button>
+      <button className="ghost sm" aria-pressed={fullscreen} data-tip={fullscreen ? t("exp.exitFullscreen") : t("exp.fullscreen")} aria-label={fullscreen ? t("exp.exitFullscreen") : t("exp.fullscreen")} onClick={toggleFullscreen}>⛶</button>
       <div className="experiment-run-group">
         <button className={job ? "danger" : "primary"} disabled={starting} onClick={() => job ? stop() : run()}>{job ? t("common.stop") : t("exp.run")}</button>
-        {!job && <button className="primary experiment-run-more" disabled={starting} aria-label={t("exp.runMenu")} title={t("exp.runWith")}
+        {!job && <button className="primary experiment-run-more" disabled={starting} aria-label={t("exp.runMenu")} data-tip={t("exp.runWith")}
           onClick={(event) => { const rect = event.currentTarget.getBoundingClientRect(); setMenu(null); setRunWithAt({ right: rect.right, top: rect.bottom + 6 }); }}>▾</button>}
       </div>
     </div>
@@ -682,19 +685,19 @@ export function ExperimentView({ active, focusMode, setFocusMode, ref }: { activ
       <div className="experiment-left">
         <div className="experiment-canvas-tools">
           <div className="experiment-tool-group" role="group" aria-label={t("exp.history")}>
-            <button className="ghost sm" title={`${t("exp.undo")} · Ctrl+Z`} aria-label={t("exp.undo")} disabled={busy || !history.past.length} onClick={() => restore("undo")}>↶</button>
-            <button className="ghost sm" title={`${t("exp.redo")} · Ctrl+Shift+Z`} aria-label={t("exp.redo")} disabled={busy || !history.future.length} onClick={() => restore("redo")}>↷</button>
+            <button className="ghost sm" data-tip={`${t("exp.undo")} · Ctrl+Z`} aria-label={t("exp.undo")} disabled={busy || !history.past.length} onClick={() => restore("undo")}>↶</button>
+            <button className="ghost sm" data-tip={`${t("exp.redo")} · Ctrl+Shift+Z`} aria-label={t("exp.redo")} disabled={busy || !history.future.length} onClick={() => restore("redo")}>↷</button>
           </div>
-          <button className="ghost sm" title={`${t("exp.findNode")} · Ctrl+F`} onClick={() => setFinderOpen(true)}>{t("exp.nodes")} <span className="experiment-node-count">{doc.nodes.length}</span></button>
-          <span className={`experiment-canvas-hint ${linkStart ? "linking" : ""}`} title={linkStart ? t("exp.chooseInput") : t("exp.canvasHint")}>{linkStart ? t("exp.chooseInput") : t("exp.canvasHint")}</span>
+          <button className="ghost sm" data-tip={`${t("exp.findNode")} · Ctrl+F`} onClick={() => setFinderOpen(true)}>{t("exp.nodes")} <span className="experiment-node-count">{doc.nodes.length}</span></button>
+          {linkStart && <span className="experiment-canvas-hint linking" role="status">{t("exp.chooseInput")}</span>}
           {linkStart && <button className="ghost sm" onClick={cancelLink}>{t("exp.cancelLink")}</button>}
           <div className="fill" />
-          <button className="ghost sm experiment-arrange" title={t("exp.arrange")} onClick={arrange} disabled={busy}>{t("exp.arrange")}</button>
-          <button className="ghost sm" aria-label={t("exp.zoomOut")} title={t("exp.zoomOut")} onClick={() => zoomAt(zoom - .1)}>−</button>
-          <span className="experiment-zoom">{Math.round(zoom * 100)}%</span>
-          <button className="ghost sm" aria-label={t("exp.zoomIn")} title={t("exp.zoomIn")} onClick={() => zoomAt(zoom + .1)}>＋</button>
-          <button className="ghost sm" title={`${t("exp.resetZoom")} · Ctrl+1`} onClick={() => zoomAt(1)}>1:1</button>
-          <button className="ghost sm" title={`${t("exp.fit")} · Ctrl+0`} aria-label={t("exp.fit")} onClick={() => fit(doc.nodes)}>⊡</button>
+          <button className="ghost sm experiment-arrange" onClick={arrange} disabled={busy}>{t("exp.arrange")}</button>
+          <button className="ghost sm" aria-label={t("exp.zoomOut")} data-tip={t("exp.zoomOut")} onClick={() => zoomAt(zoom - .1)}>−</button>
+          <span className="experiment-zoom" data-tip={t("exp.zoomHint")}>{Math.round(zoom * 100)}%</span>
+          <button className="ghost sm" aria-label={t("exp.zoomIn")} data-tip={t("exp.zoomIn")} onClick={() => zoomAt(zoom + .1)}>＋</button>
+          <button className="ghost sm" data-tip={`${t("exp.resetZoom")} · Ctrl+1`} onClick={() => zoomAt(1)}>1:1</button>
+          <button className="ghost sm" data-tip={`${t("exp.fit")} · Ctrl+0`} aria-label={t("exp.fit")} onClick={() => fit(doc.nodes)}>⊡</button>
         </div>
         <div className={`experiment-canvas-scroll ${linkStart ? "linking" : ""}`} ref={scrollRef}>
           <div className="experiment-canvas-space" style={{ width: canvasWidth * zoom, height: canvasHeight * zoom }}>
@@ -727,12 +730,12 @@ export function ExperimentView({ active, focusMode, setFocusMode, ref }: { activ
               {doc.edges.map((edge) => { const a = doc.nodes.find((node) => node.id === edge.from); const b = doc.nodes.find((node) => node.id === edge.to); if (!a || !b) return null;
                 const p = portOf(edge);
                 const y1 = a.y + portY(a, p); const x = (a.x + NODE_W + b.x) / 2; const y = (y1 + b.y + NODE_H / 2) / 2;
-                return <button key={`${edge.from}-${p}`} className="experiment-edge-add" style={{ left: x - 11, top: y - 11 }} title={t("exp.insertNode")} aria-label={`${t("exp.insertNode")}: ${label(a.type)} → ${label(b.type)}`} disabled={busy} onClick={(event) => openMenu(event.clientX, event.clientY, Math.max(x - NODE_W / 2, a.x + STEP_X), y - NODE_H / 2, { from: edge.from, port: p })}>＋</button>;
+                return <button key={`${edge.from}-${p}`} className="experiment-edge-add" style={{ left: x - 11, top: y - 11 }} data-tip={t("exp.insertNode")} aria-label={`${t("exp.insertNode")}: ${label(a.type)} → ${label(b.type)}`} disabled={busy} onClick={(event) => openMenu(event.clientX, event.clientY, Math.max(x - NODE_W / 2, a.x + STEP_X), y - NODE_H / 2, { from: edge.from, port: p })}>＋</button>;
               })}
               {doc.nodes.map((node) => <div key={node.id} data-node={node.id} data-group={NODE_CATALOG[node.type].group}
                 className={`experiment-node ${selected === node.id ? "selected" : ""} ${nodeStates.get(node.id) ?? ""} ${detached.has(node.id) ? "detached" : ""} ${problemNodeId === node.id ? "invalid" : ""} ${linkStart && linkStart.from !== node.id ? "link-target" : ""}`}
                 style={{ left: node.x, top: node.y, width: NODE_W, height: NODE_H }}>
-                <button className="experiment-node-body" data-node-id={node.id} title={`${label(node.type)} — ${nodeSummary(node)}${detached.has(node.id) ? `\n${t("exp.detachedHint")}` : ""}`}
+                <button className="experiment-node-body" data-node-id={node.id} data-tip={`${label(node.type)} — ${nodeSummary(node)}${detached.has(node.id) ? `\n${t("exp.detachedHint")}` : ""}`}
                   onPointerDown={(event) => onNodeDown(event, node)} onPointerMove={(event) => onNodeMove(event, node)} onPointerUp={endDrag} onPointerCancel={endDrag}
                   onFocus={() => { if (!linkStart) setSelected(node.id); }} onClick={() => { if (linkStart) endLink(node.id); else setSelected(node.id); }}
                   onDoubleClick={() => { setPropertiesOpen(true); focusFieldOf.current = node.id; setSelected(node.id); }}
@@ -745,10 +748,10 @@ export function ExperimentView({ active, focusMode, setFocusMode, ref }: { activ
                   </div>
                   <span className="experiment-node-subtitle">{nodeSummary(node)}</span>
                 </button>
-                {node.type !== "start" && <button className={`experiment-port input ${linkStart ? "awaiting" : ""}`} title={t("exp.inputPort")} aria-label={`${label(node.type)}: ${t("exp.inputPort")}`} onClick={() => endLink(node.id)} />}
+                {node.type !== "start" && <button className={`experiment-port input ${linkStart ? "awaiting" : ""}`} data-tip={t("exp.inputPort")} aria-label={`${label(node.type)}: ${t("exp.inputPort")}`} onClick={() => endLink(node.id)} />}
                 {outputPorts(node.type).map((port) => <button key={port}
                   className={`experiment-port output ${port} ${missing.has(`${node.id}:${port}`) ? "missing" : ""} ${linkStart?.from === node.id && linkStart.port === port ? "active" : ""}`}
-                  title={`${portLabel(port)} — ${t("exp.portHint")}`} aria-label={`${label(node.type)}: ${portLabel(port)}`}
+                  data-tip={`${portLabel(port)} — ${t("exp.portHint")}`} aria-label={`${label(node.type)}: ${portLabel(port)}`}
                   onPointerDown={(event) => onPortDown(event, { from: node.id, port })} onPointerMove={onPortMove} onPointerUp={onPortUp} onPointerCancel={onPortCancel}
                   onClick={() => { if (suppressPortClick.current) { suppressPortClick.current = false; return; } toggleLink(node.id, port); }} />)}
               </div>)}
@@ -763,7 +766,7 @@ export function ExperimentView({ active, focusMode, setFocusMode, ref }: { activ
           if (event.key === "Escape" && selectedNode && editable(event.target)) { event.preventDefault(); focusNode(selectedNode.id); }
         }}>
         <div className="section-label">{t("exp.properties")}</div>
-        {selectedNode ? <><h2>{label(selectedNode.type)}</h2><p className="experiment-hint">{t(NODE_CATALOG[selectedNode.type].description)}</p>
+        {selectedNode ? <><h2 data-tip={t(nodeHelp(selectedNode.type))}>{label(selectedNode.type)}</h2>
           {/* What stops this node from running, next to the fields it is about. */}
           {problemNodeId === selectedNode.id && <ErrorMessage className="experiment-node-problem" error={validationError} />}
           <fieldset disabled={busy}>
@@ -773,37 +776,38 @@ export function ExperimentView({ active, focusMode, setFocusMode, ref }: { activ
           {preview?.nodeId === selectedNode.id && <div className={`experiment-preview ${preview.error ? "error" : ""}`} aria-live="polite">
             <p className="section-label">{t(isWait(selectedNode) ? "exp.previewWait" : "exp.preview")}</p>
             {preview.error !== undefined ? <ErrorMessage error={preview.error} /> : preview.lines.map((line, index) => <code key={index}>{line}</code>)}
-            {preview.missing.length > 0 && <p className="experiment-preview-missing">{missingText(preview.missing)}</p>}
+            {preview.missing.length > 0 && <p className="experiment-preview-missing" data-tip={missingTip(preview.missing)}>{missingText(preview.missing)}</p>}
           </div>}
           {canSendNow(selectedNode) && <div className="experiment-node-test">
             <div className="experiment-node-test-row">
-              <button className="ghost sm" disabled={!!sending} onClick={() => sendNode(selectedNode)} title={`${t(isWait(selectedNode) ? "exp.listenNowHint" : "exp.sendNowHint")} · Ctrl+Enter`}>
+              <button className="ghost sm" disabled={!!sending} onClick={() => sendNode(selectedNode)} data-tip={`${t(isWait(selectedNode) ? "exp.listenNowHint" : "exp.sendNowHint")} · Ctrl+Enter`}>
                 {sending === selectedNode.id ? t(isWait(selectedNode) ? "exp.listening" : "common.sending") : `▶ ${t(isWait(selectedNode) ? "exp.listenNow" : "exp.sendNow")}`}</button>
-              <kbd>Ctrl+Enter</kbd>
             </div>
             {selectedTest && <div className={`experiment-test-result ${selectedTest.ok ? "ok" : "fail"}`} role="status">
               {selectedTest.error !== undefined ? <ErrorMessage error={selectedTest.error} />
-                : <span>{selectedTest.ok ? "✓" : "✕"} {selectedTest.missing ? missingText(selectedTest.missing) : selectedTest.text}</span>}
+                : <span data-tip={selectedTest.missing ? missingTip(selectedTest.missing) : undefined}>{selectedTest.ok ? "✓" : "✕"} {selectedTest.missing ? missingText(selectedTest.missing) : selectedTest.text}</span>}
               <time>{fmtTime(selectedTest.ts).slice(0, 8)}</time></div>}
             {selectedTest?.values && Object.keys(selectedTest.values).length > 0 && <p className="experiment-test-values">{t("exp.extractedValues", { values: Object.entries(selectedTest.values).map(([name, value]) => `${name} = ${typeof value === "string" ? value : JSON.stringify(value)}`).join(" · ") })}</p>}
-            {selectedTest?.response && selectedTest.body && <details className="experiment-test-body" open={!!selectedTest.json}><summary>{t("http.response")} · {fmtBytes(selectedTest.response.body_bytes)}{selectedTest.json !== undefined && <small> · {t("exp.extractHere")}</small>}</summary>
-              {selectedTest.json !== undefined ? <JsonPicker value={selectedTest.json} title={t("exp.extractHere")} onPick={(path, value) => extractPicked(selectedNode, path, value)} /> : <pre>{selectedTest.body}</pre>}</details>}
+            {selectedTest?.response && selectedTest.body && <details className="experiment-test-body" open={!!selectedTest.json}><summary>{t("http.response")} · {fmtBytes(selectedTest.response.body_bytes)}</summary>
+              {selectedTest.json !== undefined ? <JsonPicker value={selectedTest.json} tip={t("exp.extractHere")} onPick={(path, value) => extractPicked(selectedNode, path, value)} /> : <pre>{selectedTest.body}</pre>}</details>}
           </div>}
-          {doc.edges.filter((edge) => edge.from === selectedNode.id).map((edge) => <div className="experiment-connection" key={portOf(edge)}><span>{portLabel(portOf(edge))} → {label(doc.nodes.find((node) => node.id === edge.to)?.type ?? "end")}</span><button className="ghost sm" title={t("exp.disconnect")} aria-label={t("exp.disconnect")} onClick={() => edit((current) => disconnect(current, edge.from, portOf(edge)))}>×</button></div>)}
-          {selectedNode.type !== "end" && <div className="experiment-node-actions"><button className="ghost sm" title={`${t("exp.addAfter")} · A`} onClick={openAddMenu}>＋ {t("exp.addNext")}</button>
-            {selectedNode.type !== "start" && <><button className="ghost sm" title={`${t("exp.duplicate")} · Ctrl+D`} onClick={duplicateSelected}>{t("exp.duplicate")}</button><button className="ghost sm experiment-delete" title={`${t("exp.delete")} · Delete`} onClick={removeSelected}>{t("exp.delete")}</button></>}</div>}
-        </fieldset></> : <p className="experiment-hint">{t("exp.selectNode")}</p>}
+          {doc.edges.filter((edge) => edge.from === selectedNode.id).map((edge) => <div className="experiment-connection" key={portOf(edge)}><span>{portLabel(portOf(edge))} → {label(doc.nodes.find((node) => node.id === edge.to)?.type ?? "end")}</span><button className="ghost sm" data-tip={t("exp.disconnect")} aria-label={t("exp.disconnect")} onClick={() => edit((current) => disconnect(current, edge.from, portOf(edge)))}>×</button></div>)}
+          {selectedNode.type !== "end" && <div className="experiment-node-actions"><button className="ghost sm" data-tip={`${t("exp.addAfter")} · A`} onClick={openAddMenu}>＋ {t("exp.addNext")}</button>
+            {selectedNode.type !== "start" && <><button className="ghost sm" data-tip={`${t("exp.duplicate")} · Ctrl+D`} onClick={duplicateSelected}>{t("exp.duplicate")}</button><button className="ghost sm experiment-delete" data-tip={`${t("exp.delete")} · Delete`} onClick={removeSelected}>{t("exp.delete")}</button></>}</div>}
+        </fieldset></> : <p className="experiment-empty">{t("exp.selectNode")}</p>}
       </aside>}
     </div>
-    <div className="experiment-timeline"><div className="experiment-timeline-title"><button className="ghost sm" onClick={() => setTimelineOpen(!timelineOpen)} aria-expanded={timelineOpen}>{timelineOpen ? "▾" : "▸"} {t("exp.timeline")}{!timelineOpen && events.length > 0 && <span className="experiment-node-count">{events.length}</span>}</button>{reportPath && <span className="experiment-report" title={reportPath}>{t("exp.reportSaved")}</span>}{lastRun && (lastRun.overridden || doc.profiles.length > 0) && <span className="experiment-run-profile">
+    <div className="experiment-timeline"><div className="experiment-timeline-title"><button className="ghost sm" onClick={() => setTimelineOpen(!timelineOpen)} aria-expanded={timelineOpen}>{timelineOpen ? "▾" : "▸"} {t("exp.timeline")}{!timelineOpen && events.length > 0 && <span className="experiment-node-count">{events.length}</span>}</button>{reportPath && (downloadUrl(reportPath)
+        ? <a className="experiment-report download-link" href={downloadUrl(reportPath)!} download data-tip={reportPath}>{t("exp.reportSaved")} ↓</a>
+        : <span className="experiment-report" data-tip={reportPath}>{t("exp.reportSaved")}</span>)}{lastRun && (lastRun.overridden || doc.profiles.length > 0) && <span className="experiment-run-profile">
       {lastRun.profile ? t("exp.runProfile", { name: lastRun.profile }) : t("exp.runDefaults")}{lastRun.overridden && ` · ${t("exp.overridden")}`}</span>}{doc.seed !== null
-      ? <button className="ghost sm experiment-seed-chip pinned" title={t("exp.unpinSeedHint")} onClick={() => edit((current) => ({ ...current, seed: null }))}>{t("exp.runSeed", { seed: doc.seed })} · {t("exp.unpinSeed")}</button>
-      : lastSeed !== null && <button className="ghost sm experiment-seed-chip" title={t("exp.pinSeedHint")} disabled={busy} onClick={() => edit((current) => ({ ...current, seed: lastSeed }))}>{t("exp.runSeed", { seed: lastSeed })} · {t("exp.pinSeed")}</button>}<strong className={outcome?.kind === "failed" ? "fail" : ""} title={outcome?.kind === "failed" ? describe(outcome.error) : undefined}>{outcomeText}</strong></div>
-      {timelineOpen && <div className="experiment-events">{events.length === 0 ? <span className="experiment-empty">{t("exp.noEvents")}</span> : events.map((event, index) => <button key={index} onClick={() => { const node = doc.nodes.find((item) => item.id === event.node_id); if (node) showNode(node); }} className={event.state}><time>{new Date(event.ts).toLocaleTimeString()}</time><b>{label(doc.nodes.find((node) => node.id === event.node_id)?.type ?? "end")}</b><span title={event.error?.detail}>{t(`exp.${event.state}`)}{stepText(event) && ` · ${stepText(event)}`}</span></button>)}</div>}
+      ? <button className="ghost sm experiment-seed-chip pinned" data-tip={t("exp.unpinSeedHint")} onClick={() => edit((current) => ({ ...current, seed: null }))}>{t("exp.runSeed", { seed: doc.seed })} · {t("exp.unpinSeed")}</button>
+      : lastSeed !== null && <button className="ghost sm experiment-seed-chip" data-tip={t("exp.pinSeedHint")} disabled={busy} onClick={() => edit((current) => ({ ...current, seed: lastSeed }))}>{t("exp.runSeed", { seed: lastSeed })} · {t("exp.pinSeed")}</button>}<strong className={outcome?.kind === "failed" ? "fail" : ""} data-tip={outcome?.kind === "failed" ? describe(outcome.error) : undefined}>{outcomeText}</strong></div>
+      {timelineOpen && <div className="experiment-events">{events.length === 0 ? <span className="experiment-empty">{t("exp.noEvents")}</span> : events.map((event, index) => <button key={index} onClick={() => { const node = doc.nodes.find((item) => item.id === event.node_id); if (node) showNode(node); }} className={event.state}><time>{new Date(event.ts).toLocaleTimeString()}</time><b>{label(doc.nodes.find((node) => node.id === event.node_id)?.type ?? "end")}</b><span data-tip={event.error?.detail}>{t(`exp.${event.state}`)}{stepText(event) && ` · ${stepText(event)}`}</span></button>)}</div>}
     </div>
     {menu && <div className="experiment-menu-backdrop" onPointerDown={() => setMenu(null)}><div className="experiment-add-menu" role="dialog" aria-label={t("exp.addNode")} style={{ left: Math.max(8, menu.screenX), top: Math.max(8, menu.screenY) }} onPointerDown={(event) => event.stopPropagation()}>
       {menu.anchor && <p className="experiment-menu-context">{t("exp.addingAfter", { node: anchorLabel(menu.anchor) })}</p>}
-      <input autoFocus value={search} onChange={(event) => { setSearch(event.target.value); setMenuIndex(0); }} placeholder={t("exp.searchNodes")} aria-label={t("exp.searchNodes")} aria-controls="experiment-catalog" onKeyDown={(event) => {
+      <input autoFocus value={search} onChange={(event) => { setSearch(event.target.value); setMenuIndex(0); }} placeholder={t("exp.searchNodes")} aria-label={t("exp.searchNodes")} data-tip={t("exp.menuHint")} aria-controls="experiment-catalog" onKeyDown={(event) => {
         if (event.key === "Escape") { event.preventDefault(); setMenu(null); return; }
         if (event.key === "Enter" && menuItems[menuIndex]) { event.preventDefault(); addFromMenu(menuItems[menuIndex]); }
         if (["ArrowDown", "ArrowUp"].includes(event.key) && menuItems.length) { event.preventDefault(); const next = (menuIndex + (event.key === "ArrowDown" ? 1 : -1) + menuItems.length) % menuItems.length; setMenuIndex(next); const item = menuItems[next]; document.getElementById(item.kind === "node" ? `catalog-${item.type}` : `catalog-signal-${item.signal.id}`)?.scrollIntoView({ block: "nearest" }); } }} />
@@ -813,7 +817,6 @@ export function ExperimentView({ active, focusMode, setFocusMode, ref }: { activ
       })}
         {menuItems.some((item) => item.kind === "signal") && <section><h3>{t("exp.group.signals")}</h3>{menuItems.map((item) => item.kind === "signal" && menuButton(item, "action", item.signal.name, `${t(transportKey(item.signal.body.transport))} · ${signalTarget(item.signal)}`, "❖"))}</section>}
         {!menuItems.length && <p className="experiment-empty">{t("exp.noMatches")}</p>}</div>
-      <p className="experiment-menu-hint">{t("exp.menuHint")}</p>
     </div></div>}
     {paramsAt && <ExperimentParams doc={doc} issues={profileIssues} disabled={busy} anchor={paramsAt} describe={describe}
       onClose={() => { commitEdit(); setParamsAt(null); }} onEdit={(update) => edit(update)}

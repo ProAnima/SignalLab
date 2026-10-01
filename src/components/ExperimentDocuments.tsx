@@ -4,6 +4,7 @@ import { experimentTemplates } from "../lib/experimentTemplates";
 import { useT } from "../lib/i18n";
 import type { Failure } from "../lib/errors";
 import { ErrorMessage } from "./ErrorMessage";
+import { downloadUrl } from "../lib/platform";
 
 interface Props {
   document: Experiment | null;
@@ -68,35 +69,34 @@ export function ExperimentDocuments({ document, onOpen, onClose }: Props) {
   return <dialog ref={dialog} className="experiment-documents" role="dialog" aria-labelledby="experiment-documents-title"
     onCancel={(event) => { event.preventDefault(); onClose(); }} onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <div className="experiment-documents-content">
-      <header><div><h2 id="experiment-documents-title">{t("exp.documents")}</h2><p>{t("exp.documentsHint")}</p></div>
+      <header><div><h2 id="experiment-documents-title" data-tip={t("exp.documentsHint")}>{t("exp.documents")}</h2></div>
         <button className="ghost sm" aria-label={t("exp.close")} onClick={onClose}>×</button>
       </header>
       <div className="experiment-template-list" role="group" aria-label={t("exp.templates")}>
         {experimentTemplates.map((item, index) => <button key={item.id} className={`experiment-template ${!imported && templateId === item.id ? "selected" : ""}`}
-          aria-pressed={!imported && templateId === item.id} disabled={busy} onClick={() => { setTemplateId(item.id); setImported(null); setError(null); setImportFailed(false); }}>
-          <span className="experiment-template-number">0{index + 1}</span><strong>{t(item.title)}</strong><span>{t(item.description)}</span>
+          aria-pressed={!imported && templateId === item.id} data-tip={t(item.description)} disabled={busy} onClick={() => { setTemplateId(item.id); setImported(null); setError(null); setImportFailed(false); }}>
+          <span className="experiment-template-number">0{index + 1}</span><strong>{t(item.title)}</strong>
         </button>)}
       </div>
       <div className="experiment-file-import">
         <input ref={fileInput} type="file" accept=".json,application/json" hidden onChange={(event) => {
           const file = event.target.files?.[0]; event.target.value = ""; if (file) void importFile(file);
         }} />
-        <button className="ghost sm" disabled={busy} onClick={() => fileInput.current?.click()}>{t("exp.importJson")}</button>
-        <span title={imported?.name}>{imported?.name ?? t("exp.importHint")}</span>
+        <button className="ghost sm" disabled={busy} data-tip={t("exp.importHint")} onClick={() => fileInput.current?.click()}>{t("exp.importJson")}</button>
+        {imported && <span data-tip={imported.name}>{imported.name}</span>}
       </div>
       <div className="experiment-document-preview" aria-live="polite">
         <strong>{imported ? preview.name : t(template.title)}</strong>
         <span>{t("exp.documentSize", { nodes: preview.nodes.length, edges: preview.edges.length })}</span>
       </div>
       {error !== null && <ErrorMessage className="experiment-file-error" error={error} />}
-      {exportPath && <label className="experiment-export-path">{t("exp.exportSaved")}
+      {exportPath && <div className="experiment-export-path"><label>{t("exp.exportSaved")}
         <input readOnly value={exportPath} onFocus={(event) => event.target.select()} />
-      </label>}
+      </label>{downloadUrl(exportPath) && <a className="download-link" href={downloadUrl(exportPath)!} download>{t("common.download")}</a>}</div>}
       <footer>
-        <button className="ghost sm" disabled={!document || busy} onClick={exportCurrent}>{t("exp.exportJson")}</button>
-        <button className="primary" disabled={busy || importFailed} onClick={open}>{busy ? t("exp.fileWorking") : t("exp.openDocument")}</button>
+        <button className="ghost sm" disabled={!document || busy} data-tip={t("exp.exportHint")} onClick={exportCurrent}>{t("exp.exportJson")}</button>
+        <button className="primary" disabled={busy || importFailed} data-tip={document ? t("exp.replaceHint") : t("exp.newHint")} onClick={open}>{busy ? t("exp.fileWorking") : t("exp.openDocument")}</button>
       </footer>
-      <p className="experiment-documents-note">{document ? t("exp.replaceHint") : t("exp.newHint")}</p>
     </div>
   </dialog>;
 }

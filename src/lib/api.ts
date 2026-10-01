@@ -1,5 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn, type EventCallback } from "@tauri-apps/api/event";
+import { invoke, listen, type UnlistenFn, type EventCallback } from "./transport";
 
 // ---- shared types (mirror the Rust engine) ----
 
@@ -428,9 +427,20 @@ export interface InspectBatch {
   skipped_now: number;
 }
 
+/** Where the engine runs, for the interface to adapt to (engine/src/service.rs). */
+export interface AppInfo {
+  version: string;
+  mode: "desktop" | "server";
+  /** False on a server: secrets are read from its environment or files. */
+  secrets_writable: boolean;
+  /** Where files are written — on a server, a folder on that machine. */
+  data_dir: string;
+}
+
 // ---- command wrappers ----
 
 export const api = {
+  appInfo: () => invoke<AppInfo>("app_info"),
   hostInfo: () => invoke<HostInfo>("get_host_info"),
   jobsList: () => invoke<JobInfo[]>("jobs_list"),
   jobStop: (id: number) => invoke<boolean>("job_stop", { id }),
@@ -517,4 +527,6 @@ export const EV = {
   mqttMessages: "mqtt://messages",
   mqttState: "mqtt://state",
   mqttAck: "mqtt://ack",
+  /** Server only: events this page missed because it fell behind. */
+  serverLagged: "server://lagged",
 } as const;

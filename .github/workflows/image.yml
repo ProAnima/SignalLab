@@ -1,0 +1,218 @@
+# A published release becomes the server image on GHCR:
+#
+#   ghcr.io/proanima/signallab:X.Y.Z    every release, pre-releases included
+#   ghcr.io/proanima/signallab:X.Y      the newest stable release of that line
+#   ghcr.io/proanima/signallab:latest   the newest stable release
+#
+# for linux/amd64 and linux/arm64, each built natively, smoke-tested before it
+# is pushed, with an SBOM, BuildKit provenance and a signed GitHub attestation.
+# Publishing the draft (release.yml) is a person's decision; this follows it,
+# so nothing reaches the registry that was not reviewed. See docs/delivery.md.
+name: Image
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Published release to build the image for again, e.g. v0.4.0
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: image-${{ inputs.tag || github.event.release.tag_name }}
+  cancel-in-progress: false
+
+env:
+  TAG: ${{ inputs.tag || github.event.release.tag_name }}
+  IMAGE: ghcr.io/proanima/signallab
+
+jobs:
+  build:
+    name: Build (${{ matrix.name }})
+    strategy:
+      # Both architectures or neither: a tag must never point at half an image.
+      fail-fast: true
+      matrix:
+        include:
+          - name: x64
+            os: ubuntu-24.04
+            platform: linux/amd64
+          - name: arm64
+            os: ubuntu-24.04-arm
+            platform: linux/arm64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: The tag matches the version and is a published release
+        id: source
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          node scripts/version.mjs check --tag "$TAG"
+          node scripts/image.mjs tags "$TAG" > /dev/null
+          {
+            echo "version=${TAG#v}"
+            echo "revision=$(git rev-parse HEAD)"
+            echo "created=$(git log -1 --format=%cI)"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build for the smoke test
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          load: true
+          tags: signallab:release
+          # Attestations are for the pushed image; a loaded one cannot carry them.
+          provenance: false
+          cache-from: type=gha,scope=image-${{ matrix.name }}
+
+      - name: Smoke test
+        run: node scripts/image.mjs smoke signallab:release
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # The same build again (every layer comes from the builder's cache),
+      # pushed by digest; the publish job gives both digests their tags.
+      - name: Push by digest
+        id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          labels: |
+            org.opencontainers.image.version=${{ steps.source.outputs.version }}
+            org.opencontainers.image.revision=${{ steps.source.outputs.revision }}
+            org.opencontainers.image.created=${{ steps.source.outputs.created }}
+            org.opencontainers.image.url=https://github.com/${{ github.repository }}/releases/tag/${{ env.TAG }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=image-${{ matrix.name }}
+          provenance: mode=max
+          sbom: true
+
+      - name: Remember the digest
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/digests"
+          touch "$RUNNER_TEMP/digests/${DIGEST#sha256:}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.name }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Tag and attest
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digest-*
+          merge-multiple: true
+
+      - name: Tags for this release
+        id: tags
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          {
+            echo "list<<EOF"
+            node scripts/image.mjs tags "$TAG"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: One tag for both architectures
+        id: index
+        working-directory: ${{ runner.temp }}/digests
+        env:
+          TAGS: ${{ steps.tags.outputs.list }}
+        run: |
+          set -euo pipefail
+          args=()
+          for tag in $TAGS; do args+=(--tag "$IMAGE:$tag"); done
+          digests=()
+          for digest in *; do digests+=("$IMAGE@sha256:$digest"); done
+          test "${#digests[@]}" -eq 2
+          docker buildx imagetools create "${args[@]}" \
+            --annotation "index:org.opencontainers.image.description=Signal Lab: OSC and network protocol simulator, served to a browser" \
+            --annotation "index:org.opencontainers.image.source=https://github.com/${{ github.repository }}" \
+            --annotation "index:org.opencontainers.image.licenses=MIT" \
+            "${digests[@]}"
+          version="${TAG#v}"
+          docker buildx imagetools inspect "$IMAGE:$version"
+          platforms=$(docker buildx imagetools inspect "$IMAGE:$version" --format '{{json .Manifest}}' \
+            | jq -r '[.manifests[].platform | select(.os != "unknown") | "\(.os)/\(.architecture)"] | sort | join(" ")')
+          test "$platforms" = "linux/amd64 linux/arm64"
+          echo "digest=$(docker buildx imagetools inspect "$IMAGE:$version" --format '{{json .Manifest}}' | jq -r .digest)" >> "$GITHUB_OUTPUT"
+
+      - name: Attest where it was built
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.index.outputs.digest }}
+          push-to-registry: true
+
+      - name: The published image starts
+        run: docker run --rm "$IMAGE:${TAG#v}" --version
+
+      - name: Summary
+        env:
+          TAGS: ${{ steps.tags.outputs.list }}
+          DIGEST: ${{ steps.index.outputs.digest }}
+        run: |
+          {
+            echo "### $IMAGE"
+            echo
+            for tag in $TAGS; do echo "- \`$IMAGE:$tag\`"; done
+            echo
+            echo "Digest \`$DIGEST\` (linux/amd64, linux/arm64)."
+            echo
+            echo "Verify: \`gh attestation verify oci://$IMAGE:${TAG#v} -R ${{ github.repository }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

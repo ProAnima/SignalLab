@@ -28,6 +28,14 @@ release notes — so what is written here is what users read. See
   with the technical detail folded underneath, in English or Russian. Network
   failures are told apart: refused, timed out, name not found, unreachable, port in
   use, TLS.
+- **Server mode.** `signal-lab-server` runs the engine without a window and serves the
+  full interface to a browser, with the same commands over HTTP and live updates over a
+  WebSocket. It listens on this machine only unless given an access token (sign-in page
+  in English or Russian, session cookie); experiment secrets come from read-only files;
+  reports and exports download from the browser.
+- **Docker image** `ghcr.io/proanima/signallab` for x64 and arm64: unprivileged, with a
+  health check and a `/data` volume, plus `deploy/compose.yaml`. Broadcast, multicast
+  and discovery reach the network with `--network host` on a Linux host.
 - **Linux builds** (`.deb`, `.rpm`, AppImage) next to the Windows installers.
 - **CI** on every push and pull request (Windows and Linux), a release workflow that
   builds both platforms from a tag into a draft release with checksums, and the
@@ -35,10 +43,16 @@ release notes — so what is written here is what users read. See
 
 ### Changed
 
+- **A lighter interface.** Explanatory captions are gone from every screen and the
+  sign-in page; what a control does, its shortcut and what `0` means are tooltips
+  in your language, on hover and on keyboard focus, also over dialogs. Labels say
+  only a name and a unit, empty states a few words.
 - Switching screens keeps everything: typed values, the last response, running
   monitors and the scroll position.
 - The version is written once, in `package.json`; the app, the installers and the
   engine read it from there.
+- The engine is its own crate, independent of the desktop shell; the desktop app and
+  the server share one command table, so they behave the same.
 
 ### Fixed
 

@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="{{lang}}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Signal Lab — {{title}}</title>
+<style>
+  :root { color-scheme: dark; --bg: #070a0f; --panel: #0d131c; --border: rgba(255,255,255,.1); --text: #e3e9f2; --dim: #93a1b5; --accent: #3ee6b0; --red: #ff6b7a; }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: var(--bg); color: var(--text);
+         font: 14px/1.5 "Inter", -apple-system, "Segoe UI", system-ui, sans-serif; padding: 16px; }
+  main { width: 100%; max-width: 380px; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 28px; }
+  h1 { margin: 0 0 20px; font-size: 18px; }
+  h1 b { color: var(--accent); font-weight: 600; }
+  label { position: relative; display: block; width: fit-content; font-size: 12px; color: var(--dim); margin-bottom: 6px; cursor: help; }
+  /* Help as a tooltip, like everywhere in Signal Lab; screen readers get it through aria-describedby. */
+  label::after { content: attr(data-tip); position: absolute; left: 0; bottom: calc(100% + 6px); width: max-content; max-width: min(320px, calc(100vw - 48px));
+                 padding: 7px 10px; background: #1b2331; color: var(--text); border: 1px solid rgba(255,255,255,.14); border-radius: 6px;
+                 box-shadow: 0 6px 24px rgba(0,0,0,.4); font-size: 11.5px; line-height: 1.5; opacity: 0; pointer-events: none; transition: opacity .12s; }
+  label:hover::after { opacity: 1; transition-delay: .45s; }
+  .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  input { width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border); background: #090d14; color: var(--text);
+          font: 13px "JetBrains Mono", "Cascadia Code", ui-monospace, monospace; }
+  input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(62,230,176,.16); }
+  button { margin-top: 16px; width: 100%; padding: 10px; border: 0; border-radius: 8px; background: var(--accent); color: #04130d; font-weight: 600; font-size: 14px; cursor: pointer; }
+  button:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+  .error { margin: 0 0 16px; padding: 8px 10px; border-radius: 8px; background: rgba(255,107,122,.08); color: var(--red); font-size: 13px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Signal <b>Lab</b></h1>
+  {{error}}
+  <form method="post" action="/login">
+    <label for="token" data-tip="{{note}}">{{label}}</label>
+    <input id="token" name="token" type="password" autocomplete="current-password" spellcheck="false" autofocus required aria-describedby="token-help">
+    <span id="token-help" class="sr-only">{{note}}</span>
+    <button type="submit">{{button}}</button>
+  </form>
+</main>
+</body>
+</html>

@@ -16,7 +16,7 @@ import { fail, isMain, root, run, seconds } from "./lib.mjs";
 const IMAGE = "signallab-linux-builder";
 const VOLUMES = {
   "signallab-linux-node-modules": "/work/node_modules",
-  "signallab-linux-target": "/work/src-tauri/target",
+  "signallab-linux-target": "/work/target",
   "signallab-linux-cargo-registry": "/usr/local/cargo/registry",
   "signallab-linux-npm-cache": "/root/.npm",
 };
@@ -28,18 +28,18 @@ const COMMANDS = {
     "npm ci --no-audit --no-fund",
     `npm run tauri build -- --bundles ${BUNDLES}`,
     "rm -rf artifacts/linux && mkdir -p artifacts/linux",
-    "cp src-tauri/target/release/bundle/deb/*.deb src-tauri/target/release/bundle/rpm/*.rpm src-tauri/target/release/bundle/appimage/*.AppImage artifacts/linux/",
+    "cp target/release/bundle/deb/*.deb target/release/bundle/rpm/*.rpm target/release/bundle/appimage/*.AppImage artifacts/linux/",
     "cd artifacts/linux && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt",
   ].join(" && "),
 };
 
-/** The channel and components pinned in src-tauri/rust-toolchain.toml. */
+/** The channel and components pinned in rust-toolchain.toml. */
 function toolchain() {
-  const text = readFileSync(join(root, "src-tauri", "rust-toolchain.toml"), "utf8");
+  const text = readFileSync(join(root, "rust-toolchain.toml"), "utf8");
   const channel = /^channel\s*=\s*"([^"]+)"/m.exec(text)?.[1];
   const list = /^components\s*=\s*\[([^\]]*)\]/m.exec(text)?.[1] ?? "";
   const components = [...list.matchAll(/"([^"]+)"/g)].map((found) => found[1]);
-  if (!channel) fail("src-tauri/rust-toolchain.toml has no channel");
+  if (!channel) fail("rust-toolchain.toml has no channel");
   return { channel, components };
 }
 
