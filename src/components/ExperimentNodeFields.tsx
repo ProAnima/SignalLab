@@ -1,5 +1,6 @@
 import type { ArgRule, CompareOp, ExperimentNode, ExtractFrom, UdpMode } from "../lib/api";
 import { ExperimentOscFields } from "./ExperimentOscFields";
+import { ReplyFields } from "./ExperimentNodeOptions";
 import { TemplateField } from "./TemplateField";
 import { useT, type TKey } from "../lib/i18n";
 
@@ -48,6 +49,7 @@ export function ExperimentNodeFields({ node, patch }: { node: ExperimentNode; pa
     {node.type === "osc" && <><label>{t("common.target")}<TemplateField value={node.target} onChange={target => patch({ target })} /></label><label>{t("common.address")}<TemplateField primary value={node.address} onChange={address => patch({ address })} /></label></>}
     {node.type === "osc" && <div className="experiment-osc-args"><p>{t("exp.arguments")}</p><ExperimentOscFields key={node.id} args={node.args} onChange={args => patch({ args })} /></div>}
     {node.type === "udp" && <><label>{t("common.target")}<TemplateField value={node.target} onChange={target => patch({ target })} /></label><label>{t("exp.payload")}<TemplateField multiline primary value={node.text} onChange={text => patch({ text })} /></label></>}
+    {(node.type === "osc" || node.type === "udp") && <ReplyFields node={node} patch={patch} />}
     {node.type === "extract" && <>
       <label data-tip={t("exp.extractHint", { name: node.variable || "name" })}>{t("exp.variable")}<input data-primary value={node.variable} spellCheck={false} onChange={event => patch({ variable: event.target.value.replace(/\s+/g, "_") })} /></label>
       <label>{t("exp.extractFrom")}<select value={node.from} onChange={event => patch({ from: event.target.value as ExtractFrom })}>{SOURCES.map(source => <option key={source} value={source}>{t(`exp.from.${source}` as TKey)}</option>)}</select></label>
@@ -76,8 +78,8 @@ export function ExperimentNodeFields({ node, patch }: { node: ExperimentNode; pa
   </>;
 }
 
-/** `args[n] <op> value` rows of a Wait for OSC. The remove button sits outside every label. */
-function ArgRules({ rules, onChange }: { rules: ArgRule[]; onChange: (rules: ArgRule[]) => void }) {
+/** `args[n] <op> value` rows of a Wait for OSC (and of an OSC reply). The remove button sits outside every label. */
+export function ArgRules({ rules, onChange }: { rules: ArgRule[]; onChange: (rules: ArgRule[]) => void }) {
   const t = useT();
   const update = (index: number, change: Partial<ArgRule>) => onChange(rules.map((rule, i) => i === index ? { ...rule, ...change } : rule));
   const next = rules.length ? Math.min(63, rules[rules.length - 1].index + 1) : 0;

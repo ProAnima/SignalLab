@@ -2,6 +2,8 @@
 //! the editor and of execution — validation lives in `experiment_validate`,
 //! execution in `experiment_run`.
 
+use std::time::Duration;
+
 use serde::{Deserialize, Serialize};
 
 use super::experiment_data::{CompareOp, ExtractFrom, Param, Profile};
@@ -9,10 +11,12 @@ use super::http::HttpRequest;
 use super::matching::{ArgRule, UdpMode};
 use super::osc_codec::OscArg;
 
-pub const VERSION: u32 = 3;
+pub const VERSION: u32 = 4;
 /// Read and migrated on load (see `experiment_files::parse`): 1 had no
-/// parameters, 2 had no profiles; serde defaults supply what is missing.
-pub const LEGACY_VERSIONS: &[u32] = &[1, 2];
+/// parameters, 2 had no profiles, 3 had no retries or expected replies; serde
+/// defaults supply what is missing. Version 4 exists so that an older Signal
+/// Lab refuses a newer file instead of silently dropping those settings.
+pub const LEGACY_VERSIONS: &[u32] = &[1, 2, 3];
 pub const MAX_NODES: usize = 64;
 /// Every output name a document may use.
 pub const PORTS: &[&str] = &["next", "yes", "no", "branch1", "branch2", "matched", "timeout"];
@@ -41,8 +45,74 @@ pub struct Node {
     pub id: String,
     pub x: f64,
     pub y: f64,
+    /// Try again when the step fails: actions and waits only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry: Option<Retry>,
     #[serde(flatten)]
     pub kind: NodeKind,
+}
+
+/// Retrying a failed action or wait: how often, and how long to pause.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Retry {
+    /// Attempts in all, the first one included.
+    pub attempts: u32,
+    /// The pause before the second attempt.
+    pub delay_ms: u64,
+    #[serde(default)]
+    pub backoff: Backoff,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Backoff {
+    /// The same pause every time.
+    #[default]
+    Fixed,
+    /// The pause doubles after every failed attempt.
+    Exponential,
+}
+
+/// The longest single pause between attempts.
+pub const MAX_RETRY_PAUSE: Duration = Duration::from_secs(60);
+
+impl Retry {
+    /// The pause before `attempt` (2 for the first retry).
+    pub fn pause_before(&self, attempt: u32) -> Duration {
+        let base = Duration::from_millis(self.delay_ms);
+        let pause = match self.backoff {
+            Backoff::Fixed => base,
+            Backoff::Exponential => base.saturating_mul(2u32.saturating_pow(attempt.saturating_sub(2))),
+        };
+        pause.min(MAX_RETRY_PAUSE)
+    }
+}
+
+/// An OSC reply an OSC message expects: the same matching as *Wait for OSC*.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct OscReply {
+    pub bind: String,
+    pub address: String,
+    #[serde(default)]
+    pub args: Vec<ArgRule>,
+    #[serde(default = "default_wait_timeout")]
+    pub timeout_ms: u64,
+    #[serde(default = "default_reply_variable")]
+    pub variable: String,
+}
+
+/// A UDP reply a datagram expects: the same matching as *Wait for UDP*.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct UdpReply {
+    pub bind: String,
+    #[serde(default)]
+    pub mode: UdpMode,
+    #[serde(default)]
+    pub pattern: String,
+    #[serde(default = "default_wait_timeout")]
+    pub timeout_ms: u64,
+    #[serde(default = "default_reply_variable")]
+    pub variable: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -97,10 +167,15 @@ pub enum NodeKind {
         address: String,
         #[serde(default)]
         args: Vec<OscArg>,
+        /// Send from the socket on `reply.bind` and wait there for the answer.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reply: Option<OscReply>,
     },
     Udp {
         target: String,
         text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reply: Option<UdpReply>,
     },
     Extract {
         variable: String,
@@ -191,12 +266,24 @@ impl NodeKind {
         )
     }
 
-    /// The address a wait listens on.
+    /// The address a wait — or an action expecting a reply — listens on.
     pub fn bind(&self) -> Option<&str> {
         match self {
             NodeKind::WaitOsc { bind, .. } | NodeKind::WaitUdp { bind, .. } => Some(bind),
+            NodeKind::Osc { reply: Some(reply), .. } => Some(&reply.bind),
+            NodeKind::Udp { reply: Some(reply), .. } => Some(&reply.bind),
             _ => None,
         }
+    }
+
+    /// Sends and then waits for an answer in the same step.
+    pub fn expects_reply(&self) -> bool {
+        matches!(self, NodeKind::Osc { reply: Some(_), .. } | NodeKind::Udp { reply: Some(_), .. })
+    }
+
+    /// Can be retried: it sends or listens, so a second attempt may succeed.
+    pub fn retries(&self) -> bool {
+        self.is_action() || self.is_wait()
     }
 }
 
@@ -251,5 +338,35 @@ mod tests {
         for port in kind.outputs().required.iter().chain(kind.outputs().optional) {
             assert!(PORTS.contains(port));
         }
+    }
+
+    #[test]
+    fn retries_pause_fixed_or_doubling_and_never_longer_than_a_minute() {
+        let fixed = Retry { attempts: 4, delay_ms: 200, backoff: Backoff::Fixed };
+        assert_eq!([2, 3, 4].map(|attempt| fixed.pause_before(attempt).as_millis()), [200, 200, 200]);
+        let doubling = Retry { backoff: Backoff::Exponential, ..fixed.clone() };
+        assert_eq!([2, 3, 4].map(|attempt| doubling.pause_before(attempt).as_millis()), [200, 400, 800]);
+        let long = Retry { attempts: 10, delay_ms: 40_000, backoff: Backoff::Exponential };
+        assert_eq!(long.pause_before(10), MAX_RETRY_PAUSE);
+        // Absent in a document: no retry, and nothing written back.
+        let node: Node = serde_json::from_value(serde_json::json!({ "id": "a", "x": 0, "y": 0, "type": "delay", "ms": 1 })).unwrap();
+        assert!(node.retry.is_none() && serde_json::to_value(&node).unwrap().get("retry").is_none());
+        let node: Node = serde_json::from_value(serde_json::json!({ "id": "a", "x": 0, "y": 0, "type": "udp", "target": "127.0.0.1:9", "text": "x", "retry": { "attempts": 3, "delay_ms": 100 } })).unwrap();
+        assert_eq!(node.retry, Some(Retry { attempts: 3, delay_ms: 100, backoff: Backoff::Fixed }));
+    }
+
+    #[test]
+    fn an_expected_reply_listens_like_a_wait_and_stays_out_of_the_file_when_absent() {
+        let plain: NodeKind = serde_json::from_value(serde_json::json!({ "type": "osc", "target": "127.0.0.1:9000", "address": "/ping" })).unwrap();
+        assert!(!plain.expects_reply() && plain.bind().is_none());
+        assert!(serde_json::to_value(&plain).unwrap().get("reply").is_none());
+        let asking: NodeKind = serde_json::from_value(serde_json::json!({
+            "type": "osc", "target": "127.0.0.1:9000", "address": "/ping", "reply": { "bind": "0.0.0.0:9001", "address": "/pong" }
+        }))
+        .unwrap();
+        let NodeKind::Osc { reply: Some(reply), .. } = &asking else { panic!() };
+        assert_eq!((reply.timeout_ms, reply.variable.as_str()), (2000, "reply"));
+        assert!(asking.expects_reply() && asking.is_action() && asking.retries() && asking.bind() == Some("0.0.0.0:9001"));
+        assert_eq!(asking.outputs().required, ["next"], "a missing reply fails the step; Retry or a Wait node handle it");
     }
 }

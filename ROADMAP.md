@@ -97,7 +97,7 @@ Detailed design: [docs/milestone-3-data.md](docs/milestone-3-data.md). **Status:
 
 **Goal.** Send a command to a device, wait for its answer, use it. Retry what flakes. Repeat what pulses.
 
-Detailed design: [docs/milestone-4-reactive.md](docs/milestone-4-reactive.md). **Status:** PR 4.1 delivered — **Wait for OSC** (OSC 1.0 address patterns, argument rules) and **Wait for UDP** (any, contains, regex, hex) with **Matched** and an optional **Timeout** output; listeners armed when the run starts (a taken port stops the run before any traffic, at the wait that needs it); the reply as a variable on the Matched path only (`{{reply.args[0]}}`, `{{reply.from}}`, `{{reply.ms}}`); *Listen now* on a wait; the bundled template *OSC ping → reply*. The same PR replaced the engine's English error strings with structured, localized errors (code, values, node, field, technical detail) everywhere the experiment engine reports a problem, classified network failures (refused, timeout, name not found, unreachable, port in use …), split the engine along responsibilities, and made every screen keep what was typed when switching tabs.
+Detailed design: [docs/milestone-4-reactive.md](docs/milestone-4-reactive.md). **Status:** PR 4.1 delivered — **Wait for OSC** (OSC 1.0 address patterns, argument rules) and **Wait for UDP** (any, contains, regex, hex) with **Matched** and an optional **Timeout** output; listeners armed when the run starts (a taken port stops the run before any traffic, at the wait that needs it); the reply as a variable on the Matched path only (`{{reply.args[0]}}`, `{{reply.from}}`, `{{reply.ms}}`); *Listen now* on a wait; the bundled template *OSC ping → reply*. PR 4.2 part 1 delivered — **wait for a reply** on OSC and UDP nodes (sent from the listening port, so a device answering the sender is heard) and **Retry** on every action and wait (attempts, fixed or doubling pauses, each failed attempt on the timeline, Stop ends a pause); document version 4. The same PR replaced the engine's English error strings with structured, localized errors (code, values, node, field, technical detail) everywhere the experiment engine reports a problem, classified network failures (refused, timeout, name not found, unreachable, port in use …), split the engine along responsibilities, and made every screen keep what was typed when switching tabs.
 
 **What the user gets**
 
@@ -275,11 +275,10 @@ Detailed design: [docs/delivery.md](docs/delivery.md).
 
 ## Next concrete slice (milestone 4, PR 4.2 — reply in one node, retry)
 
-1. **Expect reply** on OSC and UDP action nodes: send and wait in one node, using the matchers and listeners of PR 4.1.
+1. ~~**Expect reply** on OSC and UDP action nodes~~ — delivered.
 2. **Wait for this** on a message in the OSC monitor: a Wait node with the match rule taken from that message; the timeline links a satisfied wait to its Inspector frame.
 3. **Wait for MQTT**: topic filter and payload match on a connection owned by the run.
-4. **Retry** on action and wait nodes: attempts, fixed or exponential backoff; each attempt on the timeline.
-5. Tests: an OSC echo fixture answering `/ping` in `cargo test`, retry counts and backoff timing, Stop during a retry.
+4. ~~**Retry** on action and wait nodes~~ — delivered, with the tests of item 5 (an echo device in `cargo test`, retry counts and backoff timing, Stop during a pause).
 
 ## Explicitly outside the plan
 

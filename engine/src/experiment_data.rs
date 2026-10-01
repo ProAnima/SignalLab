@@ -164,7 +164,7 @@ fn texts_mut(kind: &mut NodeKind) -> Vec<(Field, &mut String)> {
                 fields.push((Field::new("body"), body));
             }
         }
-        NodeKind::Osc { target, address, args } => {
+        NodeKind::Osc { target, address, args, reply } => {
             fields.push((Field::new("target"), target));
             fields.push((Field::new("address"), address));
             for (index, arg) in args.iter_mut().enumerate() {
@@ -172,10 +172,20 @@ fn texts_mut(kind: &mut NodeKind) -> Vec<(Field, &mut String)> {
                     fields.push((Field::nth("argument", index + 1), text));
                 }
             }
+            // As in Wait for OSC: the pattern and rule values; the bind is opened before the run.
+            if let Some(reply) = reply {
+                fields.push((Field::new("reply_address"), &mut reply.address));
+                for (index, rule) in reply.args.iter_mut().enumerate() {
+                    fields.push((Field::nth("rule_value", index + 1), &mut rule.value));
+                }
+            }
         }
-        NodeKind::Udp { target, text } => {
+        NodeKind::Udp { target, text, reply } => {
             fields.push((Field::new("target"), target));
             fields.push((Field::new("payload"), text));
+            if let Some(reply) = reply.as_mut().filter(|reply| reply.mode != UdpMode::Any) {
+                fields.push((Field::new("reply_pattern"), &mut reply.pattern));
+            }
         }
         NodeKind::Tcp { host, payload, .. } => {
             fields.push((Field::new("host"), host));
@@ -229,6 +239,9 @@ pub fn written_var(kind: &NodeKind) -> Option<(&str, &'static str)> {
         NodeKind::Extract { variable, .. } => Some((variable, "next")),
         // A timeout has no reply, so the variable exists on Matched only.
         NodeKind::WaitOsc { variable, .. } | NodeKind::WaitUdp { variable, .. } => Some((variable, "matched")),
+        // A send that expects a reply passes only with one.
+        NodeKind::Osc { reply: Some(reply), .. } => Some((&reply.variable, "next")),
+        NodeKind::Udp { reply: Some(reply), .. } => Some((&reply.variable, "next")),
         _ => None,
     }
 }
@@ -316,27 +329,37 @@ fn check_literals(node: &Node, params: &BTreeMap<String, String>) -> EngineResul
             Some(pattern) => matching::compile_regex(&pattern).map(|_| ()).map_err(|error| error.in_field(Field::new("expected"))),
             None => Ok(()),
         },
-        NodeKind::WaitOsc { address, args, .. } => {
-            if let Some(pattern) = static_text(address, params) {
-                matching::OscPattern::parse(&pattern).map_err(|error| error.in_field(Field::new("address")))?;
-            }
-            for (index, rule) in args.iter().enumerate() {
-                if rule.op == CompareOp::Matches {
-                    if let Some(pattern) = static_text(&rule.value, params) {
-                        matching::compile_regex(&pattern).map_err(|error| error.in_field(Field::nth("rule_value", index + 1)))?;
-                    }
-                }
-            }
-            Ok(())
-        }
-        NodeKind::WaitUdp { mode, pattern, .. } => match (mode, static_text(pattern, params)) {
-            (UdpMode::Regex, Some(text)) => matching::compile_regex(&text).map(|_| ()),
-            (UdpMode::Hex, Some(text)) => matching::parse_hex(&text).map(|_| ()),
-            _ => Ok(()),
-        }
-        .map_err(|error| error.in_field(Field::new("pattern"))),
+        NodeKind::WaitOsc { address, args, .. } => check_osc_reply(address, args, Field::new("address"), params),
+        NodeKind::Osc { reply: Some(reply), .. } => check_osc_reply(&reply.address, &reply.args, Field::new("reply_address"), params),
+        NodeKind::WaitUdp { mode, pattern, .. } => check_udp_pattern(*mode, pattern, Field::new("pattern"), params),
+        NodeKind::Udp { reply: Some(reply), .. } => check_udp_pattern(reply.mode, &reply.pattern, Field::new("reply_pattern"), params),
         _ => Ok(()),
     }
+}
+
+/// A literal OSC address pattern and literal regex rule values compile.
+fn check_osc_reply(address: &str, args: &[matching::ArgRule], field: Field, params: &BTreeMap<String, String>) -> EngineResult<()> {
+    if let Some(pattern) = static_text(address, params) {
+        matching::OscPattern::parse(&pattern).map_err(|error| error.in_field(field))?;
+    }
+    for (index, rule) in args.iter().enumerate() {
+        if rule.op == CompareOp::Matches {
+            if let Some(pattern) = static_text(&rule.value, params) {
+                matching::compile_regex(&pattern).map_err(|error| error.in_field(Field::nth("rule_value", index + 1)))?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// A literal regex compiles and literal hex is hex.
+fn check_udp_pattern(mode: UdpMode, pattern: &str, field: Field, params: &BTreeMap<String, String>) -> EngineResult<()> {
+    match (mode, static_text(pattern, params)) {
+        (UdpMode::Regex, Some(text)) => matching::compile_regex(&text).map(|_| ()),
+        (UdpMode::Hex, Some(text)) => matching::parse_hex(&text).map(|_| ()),
+        _ => Ok(()),
+    }
+    .map_err(|error| error.in_field(field))
 }
 
 /// Template checks before a run (see "Static checks" in the design): syntax,
@@ -600,7 +623,7 @@ mod tests {
 
     fn doc_with(params: &[(&str, &str)], profiles: serde_json::Value, profile: Option<&str>) -> Experiment {
         serde_json::from_value(json!({
-            "version": 3, "name": "p",
+            "version": 4, "name": "p",
             "params": params.iter().map(|(name, value)| json!({ "name": name, "value": value })).collect::<Vec<_>>(),
             "profiles": profiles, "profile": profile, "seed": null,
             "nodes": [{ "id": "start", "type": "start", "x": 0, "y": 0 }, { "id": "end", "type": "end", "x": 0, "y": 0 }],
@@ -656,7 +679,7 @@ mod tests {
     #[test]
     fn secrets_must_be_stored_before_a_run_and_never_leave_in_responses() {
         let doc: Experiment = serde_json::from_value(json!({
-            "version": 3, "name": "s", "params": [], "profiles": [], "profile": null, "seed": null,
+            "version": 4, "name": "s", "params": [], "profiles": [], "profile": null, "seed": null,
             "nodes": [
                 { "id": "start", "type": "start", "x": 0, "y": 0 },
                 { "id": "login", "type": "http", "x": 0, "y": 0, "request": { "method": "GET", "url": "http://127.0.0.1/",
@@ -704,9 +727,9 @@ mod tests {
         let scope = || Scope { params: &params, vars: &vars, secrets: &secrets, run_id: 1, seed: 1, node_id: "osc", count: 1, now_ms: 0 };
         let failed = render_kind(&kind, &mut Renderer::new(scope())).unwrap_err();
         assert_eq!((failed.code.as_str(), failed.field.clone()), ("name.no_value", Some(Field::nth("argument", 3))));
-        let NodeKind::Osc { target, address, mut args } = kind else { panic!() };
+        let NodeKind::Osc { target, address, mut args, .. } = kind else { panic!() };
         args.pop();
-        let kind = NodeKind::Osc { target, address, args };
+        let kind = NodeKind::Osc { target, address, args, reply: None };
         let rendered = render_kind(&kind, &mut Renderer::new(scope())).unwrap();
         assert_eq!(
             serde_json::to_value(rendered).unwrap(),

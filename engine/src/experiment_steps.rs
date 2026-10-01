@@ -4,6 +4,7 @@
 
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
@@ -14,8 +15,8 @@ use super::experiment::NodeKind;
 use super::experiment_actions as actions;
 use super::experiment_data as data;
 use super::http::HttpResponse;
-use super::listen::{Listeners, WaitOutcome};
-use super::matching::{self, Matcher, OscMatcher, UdpMatcher};
+use super::listen::{Listener, Listeners, WaitOutcome};
+use super::matching::{self, Datagram, Matcher, OscMatcher, UdpMatcher};
 
 /// The state a branch carries from step to step. A Join merges the states of
 /// its inputs.
@@ -136,29 +137,54 @@ fn matcher(kind: &NodeKind) -> EngineResult<Box<dyn Matcher>> {
     }
 }
 
+/// The socket this run opened for `bind`; `field` is where a wrong one is shown.
+fn listener_for(listeners: &Listeners, bind: &str, field: &'static str) -> EngineResult<Arc<Listener>> {
+    bind.trim()
+        .parse::<SocketAddr>()
+        .ok()
+        .and_then(|address| listeners.get(&address).cloned())
+        .ok_or_else(|| EngineError::new("wait.not_listening").with("target", bind).in_field(Field::new(field)))
+}
+
+/// A matched reply: its value with the time it took since `since`, and how the
+/// timeline says it.
+struct Reply {
+    value: Value,
+    summary: String,
+    from: String,
+    ms: u64,
+}
+
+fn reply_of(datagram: &Datagram, mut value: Value, since: Instant) -> Reply {
+    let ms = datagram.at.saturating_duration_since(since).as_millis() as u64;
+    value["ms"] = ms.into();
+    Reply { summary: reply_summary(&value), from: datagram.from.to_string(), ms, value }
+}
+
+fn timed_out(listener: &Listener, timeout_ms: u64, unmatched: usize) -> EngineError {
+    let error = EngineError::new("wait.timeout").with("ms", timeout_ms).with("unmatched", unmatched).with("target", listener.local());
+    // A full queue may have pushed the reply out; say so for diagnosis.
+    match listener.dropped() {
+        0 => error,
+        dropped => error.because(format!("listener queue full: {dropped} older datagrams dropped")),
+    }
+}
+
 async fn wait(listeners: &Listeners, has_timeout: bool, run_started: Instant, kind: &NodeKind, context: &BranchContext) -> EngineResult<StepOutcome> {
     let (Some(bind), NodeKind::WaitOsc { timeout_ms, variable, .. } | NodeKind::WaitUdp { timeout_ms, variable, .. }) = (kind.bind(), kind) else {
         return Err(EngineError::new("run.not_a_wait"));
     };
     let matcher = matcher(kind)?;
-    let listener = bind
-        .trim()
-        .parse::<SocketAddr>()
-        .ok()
-        .and_then(|address| listeners.get(&address).cloned())
-        .ok_or_else(|| EngineError::new("wait.not_listening").with("target", bind).in_field(Field::new("bind")))?;
+    let listener = listener_for(listeners, bind, "bind")?;
     let since = context.last_action.unwrap_or(run_started);
     match listener.wait(matcher.as_ref(), since, Duration::from_millis(*timeout_ms)).await? {
-        WaitOutcome::Matched(datagram, mut reply) => {
-            let ms = datagram.at.saturating_duration_since(since).as_millis() as u64;
-            reply["ms"] = ms.into();
-            let summary = reply_summary(&reply);
-            let from = datagram.from.to_string();
+        WaitOutcome::Matched(datagram, value) => {
+            let Reply { value, summary, from, ms } = reply_of(&datagram, value, since);
             Ok(StepOutcome {
                 port: "matched",
                 detail: format!("{summary} ← {from} · {ms} ms"),
                 message: Some(("exp.step.matched", json!({ "summary": summary, "from": from, "ms": ms }))),
-                written: Some(BTreeMap::from([(variable.clone(), reply)])),
+                written: Some(BTreeMap::from([(variable.clone(), value)])),
             })
         }
         WaitOutcome::TimedOut { unmatched } if has_timeout => Ok(StepOutcome {
@@ -167,14 +193,42 @@ async fn wait(listeners: &Listeners, has_timeout: bool, run_started: Instant, ki
             message: Some(("exp.step.timedOut", json!({ "ms": timeout_ms, "unmatched": unmatched }))),
             written: None,
         }),
-        WaitOutcome::TimedOut { unmatched } => {
-            let error = EngineError::new("wait.timeout").with("ms", timeout_ms).with("unmatched", unmatched).with("target", listener.local());
-            // A full queue may have pushed the reply out; say so for diagnosis.
-            Err(match listener.dropped() {
-                0 => error,
-                dropped => error.because(format!("listener queue full: {dropped} older datagrams dropped")),
+        WaitOutcome::TimedOut { unmatched } => Err(timed_out(&listener, *timeout_ms, unmatched)),
+    }
+}
+
+/// An OSC message or datagram that expects an answer: sent from the socket the
+/// run opened on the reply's bind (a device answering the sender is heard),
+/// then the reply is awaited there. No reply in time fails the step, which a
+/// retry can repeat.
+async fn send_and_wait(env: &StepEnv<'_>, kind: &NodeKind, context: &mut BranchContext) -> EngineResult<StepOutcome> {
+    let (bind, timeout_ms, variable, matcher): (&str, u64, &str, Box<dyn Matcher>) = match kind {
+        NodeKind::Osc { reply: Some(reply), .. } => {
+            let matcher = OscMatcher::new(&reply.address, &reply.args).map_err(|error| error.in_field(Field::new("reply_address")))?;
+            (&reply.bind, reply.timeout_ms, &reply.variable, Box::new(matcher))
+        }
+        NodeKind::Udp { reply: Some(reply), .. } => {
+            let matcher = UdpMatcher::new(reply.mode, &reply.pattern).map_err(|error| error.in_field(Field::new("reply_pattern")))?;
+            (&reply.bind, reply.timeout_ms, &reply.variable, Box::new(matcher))
+        }
+        _ => return Err(EngineError::new("run.not_an_action")),
+    };
+    let listener = listener_for(&env.listeners, bind, "reply_bind")?;
+    let since = Instant::now();
+    context.last_action = Some(since);
+    let sent = actions::send_via(env.host, &listener, kind).await?;
+    match listener.wait(matcher.as_ref(), since, Duration::from_millis(timeout_ms)).await? {
+        WaitOutcome::Matched(datagram, value) => {
+            let Reply { value, summary, from, ms } = reply_of(&datagram, value, since);
+            context.vars.insert(variable.to_string(), value.clone());
+            Ok(StepOutcome {
+                port: "next",
+                detail: format!("{} · {summary} ← {from} · {ms} ms", sent.detail),
+                message: Some(("exp.step.replied", json!({ "summary": summary, "from": from, "ms": ms }))),
+                written: Some(BTreeMap::from([(variable.to_string(), value)])),
             })
         }
+        WaitOutcome::TimedOut { unmatched } => Err(timed_out(&listener, timeout_ms, unmatched).in_field(Field::new("reply_bind"))),
     }
 }
 
@@ -186,6 +240,7 @@ pub async fn execute(env: &StepEnv<'_>, kind: &NodeKind, context: &mut BranchCon
         NodeKind::Fork => Ok(StepOutcome::next("Forked 2 branches").said("exp.step.forked", json!({}))),
         NodeKind::Join => Ok(StepOutcome::next("Synchronized branches").said("exp.step.joined", json!({ "count": env.inputs }))),
         NodeKind::Log { message } => Ok(StepOutcome::next(message.clone())),
+        kind if kind.expects_reply() => send_and_wait(env, kind, context).await,
         kind if kind.is_action() => {
             // Before sending: a reply can arrive while the send is still being reported.
             context.last_action = Some(Instant::now());

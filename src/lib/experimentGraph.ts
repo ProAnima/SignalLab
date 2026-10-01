@@ -102,16 +102,19 @@ function overlaps(nodes: ExperimentNode[], x: number, y: number): boolean {
   return nodes.some((node) => Math.abs(node.x - x) < NODE_WIDTH + 12 && Math.abs(node.y - y) < NODE_HEIGHT + 12);
 }
 
-/** A free spot beside the anchor: in line with the wire it joins, or below a sibling. */
+/**
+ * A free spot beside the anchor: one step to the right, in the source's row
+ * (lower for its second output), moved down past any node already there — a
+ * wire may lead to a node in another row, which is no place for the new one.
+ */
 export function placeAfter(doc: Experiment, anchor: Anchor): { x: number; y: number } {
   const source = doc.nodes.find((node) => node.id === anchor.from);
   if (!source) return { x: 40, y: 40 };
-  const edge = wireOf(doc, anchor);
-  const target = edge && doc.nodes.find((node) => node.id === edge.to);
   const x = source.x + STEP_X;
-  if (target) return { x, y: target.y };
   let y = source.y + Math.max(0, validPortsFor(source.type).indexOf(anchor.port)) * STEP_Y;
-  while (overlaps(doc.nodes, x, y)) y += STEP_Y;
+  // Splicing into a wire shifts what follows it, so its own target does not count.
+  const target = wireOf(doc, anchor)?.to;
+  while (overlaps(doc.nodes.filter((node) => node.id !== target), x, y)) y += STEP_Y;
   return { x, y };
 }
 

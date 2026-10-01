@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { historyReducer, newHistory, HISTORY_LIMIT } from "../src/lib/editHistory.ts";
 import { addAfter, addBranch, anchorAfter, arrangeNodes, connect, createNode, disconnect, duplicateNode, insertOnEdge, isWired, missingOutputs, placeAfter, removeNode, requiredPortsFor, unreachableNodes, validPortsFor, NODE_WIDTH, NODE_HEIGHT } from "../src/lib/experimentGraph.ts";
 import { ADDABLE_NODES, NODE_CATALOG } from "../src/lib/experimentCatalog.ts";
-import { jsonPath, suggestVariableName, templateAt, variablesBefore, isIdent, effectiveParams, renameParam, removeParam, setParamValue, addProfile, renameProfile, removeProfile, secretNames, replyFields, writtenVariable } from "../src/lib/experimentData.ts";
+import { jsonPath, suggestVariableName, templateAt, variablesBefore, isIdent, effectiveParams, renameParam, removeParam, setParamValue, addProfile, renameProfile, removeProfile, secretNames, replyFields, writtenVariable, canRetry, defaultReply, DEFAULT_RETRY } from "../src/lib/experimentData.ts";
 import { describeError, failureNode, fieldLabel, isEngineError, messageParams, responseFailure } from "../src/lib/errors.ts";
 import { en } from "../src/lib/locales/en.ts";
 import { ru } from "../src/lib/locales/ru.ts";
@@ -407,5 +407,35 @@ test("an output can feed several nodes: wires add up, and each one is cut, splic
   assert.equal(removed.edges.filter((edge) => edge.from === "start" && edge.to === "end").length, 1);
   // A loop through parallel wires is still refused.
   assert.equal(connect(wired, "end", "next", "start"), wired);
+});
+
+test("a send that waits for its reply writes the reply on Next, and only senders and waits retry", () => {
+  const ping = { ...createNode("osc", 240, 40), id: "ping" };
+  assert.equal(writtenVariable(ping), null, "without a reply nothing is written");
+  assert.deepEqual(replyFields(ping), []);
+  const asking = { ...ping, reply: { ...defaultReply("osc"), variable: "pong" } };
+  assert.deepEqual(writtenVariable(asking), { name: "pong", port: "next" });
+  assert.ok(replyFields(asking).includes("args[0]"));
+  const udp = { ...createNode("udp", 240, 40), reply: { ...defaultReply("udp"), mode: "regex", pattern: "ACK (.+)" } };
+  assert.ok(replyFields(udp).includes("match"), "a pattern's capture is offered");
+  assert.ok(defaultReply("osc").bind.endsWith(":0"), "any free port until the user picks one");
+  // The reply is known downstream of the send.
+  const graph = fixture();
+  const doc = { ...graph, nodes: [graph.nodes[0], asking, { ...createNode("log", 440, 40), id: "log" }, graph.nodes[2]],
+    edges: [{ from: "start", to: "ping" }, { from: "ping", to: "log" }, { from: "log", to: "end" }] };
+  assert.deepEqual(variablesBefore(doc, "log").map((item) => item.name), ["pong"]);
+  for (const type of ["http", "tcp", "mqtt", "osc", "udp", "wait_osc", "wait_udp"]) assert.ok(canRetry(createNode(type, 0, 0)), type);
+  for (const type of ["delay", "log", "assert_status", "extract", "fork", "start"]) assert.ok(!canRetry(createNode(type, 0, 0)), type);
+  assert.ok(DEFAULT_RETRY.attempts >= 2 && DEFAULT_RETRY.attempts <= 10);
+});
+
+test("a node added after a lower branch stays in that branch's row instead of landing on another node", () => {
+  const graph = fixture();
+  const lower = { ...createNode("delay", 240, 200), id: "lower" };
+  // The lower branch leads back up to End, in the main row.
+  const doc = connect(addBranch(graph, { from: "start", port: "next" }, lower), "lower", "next", "end");
+  const spot = placeAfter(doc, { from: "lower", port: "next" });
+  assert.equal(spot.y, lower.y, "in the source's row, not End's");
+  assert.ok(!doc.nodes.some((node) => Math.abs(node.x - spot.x) < NODE_WIDTH && Math.abs(node.y - spot.y) < NODE_HEIGHT), "on a free spot");
 });
 

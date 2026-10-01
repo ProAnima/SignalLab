@@ -3,7 +3,6 @@
 //! module decides which step runs next and reports it.
 
 use std::collections::{BTreeMap, HashMap};
-use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -16,7 +15,7 @@ use super::error::{EngineError, EngineResult, Field};
 use super::experiment::{Experiment, Node, NodeKind};
 use super::experiment_data as data;
 use super::experiment_steps::{self as steps, BranchContext, StepEnv};
-use super::experiment_validate::{check_bind, validate_run};
+use super::experiment_validate::{check_bind, check_reply_bind, validate_run};
 use super::http::HttpResponse;
 use super::jobs::{now_ms, JobInfo, JobRegistry, TaskGuard};
 use super::listen::{FrameSink, Listener, Listeners};
@@ -154,6 +153,18 @@ impl Step {
 
     fn failed(error: EngineError) -> Self {
         Step { state: "failed", detail: String::new(), message: None, vars: None, error: Some(error) }
+    }
+
+    /// An attempt failed and the step will run again after `pause`.
+    fn retrying(error: EngineError, attempt: u32, attempts: u32, pause: Duration) -> Self {
+        let ms = pause.as_millis() as u64;
+        Step {
+            state: "retry",
+            detail: format!("Attempt {attempt} of {attempts} failed; again in {ms} ms"),
+            message: Some(("exp.step.retrying", serde_json::json!({ "attempt": attempt, "attempts": attempts, "ms": ms }))),
+            vars: None,
+            error: Some(error),
+        }
     }
 }
 
@@ -312,8 +323,27 @@ async fn run_branch(
             inputs: shared.joins.lock().ok().and_then(|joins| joins.get(&current).map(|barrier| barrier.expected)).unwrap_or(1),
             run_started: shared.started,
         };
+        // A failed attempt of an action or wait is reported and made again
+        // after its pause; a template that does not resolve is not retried.
         let result = match rendered {
-            Ok(kind) => steps::execute(&env, &kind, &mut context).await,
+            Ok(kind) => {
+                let retry = node.retry.as_ref().filter(|_| node.kind.retries());
+                let mut attempt = 1;
+                loop {
+                    let result = steps::execute(&env, &kind, &mut context).await;
+                    let Some(retry) = retry else { break result };
+                    match result {
+                        Err(error) if attempt < retry.attempts && !shared.stop_flag.load(Ordering::Relaxed) => {
+                            let pause = retry.pause_before(attempt + 1);
+                            emit(&shared, &current, Step::retrying(error.at(&current), attempt, retry.attempts, pause));
+                            // Stop aborts this task, so the pause ends with it.
+                            tokio::time::sleep(pause).await;
+                            attempt += 1;
+                        }
+                        other => break other,
+                    }
+                }
+            }
             Err(error) => Err(error),
         };
         let port = match result {
@@ -352,11 +382,16 @@ async fn arm_listeners(nodes: &[Node], sink: Arc<dyn FrameSink>) -> EngineResult
     let mut listeners = Listeners::new();
     for node in nodes {
         let Some(bind) = node.kind.bind() else { continue };
-        let address: SocketAddr = check_bind(bind).map_err(|error| error.at(&node.id))?;
+        // A send that expects a reply may listen on any free port (0): it sends from there.
+        let (address, field) = if node.kind.expects_reply() {
+            (check_reply_bind(bind).map_err(|error| error.at(&node.id))?, "reply_bind")
+        } else {
+            (check_bind(bind).map_err(|error| error.at(&node.id))?, "bind")
+        };
         if listeners.contains_key(&address) {
             continue;
         }
-        let listener = Listener::arm(address, sink.clone()).await.map_err(|error| error.in_field(Field::new("bind")).at(&node.id))?;
+        let listener = Listener::arm(address, sink.clone()).await.map_err(|error| error.in_field(Field::new(field)).at(&node.id))?;
         listeners.insert(address, Arc::new(listener));
     }
     Ok(listeners)

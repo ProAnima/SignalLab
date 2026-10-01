@@ -4,7 +4,7 @@
  * it: suggestions, the variables visible at a node, JSON paths for "Extract as
  * variable". See docs/milestone-3-data.md.
  */
-import type { Experiment, ExperimentNode, ExperimentProfile } from "./api";
+import type { Experiment, ExperimentNode, ExperimentProfile, OscReply, Retry, UdpMode, UdpReply } from "./api";
 import type { TKey } from "./i18n";
 
 /** Names with a meaning of their own; mirrors `template::RESERVED`. */
@@ -29,6 +29,8 @@ export const hasTemplate = (text: string) => /(^|[^\\])\{\{/.test(text);
 export function writtenVariable(node: ExperimentNode): { name: string; port: string } | null {
   if (node.type === "extract") return node.variable ? { name: node.variable, port: "next" } : null;
   if (node.type === "wait_osc" || node.type === "wait_udp") return node.variable ? { name: node.variable, port: "matched" } : null;
+  // A send that waits for its reply passes only with one, so the reply exists on Next.
+  if ((node.type === "osc" || node.type === "udp") && node.reply) return node.reply.variable ? { name: node.reply.variable, port: "next" } : null;
   return null;
 }
 
@@ -65,10 +67,29 @@ export function variablesBefore(doc: Experiment, id: string): { name: string; no
 
 /** The fields of a wait's reply value, for suggestions (`reply.args[0]`). */
 export function replyFields(node: ExperimentNode): string[] {
-  if (node.type === "wait_osc") return ["address", "args[0]", "from", "ms"];
-  if (node.type === "wait_udp") return node.mode === "regex" || node.mode === "contains" || node.mode === "hex"
-    ? ["text", "match", "hex", "bytes", "from", "ms"] : ["text", "hex", "bytes", "from", "ms"];
+  const osc = ["address", "args[0]", "from", "ms"];
+  const udp = (mode: UdpMode) => mode === "any" ? ["text", "hex", "bytes", "from", "ms"] : ["text", "match", "hex", "bytes", "from", "ms"];
+  if (node.type === "wait_osc" || (node.type === "osc" && node.reply)) return osc;
+  if (node.type === "wait_udp") return udp(node.mode);
+  if (node.type === "udp" && node.reply) return udp(node.reply.mode);
   return [];
+}
+
+/** A reply to wait for, as the node first gets it: on any free port, the matching of a Wait. */
+export function defaultReply(type: "osc"): OscReply;
+export function defaultReply(type: "udp"): UdpReply;
+export function defaultReply(type: "osc" | "udp"): OscReply | UdpReply {
+  return type === "osc"
+    ? { bind: "0.0.0.0:0", address: "/*", args: [], timeout_ms: 2000, variable: "reply" }
+    : { bind: "0.0.0.0:0", mode: "any", pattern: "", timeout_ms: 2000, variable: "reply" };
+}
+
+/** Retry as the node first gets it: three attempts, half a second apart. */
+export const DEFAULT_RETRY: Retry = { attempts: 3, delay_ms: 500, backoff: "fixed" };
+
+/** Sends or listens, so a second attempt may succeed (the engine's `NodeKind::retries`). */
+export function canRetry(node: ExperimentNode): boolean {
+  return ["http", "tcp", "mqtt", "osc", "udp", "wait_osc", "wait_udp"].includes(node.type);
 }
 
 /** `$.items[0]["first name"]` from the steps into a JSON value. */

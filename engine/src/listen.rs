@@ -109,6 +109,9 @@ pub enum WaitOutcome {
 /// One open socket and its queue. Dropping it closes the socket.
 pub struct Listener {
     local: SocketAddr,
+    /// Also for sending: a step that expects a reply sends from here, so a
+    /// device that answers the sender's port is heard.
+    socket: Arc<UdpSocket>,
     queue: Arc<Queue>,
     task: tokio::task::AbortHandle,
 }
@@ -151,8 +154,9 @@ async fn bind_socket(bind: SocketAddr) -> io::Result<UdpSocket> {
 
 impl Listener {
     pub async fn arm(bind: SocketAddr, sink: Arc<dyn FrameSink>) -> EngineResult<Listener> {
-        let socket = bind_socket(bind).await.map_err(|error| bind_error(bind, error))?;
+        let socket = Arc::new(bind_socket(bind).await.map_err(|error| bind_error(bind, error))?);
         let local = socket.local_addr().unwrap_or(bind);
+        let receiving = socket.clone();
         let queue = Arc::new(Queue {
             datagrams: Mutex::new(VecDeque::new()),
             dropped: AtomicU64::new(0),
@@ -163,7 +167,7 @@ impl Listener {
         let task = tokio::spawn(async move {
             let mut buffer = vec![0u8; 65_536];
             loop {
-                match socket.recv_from(&mut buffer).await {
+                match receiving.recv_from(&mut buffer).await {
                     Ok((size, from)) => {
                         let datagram = Datagram { bytes: buffer[..size].to_vec(), from, at: Instant::now() };
                         sink.received(local, &datagram);
@@ -179,7 +183,12 @@ impl Listener {
                 }
             }
         });
-        Ok(Listener { local, queue, task: task.abort_handle() })
+        Ok(Listener { local, socket, queue, task: task.abort_handle() })
+    }
+
+    /// Send from this socket: the reply to the sender's port arrives here.
+    pub async fn send_to(&self, bytes: &[u8], to: SocketAddr) -> io::Result<usize> {
+        self.socket.send_to(bytes, to).await
     }
 
     pub fn local(&self) -> SocketAddr {
@@ -307,6 +316,24 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         assert!(reopened.is_some(), "dropping the listener closes its socket");
+    }
+
+    #[tokio::test]
+    async fn a_device_answering_the_senders_port_reaches_the_queue() {
+        let listener = armed().await;
+        // An echo device: replies to wherever the datagram came from.
+        let device = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let device_address = device.local_addr().unwrap();
+        tokio::spawn(async move {
+            let mut buffer = [0u8; 64];
+            let (size, from) = device.recv_from(&mut buffer).await.unwrap();
+            device.send_to(&[b"re: ", &buffer[..size]].concat(), from).await.unwrap();
+        });
+        let since = Instant::now();
+        listener.send_to(b"ping", device_address).await.unwrap();
+        let outcome = listener.wait(&contains("re: ping"), since, Duration::from_secs(2)).await.unwrap();
+        let WaitOutcome::Matched(datagram, _) = outcome else { panic!("the echo came back to the listener") };
+        assert_eq!(datagram.from, device_address);
     }
 
     #[test]

@@ -199,6 +199,12 @@ Dockerfile, deploy/compose.yaml, scripts/image.mjs   the server image and its sm
   `disconnect()` and an `Anchor` name one wire with `to`. A dragged wire always
   adds (`addBranch` on empty canvas); *A* / *Add next* / ＋ splice (`addAfter`).
   The same wire twice is `doc.connection_duplicate`.
+- **Retry and replies are node settings, not nodes.** `Node::retry` applies to
+  actions and waits (`NodeKind::retries`); the runner repeats only execution,
+  emits a `retry` step per failed attempt, and Stop ends a pause by aborting the
+  branch. An OSC/UDP node with `reply` sends from the listener on `reply.bind`
+  (`Listener::send_to`, port 0 allowed) and waits there in the same step; its
+  variable is written on Next. Both are document version 4.
 - **Waits listen from the start of the run.** `listen::Listener`s are opened in
   `experiment_run::start` before the job exists (a taken port is a Run error at
   the wait), shared per bind, and dropped with the run. A wait counts datagrams

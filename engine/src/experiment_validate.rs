@@ -8,7 +8,7 @@ use std::net::SocketAddr;
 use serde::Serialize;
 
 use super::error::{EngineError, EngineResult, Field};
-use super::experiment::{Edge, Experiment, NodeKind, MAX_NODES, PORTS, VERSION};
+use super::experiment::{Edge, Experiment, NodeKind, Retry, MAX_NODES, PORTS, VERSION};
 use super::experiment_data::{self as data, ExtractFrom};
 use super::matching::{UdpMode, MAX_ARG_INDEX};
 
@@ -53,6 +53,42 @@ pub fn check_bind(bind: &str) -> EngineResult<SocketAddr> {
         Ok(address) if address.port() != 0 => Ok(address),
         _ => Err(EngineError::new("node.bind_invalid").with("value", bind).in_field(Field::new("bind"))),
     }
+}
+
+/// Where a send that expects a reply listens. Port 0 is allowed: the message
+/// goes out from that socket, so a device answering the sender finds it.
+pub fn check_reply_bind(bind: &str) -> EngineResult<SocketAddr> {
+    let field = Field::new("reply_bind");
+    if bind.trim().is_empty() {
+        return Err(required(field));
+    }
+    bind.trim().parse::<SocketAddr>().map_err(|_| EngineError::new("node.bind_invalid").with("value", bind).in_field(field))
+}
+
+/// The most attempts a retry may make, the first included.
+pub const MAX_ATTEMPTS: u32 = 10;
+
+fn check_retry(kind: &NodeKind, retry: &Retry) -> EngineResult<()> {
+    if !kind.retries() {
+        return Err(EngineError::new("node.retry_unsupported").in_field(Field::new("retry")));
+    }
+    if !(1..=MAX_ATTEMPTS).contains(&retry.attempts) {
+        return Err(range(Field::new("attempts"), 1, MAX_ATTEMPTS as u64));
+    }
+    if retry.delay_ms > MAX_DELAY_MS {
+        return Err(range(Field::new("retry_delay"), 0, MAX_DELAY_MS));
+    }
+    Ok(())
+}
+
+fn check_rules(count: usize, indexes: impl Iterator<Item = usize>) -> EngineResult<()> {
+    if count > MAX_RULES {
+        return Err(EngineError::new("node.rules_too_many").with("max", MAX_RULES).in_field(Field::new("rules")));
+    }
+    if let Some(index) = indexes.into_iter().position(|index| index > MAX_ARG_INDEX) {
+        return Err(range(Field::nth("rule", index + 1), 0, MAX_ARG_INDEX as u64));
+    }
+    Ok(())
 }
 
 fn header_valid(name: &str) -> bool {
@@ -137,9 +173,17 @@ fn check_node(kind: &NodeKind, params: &BTreeMap<String, String>) -> EngineResul
                 return Err(range(Field::new("qos"), 0, 2));
             }
         }
-        NodeKind::Osc { target, address, .. } => {
+        NodeKind::Osc { target, address, reply, .. } => {
             if target.trim().is_empty() {
                 return Err(required(Field::new("target")));
+            }
+            if let Some(reply) = reply {
+                check_reply_bind(&reply.bind)?;
+                if reply.address.trim().is_empty() {
+                    return Err(required(Field::new("reply_address")));
+                }
+                check_rules(reply.args.len(), reply.args.iter().map(|rule| rule.index))?;
+                check_timeout(reply.timeout_ms)?;
             }
             if address.trim().is_empty() {
                 return Err(required(Field::new("address")));
@@ -151,12 +195,19 @@ fn check_node(kind: &NodeKind, params: &BTreeMap<String, String>) -> EngineResul
                 return Err(EngineError::new("node.target_invalid").with("value", target).in_field(Field::new("target")));
             }
         }
-        NodeKind::Udp { target, text } => {
+        NodeKind::Udp { target, text, reply } => {
             if target.trim().is_empty() {
                 return Err(required(Field::new("target")));
             }
             if text.len() > MAX_DATAGRAM {
                 return Err(too_long(Field::new("payload"), MAX_DATAGRAM));
+            }
+            if let Some(reply) = reply {
+                check_reply_bind(&reply.bind)?;
+                if reply.mode != UdpMode::Any && reply.pattern.is_empty() {
+                    return Err(required(Field::new("reply_pattern")));
+                }
+                check_timeout(reply.timeout_ms)?;
             }
         }
         NodeKind::Extract { from, expr, .. } => {
@@ -170,12 +221,7 @@ fn check_node(kind: &NodeKind, params: &BTreeMap<String, String>) -> EngineResul
             if address.trim().is_empty() {
                 return Err(required(Field::new("address")));
             }
-            if args.len() > MAX_RULES {
-                return Err(EngineError::new("node.rules_too_many").with("max", MAX_RULES).in_field(Field::new("rules")));
-            }
-            if let Some(index) = args.iter().position(|rule| rule.index > MAX_ARG_INDEX) {
-                return Err(range(Field::nth("rule", index + 1), 0, MAX_ARG_INDEX as u64));
-            }
+            check_rules(args.len(), args.iter().map(|rule| rule.index))?;
             check_timeout(*timeout_ms)?;
         }
         NodeKind::WaitUdp { bind, mode, pattern, timeout_ms, .. } => {
@@ -294,6 +340,9 @@ pub fn validate_with(doc: &Experiment, params: &BTreeMap<String, String>) -> Eng
     data::check_names(doc)?;
     for node in &doc.nodes {
         check_node(&node.kind, params).map_err(|error| error.at(&node.id))?;
+        if let Some(retry) = &node.retry {
+            check_retry(&node.kind, retry).map_err(|error| error.at(&node.id))?;
+        }
     }
     // validate_document guarantees exactly one Start.
     let start = doc.nodes.iter().find(|node| matches!(node.kind, NodeKind::Start)).map(|node| node.id.clone()).unwrap_or_default();
@@ -425,7 +474,7 @@ mod tests {
         doc.edges.pop();
         assert_eq!(problem(validate(&doc)), ("graph.outputs_required".into(), Some("check".into()), None));
         let mut doc = starter();
-        doc.nodes.push(Node { id: "orphan".into(), x: 0.0, y: 0.0, kind: NodeKind::Log { message: "x".into() } });
+        doc.nodes.push(Node { id: "orphan".into(), x: 0.0, y: 0.0, retry: None, kind: NodeKind::Log { message: "x".into() } });
         doc.edges.push(Edge { from: "orphan".into(), to: "end".into(), port: "next".into() });
         assert_eq!(problem(validate(&doc)), ("graph.unreachable".into(), Some("orphan".into()), None));
     }
@@ -441,7 +490,7 @@ mod tests {
     fn branch_paths_join_and_incomplete_drafts_save() {
         let mut doc = starter();
         doc.nodes[2].kind = NodeKind::BranchStatus { status: 200 };
-        doc.nodes.push(Node { id: "good".into(), x: 540.0, y: 30.0, kind: NodeKind::Delay { ms: 10 } });
+        doc.nodes.push(Node { id: "good".into(), x: 540.0, y: 30.0, retry: None, kind: NodeKind::Delay { ms: 10 } });
         doc.edges.pop();
         doc.edges.extend([
             Edge { from: "check".into(), to: "good".into(), port: "yes".into() },
@@ -505,8 +554,8 @@ mod tests {
         doc.nodes[1].id = "fork".into();
         doc.nodes[2].kind = NodeKind::Join;
         doc.nodes[2].id = "join".into();
-        doc.nodes.push(Node { id: "branch_a".into(), x: 240.0, y: 20.0, kind: NodeKind::Delay { ms: 100 } });
-        doc.nodes.push(Node { id: "branch_b".into(), x: 240.0, y: 120.0, kind: NodeKind::Log { message: "Parallel test".into() } });
+        doc.nodes.push(Node { id: "branch_a".into(), x: 240.0, y: 20.0, retry: None, kind: NodeKind::Delay { ms: 100 } });
+        doc.nodes.push(Node { id: "branch_b".into(), x: 240.0, y: 120.0, retry: None, kind: NodeKind::Log { message: "Parallel test".into() } });
         doc.edges = vec![
             Edge { from: "start".into(), to: "fork".into(), port: "next".into() },
             Edge { from: "fork".into(), to: "branch_a".into(), port: "branch1".into() },

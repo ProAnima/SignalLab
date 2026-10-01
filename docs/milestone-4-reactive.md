@@ -1,6 +1,6 @@
 # Milestone 4 — reactive flows: detailed design
 
-Status: PR 4.1 delivered, 2026-10-01. Parent plan: [ROADMAP.md](../ROADMAP.md#4-reactive-flows-wait-for-replies-retry-repeat).
+Status: PR 4.1 delivered, 2026-10-01; PR 4.2 part 1 (a reply in the same node, Retry) delivered, 2026-10-02. Parent plan: [ROADMAP.md](../ROADMAP.md#4-reactive-flows-wait-for-replies-retry-repeat).
 
 PR 4.1 lets an experiment **wait for a device's reply**. Waiting is where most things go wrong — a port is taken, a reply never comes, a pattern is mistyped — so the same PR replaces the engine's English error strings with **structured, localized errors** everywhere the experiment engine reports a problem.
 
@@ -134,7 +134,55 @@ Screens are mounted on first visit and kept, hidden, afterwards, so switching ta
 
 *Expect reply* on action nodes, *Wait for this* from the OSC monitor, and Wait for MQTT.
 
-## 4. Tests
+## 4. PR 4.2, part 1 — a reply in the same node, and Retry
+
+### Wait for a reply
+
+An **OSC message** or a **UDP datagram** may wait for its answer in the same
+step (`reply` in the node; document version 4):
+
+| Reply of | Fields |
+| --- | --- |
+| OSC | `bind`, `address` pattern, argument rules, `timeout_ms`, `variable` — as *Wait for OSC* |
+| UDP | `bind`, `mode`, `pattern`, `timeout_ms`, `variable` — as *Wait for UDP* |
+
+- The socket on `bind` is opened when the run starts, like a wait's, and the
+  message **goes out from it**: a device that answers the sender's own port is
+  heard, and one that answers a fixed port is heard when that port is `bind`.
+  Port 0 means any free port, for the first kind.
+- The step passes with a matching reply (`exp.step.replied`), which becomes the
+  variable on its Next output. No reply in time fails the step (`wait.timeout`
+  in the field *Reply on*); there is no Timeout output — a separate Wait node is
+  the way to branch on silence, and Retry is the way to send again.
+- Validation: as for waits, plus `reply_bind` (port 0 allowed), `reply_address`
+  and `reply_pattern` as fields of their own, so a problem points at the right
+  input.
+
+### Retry
+
+Every action and wait may retry (`retry` in the node): `attempts` 1–10 in all,
+`delay_ms` 0–60 000 before the second attempt, `backoff` `fixed` or
+`exponential` (the pause doubles; never longer than a minute).
+
+- A failed attempt is a step event of its own, state `retry`, with the reason
+  (`error`) and `exp.step.retrying {attempt, attempts, ms}`; the timeline shows
+  both, and the node's badge turns amber. The step then passes, or fails with
+  the last attempt's reason.
+- Only execution is retried: a template that does not resolve fails at once.
+  A wait whose Timeout output is wired does not fail on a timeout, so it is not
+  retried — it follows Timeout.
+- An attempt of a send that expects a reply sends again; an attempt of a wait
+  waits again, counting from the branch's latest action as before.
+- Stop aborts the branch, so a pause ends with it; nothing is sent after Stop.
+- Other node kinds refuse a retry (`node.retry_unsupported`).
+
+### Interface
+
+*wait for a reply* and *retry on failure* are checkboxes in the node's
+properties that open their fields; the canvas shows `⇠ /pong` after a send that
+waits and `↻3` for the attempts. Suggestions offer `reply.…` after such a send.
+
+## 5. Tests
 
 - Error: builders, masking of params and detail, serialization; a scan that every code and field key used by the engine has an English text and no text is stale.
 - Matching: OSC patterns (wildcards, sets, alternatives, malformed patterns with positions), argument rules with numbers and text, UDP modes, hex parsing.

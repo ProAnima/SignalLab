@@ -12,8 +12,11 @@ use super::broadcast::{self, EmitConfig, Payload, TargetMode};
 use super::error::{EngineError, EngineResult, Field};
 use super::experiment::NodeKind;
 use super::http::{self, HttpResponse};
+use super::inspect::{self, Frame};
+use super::listen::Listener;
 use super::mqtt::{self, MqttCause, MqttFailure};
 use super::osc;
+use super::osc_codec::{arg_str, encode_message};
 use super::transport::{self, Cause};
 
 /// A one-shot publish gets this long for connect, publish and acknowledgement.
@@ -159,10 +162,42 @@ pub async fn execute(host: &Host, client_id: String, kind: &NodeKind) -> EngineR
                 }
             }
         }
-        NodeKind::Osc { target, address, args } => osc_message(host, target, address, args).await,
-        NodeKind::Udp { target, text } => udp(host, target, text).await,
+        NodeKind::Osc { target, address, args, .. } => osc_message(host, target, address, args).await,
+        NodeKind::Udp { target, text, .. } => udp(host, target, text).await,
         _ => Err(EngineError::new("run.not_an_action")),
     }
+}
+
+/// Send an OSC message or a datagram from `listener`'s socket, for a step that
+/// waits there for the answer. Reported to the Inspector like any send.
+pub async fn send_via(host: &Host, listener: &Listener, kind: &NodeKind) -> EngineResult<ActionOutcome> {
+    let in_target = |error: EngineError| error.in_field(Field::new("target"));
+    let (proto, packet, summary, targets) = match kind {
+        NodeKind::Osc { target, address, args, .. } => {
+            let to: SocketAddr = target.trim().parse().map_err(|_| in_target(Cause::TargetInvalid.error(target)))?;
+            let summary = std::iter::once(address.clone()).chain(args.iter().map(arg_str)).collect::<Vec<_>>().join(" ");
+            ("osc", encode_message(address, args), summary, vec![to])
+        }
+        NodeKind::Udp { target, text, .. } => {
+            let mut resolved = Vec::new();
+            for part in target.split([',', ';', '\n']).map(str::trim).filter(|part| !part.is_empty()) {
+                resolved.push(transport::resolve(part).await.map_err(in_target)?);
+            }
+            if resolved.is_empty() {
+                return Err(in_target(EngineError::new("node.required")));
+            }
+            ("udp", text.as_bytes().to_vec(), inspect::ascii_preview(text.as_bytes(), 96), resolved)
+        }
+        _ => return Err(EngineError::new("run.not_an_action")),
+    };
+    for to in &targets {
+        listener.send_to(&packet, *to).await.map_err(|error| in_target(io_error(error, &to.to_string())))?;
+        if inspect::armed(host) {
+            inspect::publish(host, Frame::tx(proto, "experiment").local(listener.local()).remote(to).payload(&packet).summary(summary.clone()));
+        }
+    }
+    let shown: Vec<String> = targets.iter().map(SocketAddr::to_string).collect();
+    Ok(sent(format!("{} B → {} (from {})", packet.len(), shown.join(", "), listener.local())))
 }
 
 #[cfg(test)]

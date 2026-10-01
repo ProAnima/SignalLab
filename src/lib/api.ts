@@ -71,8 +71,17 @@ export interface EngineError {
 export type ExtractFrom = "json" | "header" | "status" | "body" | "regex";
 export type CompareOp = "eq" | "ne" | "lt" | "le" | "gt" | "ge" | "contains" | "matches" | "empty" | "not_empty";
 
+/** Try a failed send or wait again: attempts in all, the pause before the second, fixed or doubling. */
+export interface Retry { attempts: number; delay_ms: number; backoff?: "fixed" | "exponential" }
+/** The answer an OSC message waits for in the same step (the matching of Wait for OSC). */
+export interface OscReply { bind: string; address: string; args: ArgRule[]; timeout_ms: number; variable: string }
+/** The answer a datagram waits for in the same step (the matching of Wait for UDP). */
+export interface UdpReply { bind: string; mode: UdpMode; pattern: string; timeout_ms: number; variable: string }
+
 export type ExperimentNode = {
   id: string; x: number; y: number;
+  /** Actions and waits only. */
+  retry?: Retry;
 } & (
   | { type: "start" | "end" | "fork" | "join" }
   | { type: "delay"; ms: number }
@@ -85,8 +94,8 @@ export type ExperimentNode = {
   | { type: "assert_latency"; max_ms: number }
   | { type: "mqtt"; host: string; port: number; topic: string; payload: string; qos: number; retain: boolean }
   | { type: "branch_status"; status: number }
-  | { type: "osc"; target: string; address: string; args: OscArg[] }
-  | { type: "udp"; target: string; text: string }
+  | { type: "osc"; target: string; address: string; args: OscArg[]; reply?: OscReply }
+  | { type: "udp"; target: string; text: string; reply?: UdpReply }
   | { type: "extract"; variable: string; from: ExtractFrom; expr: string }
   | { type: "assert_value"; value: string; op: CompareOp; expected: string }
   | { type: "branch_value"; value: string; op: CompareOp; expected: string }
@@ -128,7 +137,8 @@ export interface Experiment {
 
 export interface ExperimentStep {
   job_id: number; ts: number; node_id: string;
-  state: "running" | "passed" | "failed"; detail: string;
+  /** `retry`: an attempt failed (`error` says why) and the step runs again after a pause. */
+  state: "running" | "passed" | "failed" | "retry"; detail: string;
   message_key?: string | null; message_params?: Record<string, string | number>;
   /** Variables this step wrote. */
   vars?: Record<string, unknown>;

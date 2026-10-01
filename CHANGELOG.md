@@ -12,6 +12,12 @@ release notes — so what is written here is what users read. See
 
 ### Added
 
+- **A reply in the same node, and Retry.** An OSC message or a UDP datagram can
+  wait for its answer — sent from the port it listens on, so a device that
+  answers the sender is heard too — and the reply is a variable for later steps.
+  Every step that sends or listens can retry, with the same or a doubling pause;
+  each failed attempt and its reason are in the timeline, and Stop ends a pause.
+  Experiment files are now version 4; older ones open as before.
 - **Parallel work from any output.** Drag several wires out of one output —
   Start included — and their nodes run at the same time, each branch with its
   own copy of the variables. A Join waits for every wire into it; End completes

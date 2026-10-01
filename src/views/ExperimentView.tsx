@@ -7,11 +7,12 @@ import { ExperimentFinder } from "../components/ExperimentFinder";
 import { ExperimentDocuments } from "../components/ExperimentDocuments";
 import { NODE_CATALOG, ADDABLE_NODES, NODE_GROUPS, type NodeGroup } from "../lib/experimentCatalog";
 import { ExperimentNodeFields } from "../components/ExperimentNodeFields";
+import { RetryFields } from "../components/ExperimentNodeOptions";
 import { ExperimentParams } from "../components/ExperimentParams";
 import { ExperimentRunWith, type RunOptions } from "../components/ExperimentRunWith";
 import { JsonPicker } from "../components/JsonPicker";
 import { TemplateSuggestions, type TemplateSuggestion } from "../components/TemplateField";
-import { GENERATORS, jsonPath, replyFields, secretNames, suggestVariableName, variablesBefore, writtenVariable } from "../lib/experimentData";
+import { canRetry, GENERATORS, jsonPath, replyFields, secretNames, suggestVariableName, variablesBefore, writtenVariable } from "../lib/experimentData";
 import { describeError, failureNode, messageParams, type Failure } from "../lib/errors";
 import { ErrorMessage } from "../components/ErrorMessage";
 import { downloadUrl, isFullscreen, onFullscreenChange, setFullscreen as setWindowFullscreen } from "../lib/platform";
@@ -75,8 +76,8 @@ function summary(node: ExperimentNode, t: (key: any) => string): string {
     case "delay": return `${node.ms} ms`;
     case "assert_status": return `HTTP = ${node.status}`;
     case "branch_status": return `HTTP = ${node.status} ?`;
-    case "osc": return `${node.address} → ${node.target}`;
-    case "udp": return `${node.text || "∅"} → ${node.target}`;
+    case "osc": return `${node.address} → ${node.target}${node.reply ? ` ⇠ ${node.reply.address}` : ""}`;
+    case "udp": return `${node.text || "∅"} → ${node.target}${node.reply ? ` ⇠ ${node.reply.mode === "any" ? "*" : node.reply.pattern || "∅"}` : ""}`;
     case "extract": return `${node.variable} ← ${node.from === "json" || node.from === "header" || node.from === "regex" ? node.expr : node.from}`;
     case "assert_value": return `${node.value} ${OP_TEXT[node.op]} ${node.op === "empty" || node.op === "not_empty" ? "" : node.expected}`.trim();
     case "branch_value": return `${node.value} ${OP_TEXT[node.op]} ${node.op === "empty" || node.op === "not_empty" ? "" : node.expected} ?`;
@@ -660,8 +661,12 @@ export function ExperimentView({ active, focusMode, setFocusMode, ref }: { activ
     : outcome.kind === "failed" ? `${t("exp.failed")} · ${describe(outcome.error)}`
     : outcome.kind === "passed" ? t("exp.passed") : t("exp.stopped");
   /** A timeline row: why it failed, or what it did, in the current language. The row already names the node. */
-  const stepText = (event: ExperimentStep): string => event.error ? describeError(event.error, t).text
-    : event.message_key ? t(event.message_key, messageParams(event.message_params, t)) : event.detail;
+  const stepText = (event: ExperimentStep): string => {
+    const said = event.message_key ? t(event.message_key, messageParams(event.message_params, t)) : event.detail;
+    // A retry says both: which attempt, and why it failed.
+    if (event.state === "retry") return event.error ? `${said} — ${describeError(event.error, t).text}` : said;
+    return event.error ? describeError(event.error, t).text : said;
+  };
   const linkSource = linkStart ? doc.nodes.find((node) => node.id === linkStart.from) : undefined;
   const selectedTest = selectedNode ? tests[selectedNode.id] : undefined;
   let menuCursor = 0;
@@ -761,8 +766,9 @@ export function ExperimentView({ active, focusMode, setFocusMode, ref }: { activ
                   aria-label={`${label(node.type)}: ${nodeSummary(node)}`}>
                   <div className="experiment-node-header">
                     <span className="experiment-node-type">{label(node.type)}</span>
+                    {node.retry && <span className="experiment-node-retry" data-tip={t("exp.retryBadge", { attempts: node.retry.attempts })} aria-label={t("exp.retryBadge", { attempts: node.retry.attempts })}>↻{node.retry.attempts}</span>}
                     {nodeStates.has(node.id) && <span className={`node-status-badge ${nodeStates.get(node.id)}`} aria-label={t(`exp.${nodeStates.get(node.id)}`)}>
-                      {nodeStates.get(node.id) === "running" ? "●" : nodeStates.get(node.id) === "passed" ? "✓" : "✕"}
+                      {({ running: "●", passed: "✓", retry: "↻" } as Record<string, string>)[nodeStates.get(node.id)!] ?? "✕"}
                     </span>}
                   </div>
                   <span className="experiment-node-subtitle">{nodeSummary(node)}</span>
@@ -791,6 +797,7 @@ export function ExperimentView({ active, focusMode, setFocusMode, ref }: { activ
           <fieldset disabled={busy}>
           <TemplateSuggestions.Provider value={suggestions}>
             <ExperimentNodeFields node={selectedNode} patch={(change) => patchNode(selectedNode.id, change)} />
+            {canRetry(selectedNode) && <RetryFields retry={selectedNode.retry} patch={(change) => patchNode(selectedNode.id, change)} />}
           </TemplateSuggestions.Provider>
           {preview?.nodeId === selectedNode.id && <div className={`experiment-preview ${preview.error ? "error" : ""}`} aria-live="polite">
             <p className="section-label">{t(isWait(selectedNode) ? "exp.previewWait" : "exp.preview")}</p>
