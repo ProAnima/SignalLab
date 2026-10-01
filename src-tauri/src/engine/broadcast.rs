@@ -101,7 +101,7 @@ fn parse_hex(s: &str) -> Result<Vec<u8>, String> {
     if cleaned.is_empty() {
         return Err("hex payload is empty".into());
     }
-    if cleaned.len() % 2 != 0 {
+    if !cleaned.len().is_multiple_of(2) {
         return Err(format!(
             "hex payload has an odd number of digits ({})",
             cleaned.len()
@@ -283,6 +283,9 @@ pub struct EmitResult {
     /// First few resolved destinations, for the UI to confirm what it hit.
     pub resolved: Vec<String>,
     pub summary: String,
+    /// Why the first failed packet failed, for callers that explain it.
+    #[serde(skip)]
+    pub first_error: Option<(super::transport::Cause, String)>,
 }
 
 #[derive(Clone, Serialize)]
@@ -337,6 +340,7 @@ pub async fn send_once(app: AppHandle, cfg: EmitConfig) -> Result<EmitResult, St
     let mut packets = 0u64;
     let mut sent_bytes = 0u64;
     let mut errors = 0u64;
+    let mut first_error = None;
     for t in &targets {
         match sock.send_to(&bytes, t).await {
             Ok(n) => {
@@ -356,6 +360,9 @@ pub async fn send_once(app: AppHandle, cfg: EmitConfig) -> Result<EmitResult, St
             }
             Err(e) => {
                 errors += 1;
+                if first_error.is_none() {
+                    first_error = Some((super::transport::of_io(&e), format!("{t}: {e}")));
+                }
                 if capture {
                     inspect::publish(
                         &app,
@@ -378,6 +385,7 @@ pub async fn send_once(app: AppHandle, cfg: EmitConfig) -> Result<EmitResult, St
         errors,
         resolved: targets.iter().take(8).map(|a| a.to_string()).collect(),
         summary,
+        first_error,
     })
 }
 
@@ -729,7 +737,7 @@ pub async fn start_discovery(
                     tokio::time::sleep(Duration::from_millis(400)).await;
                     let mut list: Vec<Peer> =
                         peers_r.lock().unwrap().values().cloned().collect();
-                    list.sort_by(|a, b| b.last_ms.cmp(&a.last_ms));
+                    list.sort_by_key(|peer| std::cmp::Reverse(peer.last_ms));
                     let _ = app_r.emit(
                         "broadcast://peers",
                         PeerReport {

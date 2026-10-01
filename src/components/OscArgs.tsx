@@ -12,6 +12,7 @@ export function toOscArg(row: ArgRow): OscArg {
     case "double": return { type: "double", value: parseFloat(row.value) || 0 };
     case "bool": return { type: "bool", value: row.value === "true" };
     case "str": return { type: "str", value: row.value };
+    case "blob": return { type: "blob", value: row.value ? row.value.split(" ").map(byte => parseInt(byte, 16)) : [] };
     default: return { type: "nil" };
   }
 }
@@ -21,7 +22,7 @@ export function fromOscArg(a: OscArg): ArgRow {
   switch (a.type) {
     case "nil": return { type: "nil", value: "" };
     case "bool": return { type: "bool", value: a.value ? "true" : "false" };
-    case "blob": return { type: "str", value: "" };
+    case "blob": return { type: "blob", value: a.value.map(byte => byte.toString(16).padStart(2, "0")).join(" ") };
     default: return { type: a.type, value: String(a.value) };
   }
 }
@@ -36,6 +37,13 @@ export function fmtArg(a: OscArg): string {
 }
 
 const TYPES: OscArg["type"][] = ["int", "float", "str", "bool", "long", "double", "nil"];
+
+/** Accepts only an argument list this editor could have produced (e.g. read back from storage). */
+export function isArgRows(value: unknown): boolean {
+  return Array.isArray(value) && value.every((row) =>
+    typeof row === "object" && row !== null && typeof row.value === "string"
+    && (TYPES.includes(row.type) || row.type === "blob"));
+}
 
 /** Typed OSC argument list editor, shared by the OSC and Broadcast senders. */
 export function OscArgsEditor({
@@ -70,6 +78,7 @@ export function OscArgsEditor({
             disabled={disabled}
             onChange={(e) => patch(i, { type: e.target.value as OscArg["type"] })}
           >
+            {a.type === "blob" && <option value="blob">blob</option>}
             {/* `ty`, not `t` — that name is the translate function here. */}
             {TYPES.map((ty) => <option key={ty} value={ty}>{ty}</option>)}
           </select>
@@ -83,6 +92,7 @@ export function OscArgsEditor({
           ) : (
             <input
               value={a.value}
+              readOnly={a.type === "blob"}
               disabled={disabled}
               onKeyDown={onKeyDown}
               onChange={(e) => patch(i, { value: e.target.value })}

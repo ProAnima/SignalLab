@@ -1,0 +1,13 @@
+{
+  "version": 3,
+  "name": "Empty experiment",
+  "params": [],
+  "profiles": [],
+  "profile": null,
+  "seed": null,
+  "nodes": [
+    { "id": "start", "type": "start", "x": 40, "y": 80 },
+    { "id": "end", "type": "end", "x": 270, "y": 80 }
+  ],
+  "edges": [{ "from": "start", "to": "end", "port": "next" }]
+}

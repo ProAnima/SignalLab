@@ -1,0 +1,25 @@
+{
+  "version": 3,
+  "name": "Parallel flows",
+  "params": [],
+  "profiles": [],
+  "profile": null,
+  "seed": null,
+  "nodes": [
+    { "id": "start", "type": "start", "x": 40, "y": 100 },
+    { "id": "fork", "type": "fork", "x": 260, "y": 100 },
+    { "id": "http-flow", "type": "http", "x": 490, "y": 40,
+      "request": { "method": "GET", "url": "http://127.0.0.1:8080/", "headers": [], "body": null, "timeout_ms": 4000 } },
+    { "id": "log-flow", "type": "log", "message": "Stream 2 sync ping", "x": 490, "y": 180 },
+    { "id": "join", "type": "join", "x": 720, "y": 100 },
+    { "id": "end", "type": "end", "x": 950, "y": 100 }
+  ],
+  "edges": [
+    { "from": "start", "to": "fork", "port": "next" },
+    { "from": "fork", "to": "http-flow", "port": "branch1" },
+    { "from": "fork", "to": "log-flow", "port": "branch2" },
+    { "from": "http-flow", "to": "join", "port": "next" },
+    { "from": "log-flow", "to": "join", "port": "next" },
+    { "from": "join", "to": "end", "port": "next" }
+  ]
+}

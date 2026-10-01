@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from "react";
-import { StoreProvider, useStore } from "./lib/store";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { StoreProvider, useStore, logText } from "./lib/store";
 import { I18nProvider, LANGS, useI18n, type TKey } from "./lib/i18n";
 import { Brand } from "./components/Brand";
 import { Palette } from "./components/Palette";
+import { ExperimentView, type ExperimentHandle } from "./views/ExperimentView";
 import { SignalsView } from "./views/SignalsView";
 import { MqttView } from "./views/MqttView";
 import { OscView } from "./views/OscView";
@@ -13,20 +14,24 @@ import { NetsimView } from "./views/NetsimView";
 import { StormView } from "./views/StormView";
 import { ScanView } from "./views/ScanView";
 import { fmtTime } from "./lib/format";
+import { usePersistentState } from "./lib/hooks";
+import type { SignalBody } from "./lib/api";
 
 const APP_VERSION = "0.3.1";
 
 type ViewKey =
-  | "signals" | "osc" | "mqtt" | "broadcast" | "inspect" | "http" | "netsim" | "storm" | "scan";
+  | "experiment" | "signals" | "osc" | "mqtt" | "broadcast" | "inspect" | "http" | "netsim" | "storm" | "scan";
 
-const NAV: { key: ViewKey; glyph: string; label: TKey; kinds: string[] }[] = [
+/** `short` names the item in the compact rail, where the full label has no room. */
+const NAV: { key: ViewKey; glyph: string; label: TKey; short?: TKey; kinds: string[] }[] = [
+  { key: "experiment", glyph: "◇", label: "nav.experiment", short: "nav.short.experiment", kinds: ["experiment"] },
   { key: "signals", glyph: "❖", label: "nav.signals", kinds: [] },
   { key: "osc", glyph: "∿", label: "nav.osc", kinds: ["osc-monitor", "osc-gen"] },
   { key: "mqtt", glyph: "◈", label: "nav.mqtt", kinds: ["mqtt"] },
-  { key: "broadcast", glyph: "⊛", label: "nav.broadcast", kinds: ["beacon", "discovery"] },
-  { key: "inspect", glyph: "◫", label: "nav.inspect", kinds: [] },
+  { key: "broadcast", glyph: "⊛", label: "nav.broadcast", short: "nav.short.broadcast", kinds: ["beacon", "discovery"] },
+  { key: "inspect", glyph: "◫", label: "nav.inspect", short: "nav.short.inspect", kinds: [] },
   { key: "http", glyph: "⇄", label: "nav.http", kinds: ["http-burst"] },
-  { key: "netsim", glyph: "⚡", label: "nav.netsim", kinds: ["netsim"] },
+  { key: "netsim", glyph: "⚡", label: "nav.netsim", short: "nav.short.netsim", kinds: ["netsim"] },
   { key: "storm", glyph: "☰", label: "nav.storm", kinds: ["storm"] },
   { key: "scan", glyph: "⊹", label: "nav.scan", kinds: ["scan"] },
 ];
@@ -50,13 +55,50 @@ function LanguageSwitch() {
   );
 }
 
+const isView = (value: unknown) => NAV.some((item) => item.key === value);
+
 function Shell() {
-  const { host, jobs, stopJob, stopAll, log, clearLog } = useStore();
+  const { host, jobs, stopJob, stopAll, log, clearLog, pushLog } = useStore();
   const { t } = useI18n();
-  const [view, setView] = useState<ViewKey>("osc");
+  // Reopen on the screen last used: someone who only ever sends OSC lands on OSC.
+  const [view, setView] = usePersistentState<ViewKey>("signal-lab.view", "experiment", isView);
+  const [compactNav, setCompactNav] = usePersistentState("signal-lab.navCompact", true);
+  const [focusMode, setFocusMode] = useState(false);
+  const experiment = useRef<ExperimentHandle>(null);
+  // A screen is mounted the first time it is opened and then kept, hidden, for
+  // the session: what was typed, a response, a running monitor's list and its
+  // job all survive switching away and back.
+  const [visited, setVisited] = useState<ReadonlySet<ViewKey>>(() => new Set([view]));
+  const mainRef = useRef<HTMLElement>(null);
+  const scrollOf = useRef<Partial<Record<ViewKey, number>>>({});
+  const shown = useRef(view);
+  const go = (next: ViewKey) => {
+    // The screens share one scroll container; each comes back where it was left.
+    if (mainRef.current) scrollOf.current[shown.current] = mainRef.current.scrollTop;
+    setVisited((prior) => prior.has(next) ? prior : new Set(prior).add(next));
+    setView(next); setFocusMode(false);
+  };
+  useLayoutEffect(() => {
+    shown.current = view;
+    const main = mainRef.current;
+    if (!main) return;
+    const top = scrollOf.current[view] ?? 0;
+    main.scrollTop = top;
+    // A screen mounting for the first time may still grow in its first frame
+    // (and the browser may re-anchor the scroll); settle it once more then.
+    const frame = requestAnimationFrame(() => { if (shown.current === view) main.scrollTop = top; });
+    return () => cancelAnimationFrame(frame);
+  }, [view]);
+  const page = (key: ViewKey, content: ReactNode) => visited.has(key) && <div className="view-host" hidden={view !== key}>{content}</div>;
+  /** A request that works in a direct instrument becomes the next step of the experiment. */
+  const toExperiment = (body: SignalBody) => {
+    if (experiment.current?.add(body)) go("experiment");
+    else pushLog("warn", "experiment", "log.experimentBusy");
+  };
+  const lastLine = log[log.length - 1];
   const logEndRef = useRef<HTMLDivElement>(null);
   const [autoscroll, setAutoscroll] = useState(true);
-  const [consoleOpen, setConsoleOpen] = useState(true);
+  const [consoleOpen, setConsoleOpen] = useState(false);
 
   useEffect(() => {
     if (!autoscroll || !consoleOpen) return;
@@ -68,7 +110,7 @@ function Shell() {
   }, [log, autoscroll, consoleOpen]);
 
   return (
-    <div className={"app" + (consoleOpen ? "" : " console-collapsed")}>
+    <div className={"app" + (consoleOpen ? "" : " console-collapsed") + (compactNav ? " sidebar-compact" : "") + (view === "experiment" ? " experiment-active" : "") + (focusMode && view === "experiment" ? " experiment-focus" : "")}>
       <aside className="sidebar">
         <Brand name={t("app.name")} tagline={t("app.tagline")} by={t("app.by")} />
         {NAV.map((n) => {
@@ -78,10 +120,13 @@ function Shell() {
               key={n.key}
               className={"nav-item" + (view === n.key ? " active" : "")}
               aria-current={view === n.key ? "page" : undefined}
-              onClick={() => setView(n.key)}
+              title={t(n.label)}
+              aria-label={t(n.label)}
+              onClick={() => go(n.key)}
             >
               <span className="glyph" aria-hidden="true">{n.glyph}</span>
               <span className="label">{t(n.label)}</span>
+              <span className="short" aria-hidden="true">{t(n.short ?? n.label)}</span>
               {running > 0 && (
                 <span className="badge" title={t("app.activeJobs", { n: running })}>{running}</span>
               )}
@@ -96,6 +141,7 @@ function Shell() {
       </aside>
 
       <header className="header">
+        <button className="ghost sm nav-toggle" aria-label={compactNav ? t("app.expandNav") : t("app.collapseNav")} title={compactNav ? t("app.expandNav") : t("app.collapseNav")} onClick={() => setCompactNav((value) => !value)}>☰</button>
         <div className="title">Signal <b>Lab</b></div>
         <div className="spacer" />
         {host && (
@@ -110,16 +156,19 @@ function Shell() {
         </button>
       </header>
 
-      <main className="main">
-        {view === "signals" && <SignalsView />}
-        {view === "osc" && <OscView />}
-        {view === "mqtt" && <MqttView />}
-        {view === "broadcast" && <BroadcastView />}
-        {view === "inspect" && <InspectView />}
-        {view === "http" && <HttpView />}
-        {view === "netsim" && <NetsimView />}
-        {view === "storm" && <StormView />}
-        {view === "scan" && <ScanView />}
+      <main className="main" ref={mainRef}>
+        <div className="experiment-host" hidden={view !== "experiment"}>
+          <ExperimentView ref={experiment} active={view === "experiment"} focusMode={focusMode} setFocusMode={setFocusMode} />
+        </div>
+        {page("signals", <SignalsView />)}
+        {page("osc", <OscView onToExperiment={toExperiment} />)}
+        {page("mqtt", <MqttView />)}
+        {page("broadcast", <BroadcastView />)}
+        {page("inspect", <InspectView />)}
+        {page("http", <HttpView onToExperiment={toExperiment} />)}
+        {page("netsim", <NetsimView />)}
+        {page("storm", <StormView />)}
+        {page("scan", <ScanView />)}
       </main>
 
       <section className="console">
@@ -143,13 +192,20 @@ function Shell() {
                 </button>
               </div>
             ))}
-            {jobs.length === 0 && (
+            {jobs.length === 0 && (consoleOpen || !lastLine) && (
               <span style={{ color: "var(--text-faint)", fontFamily: "var(--mono)", fontSize: 11 }}>
                 {t("console.empty")}
               </span>
             )}
           </div>
-          <div className="spacer" />
+          {/* Collapsed, the console still says what the last action did. */}
+          {!consoleOpen && lastLine ? (
+            <button className={"console-last " + lastLine.level} title={t("console.expand")} onClick={() => setConsoleOpen(true)}>
+              <span className="t">{fmtTime(lastLine.ts).slice(0, 8)}</span>
+              <span className="tag">{lastLine.tag}</span>
+              <span className="msg">{logText(lastLine, t)}</span>
+            </button>
+          ) : <div className="spacer" />}
           <label className="checkbox" style={{ fontSize: 11 }}>
             <input
               type="checkbox"
@@ -165,7 +221,7 @@ function Shell() {
             <div className={"log-line " + l.level} key={l.id}>
               <span className="t">{fmtTime(l.ts)}</span>
               <span className="tag">{l.tag}</span>
-              <span className="msg">{t(l.key, l.params)}</span>
+              <span className="msg">{logText(l, t)}</span>
             </div>
           ))}
           <div ref={logEndRef} />

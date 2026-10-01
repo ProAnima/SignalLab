@@ -17,7 +17,7 @@ function defaultClientId(): string {
 
 export function MqttView() {
   const {
-    pushLog, jobGone, stopJob, refreshJobs, library, setLibrary,
+    pushLog, pushError, jobGone, stopJob, refreshJobs, library, setLibrary,
     mqttTopics, mqttVersion, mqttDropped, clearMqttTopics,
   } = useStore();
   const t = useT();
@@ -100,7 +100,7 @@ export function MqttView() {
       pushLog("ok", "mqtt", "log.mqttConnected", { broker: `${cfg.host}:${cfg.port}`, id: cfg.client_id });
       refreshJobs();
     } catch (e) {
-      pushLog("err", "mqtt", String(e));
+      pushError("mqtt", e);
     }
   };
 
@@ -112,7 +112,7 @@ export function MqttView() {
       // QoS 0 gets no acknowledgement, so this is the only line it will produce.
       if (qos === 0) pushLog("ok", "mqtt", "log.mqttPublished", { topic });
     } catch (e) {
-      pushLog("err", "mqtt", String(e));
+      pushError("mqtt", e);
     }
   };
 
@@ -121,7 +121,7 @@ export function MqttView() {
     try {
       await api.mqttSubscribe(job.id, [{ filter: sub.filter.trim(), qos: sub.qos }]);
     } catch (e) {
-      pushLog("err", "mqtt", String(e));
+      pushError("mqtt", e);
     }
   };
 
@@ -132,7 +132,7 @@ export function MqttView() {
       setGrants((prev) => prev.filter((g) => g.filter !== filter));
       pushLog("warn", "mqtt", "log.mqttUnsubscribed", { filter });
     } catch (e) {
-      pushLog("err", "mqtt", String(e));
+      pushError("mqtt", e);
     }
   };
 

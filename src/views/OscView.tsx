@@ -1,32 +1,39 @@
 import { useEffect, useState } from "react";
-import { api, EV, type JobInfo, type OscArg, type OscInbound, type GenTick, type Waveform } from "../lib/api";
+import { api, EV, type JobInfo, type OscArg, type OscInbound, type GenTick, type SignalBody, type Waveform } from "../lib/api";
 import { useStore } from "../lib/store";
+import { describeError, type Failure } from "../lib/errors";
 import { useT, type TKey } from "../lib/i18n";
-import { useJobStream, useRollingList, useSeries } from "../lib/hooks";
+import { useJobStream, usePersistentState, useRollingList, useSeries } from "../lib/hooks";
 import { fmtTime } from "../lib/format";
 import { Scope } from "../components/Scope";
-import { OscArgsEditor, fmtArg, toOscArg, type ArgRow } from "../components/OscArgs";
+import { OscArgsEditor, fmtArg, isArgRows, toOscArg, type ArgRow } from "../components/OscArgs";
 
 interface FlatMsg { ts: number; from: string; address: string; args: OscArg[]; error?: string | null; }
 
 const WAVEFORMS: Waveform[] = ["sine", "triangle", "saw", "square", "ramp", "random", "constant"];
 
-export function OscView() {
-  const { pushLog, refreshJobs, stopJob, jobGone } = useStore();
+export function OscView({ onToExperiment }: { onToExperiment?: (body: SignalBody) => void }) {
+  const { pushLog, pushError, refreshJobs, stopJob, jobGone } = useStore();
   const t = useT();
 
   // ---- sender ----
-  const [target, setTarget] = useState("127.0.0.1:9000");
-  const [address, setAddress] = useState("/hello/avatar/1");
-  const [args, setArgs] = useState<ArgRow[]>([{ type: "float", value: "1.0" }]);
+  // Kept across screens and restarts: the message you were sending is the one you want next.
+  const [target, setTarget] = usePersistentState("signal-lab.osc.target", "127.0.0.1:9000");
+  const [address, setAddress] = usePersistentState("signal-lab.osc.address", "/hello/avatar/1");
+  const [args, setArgs] = usePersistentState<ArgRow[]>("signal-lab.osc.args", [{ type: "float", value: "1.0" }], isArgRows);
+  const [last, setLast] = useState<{ ok: boolean; text: string; error?: Failure; ts: number; n: number } | null>(null);
 
   const send = async () => {
     try {
       const oscArgs = args.map(toOscArg);
       const n = await api.oscSend(target, address, oscArgs);
       pushLog("ok", "osc", "log.oscSent", { address, bytes: n, target });
+      const text = t("osc.sentResult", { address, bytes: n, target });
+      // Repeats of the same result count up, so a re-send visibly did something.
+      setLast((prior) => ({ ok: true, text, ts: Date.now(), n: prior?.ok && prior.text === text ? prior.n + 1 : 1 }));
     } catch (e) {
-      pushLog("err", "osc", String(e));
+      pushError("osc", e);
+      setLast({ ok: false, text: "", error: e, ts: Date.now(), n: 1 });
     }
   };
 
@@ -62,7 +69,7 @@ export function OscView() {
       pushLog("ok", "osc", "log.oscListening", { bind });
       refreshJobs();
     } catch (e) {
-      pushLog("err", "osc", String(e));
+      pushError("osc", e);
     }
   };
 
@@ -108,7 +115,7 @@ export function OscView() {
       });
       refreshJobs();
     } catch (e) {
-      pushLog("err", "osc", String(e));
+      pushError("osc", e);
     }
   };
 
@@ -136,8 +143,24 @@ export function OscView() {
             <OscArgsEditor args={args} onChange={setArgs} onSubmit={send} />
           </div>
           <div className="btn-row">
-            <button className="primary" onClick={send}>{t("common.send")}</button>
+            <button className="primary" onClick={send} title={`${t("common.send")} · Enter`}>{t("common.send")}</button>
+            {onToExperiment && (
+              <button
+                className="ghost"
+                title={t("common.toExperimentHint")}
+                onClick={() => onToExperiment({ transport: "osc", target, address, args: args.map(toOscArg) })}
+              >
+                {t("common.toExperiment")}
+              </button>
+            )}
           </div>
+          {last && (
+            <p className={"send-result " + (last.ok ? "ok" : "err")} role="status">
+              <span>{last.ok ? "✓" : "✕"} {last.error !== undefined ? describeError(last.error, t).text : last.text}</span>
+              {last.n > 1 && <b>×{last.n}</b>}
+              <time>{fmtTime(last.ts).slice(0, 8)}</time>
+            </p>
+          )}
         </div>
 
         {/* Monitor */}

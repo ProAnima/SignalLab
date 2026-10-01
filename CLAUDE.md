@@ -39,7 +39,11 @@ src/                      React UI
   components/OscArgs.tsx  typed OSC argument editor (OSC + Broadcast + Signals share it)
   components/Palette.tsx  Ctrl+K signal palette, mounted once in the shell
   lib/signals.ts          firing, describing and capturing signals
-  views/*.tsx             one screen per module
+  lib/experimentGraph.ts  pure graph edits for the experiment editor (add, splice, layout)
+  lib/experimentData.ts   template suggestions, upstream variables, JSON paths
+  lib/errors.ts           describeError: one renderer for engine errors and legacy text
+  components/ErrorMessage.tsx  where · what — why, technical detail folded
+  views/*.tsx             one screen per module; ExperimentView is the node editor
 src-tauri/src/
   lib.rs                  Tauri builder: manages JobRegistry + Capture, registers commands
   commands.rs             thin #[tauri::command] layer — no logic here
@@ -50,6 +54,19 @@ src-tauri/src/
   engine/http.rs          request runner + concurrent burst
   engine/netsim.rs        UDP impairment relay (latency/jitter/loss/dup/corrupt)
   engine/storm.rs         UDP/TCP load generator
+  engine/error.rs         EngineError {code, params, node, field, detail}
+  engine/transport.rs     network failure causes (refused, timeout, dns, …)
+  engine/experiment.rs    the document model: nodes, edges, outputs, versions
+  engine/experiment_validate.rs  structural and run-time validation
+  engine/experiment_data.rs  parameters, templated fields, extraction, value checks
+  engine/experiment_actions.rs  one network action, failure classified
+  engine/experiment_steps.rs    what one step does (send, check, extract, branch, wait)
+  engine/experiment_run.rs      the runner: branches, joins, listeners, reports, Send now
+  engine/matching.rs      OSC address patterns, argument rules, UDP payloads, comparisons
+  engine/listen.rs        wait listeners: one socket per bind, bounded queue
+  engine/template.rs      the {{template}} language and seeded generators (pure)
+  engine/secrets.rs       credential-store secrets, masking, Inspector redaction
+  engine/experiment_files.rs  load/save/import/export, version migration
   engine/scan.rs          TCP connect scanner
   engine/mqtt_codec.rs    hand-written MQTT 3.1.1 codec (no external crate)
   engine/mqtt.rs          one broker connection as a job; MqttHub routes commands
@@ -95,6 +112,35 @@ src-tauri/src/
   `Documents/SignalLab/signals.json`, is written whole on a debounce, and a
   parse error is reported with the path rather than silently overwritten with
   the starter set. Shipped seed targets stay on loopback; a test enforces it.
+
+- **Templates are resolved only by the engine.** `template.rs` is the language;
+  the editor's preview calls `experiment_resolve` and *Send now* calls
+  `experiment_send_node` (the runner's own `experiment_steps::execute`) instead of
+  reimplementing it, so a field means the same thing everywhere. Unknown names
+  are errors, never empty strings. A new templated field goes in
+  `experiment_data::texts_mut` — validation, preview and execution all read it.
+- **Secret values never leave the engine.** They live in the OS credential
+  store (`engine/secrets.rs`); no command returns one, and while a run or a
+  *Send now* uses them every string it reports is passed through
+  `secrets::mask`, and Inspector frames are redacted. Tests use `MemoryStore`,
+  never the real credential store.
+
+- **The experiment engine never builds sentences.** It fails with an
+  `EngineError` whose `code` is the translation key `err.<code>`, with values
+  in `params`, the `node` and `field` it is about, and the OS/library text in
+  `detail`. Write codes as literals (`EngineError::new("wait.timeout")`,
+  `Field::new("bind")`): a test scans the engine and fails if `en.ts` has no
+  `err.<code>` / `field.<key>` text, or keeps one nobody uses. The UI shows any
+  failure through `describeError`/`ErrorMessage` and stores the failure, not its
+  text. Other modules still return strings; converting one is local.
+- **Screens stay mounted.** `App.tsx` mounts a view on first visit and only
+  hides it afterwards, so nothing typed or received is lost on a tab switch. A
+  view must therefore not assume it is visible (a canvas measures 0 wide while
+  hidden — see `Scope`) and must not grab global keys.
+- **Waits listen from the start of the run.** `listen::Listener`s are opened in
+  `experiment_run::start` before the job exists (a taken port is a Run error at
+  the wait), shared per bind, and dropped with the run. A wait counts datagrams
+  since the latest action on its branch and consumes the one it matches.
 
 - **Keep `cargo test` green**: it covers the OSC codec, the CIDR/target
   resolver, socket-option paths, the capture ring and the signal library.

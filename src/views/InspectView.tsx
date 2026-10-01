@@ -23,7 +23,7 @@ function verdictClass(v: string | null): string {
 }
 
 export function InspectView() {
-  const { pushLog, library, setLibrary } = useStore();
+  const { pushLog, pushError, library, setLibrary } = useStore();
   const t = useT();
 
   const [rows, setRows] = useState<Row[]>([]);
@@ -61,7 +61,7 @@ export function InspectView() {
       setStats(await api.inspectSetEnabled(enabled));
       pushLog(enabled ? "ok" : "warn", "inspect", enabled ? "log.captureArmed" : "log.captureDisarmed");
     } catch (e) {
-      pushLog("err", "inspect", String(e));
+      pushError("inspect", e);
     }
   };
 
@@ -88,7 +88,7 @@ export function InspectView() {
       const path = await api.inspectExport(format);
       pushLog("ok", "inspect", "log.captureSaved", { path });
     } catch (e) {
-      pushLog("err", "inspect", String(e));
+      pushError("inspect", e);
     }
   };
 

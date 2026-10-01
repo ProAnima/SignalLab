@@ -25,6 +25,7 @@ use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
 use super::inspect::{self, Frame, Gate};
 use super::jobs::{now_ms, JobInfo, JobRegistry};
+use super::transport::{self, Cause};
 use super::mqtt_codec::{
     connack_reason, decode, encode_connect, encode_disconnect, encode_pingreq, encode_puback,
     encode_pubcomp, encode_publish, encode_pubrec, encode_pubrel, encode_subscribe,
@@ -222,51 +223,91 @@ fn connect_opts<'a>(cfg: &'a MqttConfig) -> ConnectOpts<'a> {
     }
 }
 
+/// Why connecting or a one-shot publish failed: the sentence the MQTT screen
+/// shows, and the cause, which experiments report as a localized error.
+#[derive(Debug)]
+pub struct MqttFailure {
+    pub cause: MqttCause,
+    pub text: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MqttCause {
+    /// The network: refused, unreachable, name not found, timed out, reset.
+    Transport(Cause),
+    /// CONNACK with this non-zero return code.
+    Refused(u8),
+    /// The socket is open but the broker did not finish the exchange in time.
+    NoAnswer,
+    /// The topic is empty or a filter; nothing was sent.
+    Topic,
+    /// Unexpected or malformed packets: probably not an MQTT broker.
+    Protocol,
+}
+
+impl MqttFailure {
+    fn new(cause: MqttCause, text: impl Into<String>) -> Self {
+        MqttFailure { cause, text: text.into() }
+    }
+
+    fn io(error: &std::io::Error, text: String) -> Self {
+        MqttFailure::new(MqttCause::Transport(transport::of_io(error)), text)
+    }
+}
+
+/// The MQTT screen and the library show the sentence.
+impl From<MqttFailure> for String {
+    fn from(failure: MqttFailure) -> String {
+        failure.text
+    }
+}
+
 /// Dial and complete CONNECT/CONNACK before the job exists, so a wrong password
 /// or a closed port is an error on the button rather than a job that dies a
 /// moment later somewhere else.
-async fn dial(cfg: &MqttConfig) -> Result<(TcpStream, String), String> {
+async fn dial(cfg: &MqttConfig) -> Result<(TcpStream, String), MqttFailure> {
     if cfg.client_id.trim().is_empty() {
-        return Err("a client id is required — brokers reject an empty one".into());
+        return Err(MqttFailure::new(MqttCause::Protocol, "a client id is required — brokers reject an empty one"));
     }
     let broker = format!("{}:{}", cfg.host.trim(), cfg.port);
     let mut stream = tokio::time::timeout(HANDSHAKE_TIMEOUT, TcpStream::connect(&broker))
         .await
-        .map_err(|_| format!("connecting to {broker} timed out"))?
-        .map_err(|e| format!("connect {broker} failed: {e}"))?;
+        .map_err(|_| MqttFailure::new(MqttCause::Transport(Cause::Timeout), format!("connecting to {broker} timed out")))?
+        .map_err(|e| MqttFailure::io(&e, format!("connect {broker} failed: {e}")))?;
     let _ = stream.set_nodelay(true);
 
     stream
         .write_all(&encode_connect(&connect_opts(cfg)))
         .await
-        .map_err(|e| format!("sending CONNECT to {broker} failed: {e}"))?;
+        .map_err(|e| MqttFailure::io(&e, format!("sending CONNECT to {broker} failed: {e}")))?;
 
     let mut buf = Vec::with_capacity(64);
     let mut chunk = [0u8; 512];
+    let protocol = |text: String| MqttFailure::new(MqttCause::Protocol, text);
     let connack = tokio::time::timeout(HANDSHAKE_TIMEOUT, async {
         loop {
             match stream.read(&mut chunk).await {
-                Ok(0) => return Err(format!("{broker} closed the connection without a CONNACK")),
+                Ok(0) => return Err(protocol(format!("{broker} closed the connection without a CONNACK"))),
                 Ok(n) => buf.extend_from_slice(&chunk[..n]),
-                Err(e) => return Err(format!("reading CONNACK from {broker} failed: {e}")),
+                Err(e) => return Err(MqttFailure::io(&e, format!("reading CONNACK from {broker} failed: {e}"))),
             }
             match decode(&buf) {
                 Ok(Some((Packet::ConnAck { code, .. }, _))) => return Ok(code),
                 Ok(Some((other, _))) => {
-                    return Err(format!("{broker} answered CONNECT with {other:?}"))
+                    return Err(protocol(format!("{broker} answered CONNECT with {other:?}")))
                 }
                 Ok(None) => continue,
-                Err(e) => return Err(format!("{broker} sent a malformed CONNACK: {e}")),
+                Err(e) => return Err(protocol(format!("{broker} sent a malformed CONNACK: {e}"))),
             }
         }
     })
     .await
-    .map_err(|_| format!("{broker} accepted the socket but never sent a CONNACK"))??;
+    .map_err(|_| MqttFailure::new(MqttCause::NoAnswer, format!("{broker} accepted the socket but never sent a CONNACK")))??;
 
     if connack != 0 {
-        return Err(format!(
-            "{broker} refused the connection: {}",
-            connack_reason(connack)
+        return Err(MqttFailure::new(
+            MqttCause::Refused(connack),
+            format!("{broker} refused the connection: {}", connack_reason(connack)),
         ));
     }
     Ok((stream, broker))
@@ -472,7 +513,7 @@ async fn run(
             }
 
             cmd = rx.recv() => {
-                let Some(cmd) = cmd else { return None };
+                let cmd = cmd?;
                 let bytes = match cmd {
                     Cmd::Publish { topic, payload, qos, retain } => {
                         let qos = qos.min(2);
@@ -559,8 +600,20 @@ pub async fn publish_once(
     qos: u8,
     retain: bool,
 ) -> Result<String, String> {
+    publish(app, cfg, topic, payload, qos, retain).await.map_err(String::from)
+}
+
+/// `publish_once` with the cause of a failure kept.
+pub async fn publish(
+    app: AppHandle,
+    cfg: MqttConfig,
+    topic: String,
+    payload: String,
+    qos: u8,
+    retain: bool,
+) -> Result<String, MqttFailure> {
     if let Some(refused) = validate_publish_topic(&topic) {
-        return Err(refused);
+        return Err(MqttFailure::new(MqttCause::Topic, refused));
     }
     // Brokers evict the older client when a new one arrives with the same id, so
     // a one-shot publish that reused it would knock the live connection off the
@@ -598,7 +651,7 @@ pub async fn publish_once(
     stream
         .write_all(&framed)
         .await
-        .map_err(|e| format!("publish to {broker} failed: {e}"))?;
+        .map_err(|e| MqttFailure::io(&e, format!("publish to {broker} failed: {e}")))?;
 
     // QoS 0 is done when the bytes are out; the others owe us a round trip, and
     // reporting success before it lands would defeat the point of asking for it.
@@ -608,9 +661,12 @@ pub async fn publish_once(
         let settled = tokio::time::timeout(HANDSHAKE_TIMEOUT, async {
             loop {
                 match stream.read(&mut chunk).await {
-                    Ok(0) => return Err(format!("{broker} closed before acknowledging")),
+                    Ok(0) => {
+                        let text = format!("{broker} closed before acknowledging");
+                        return Err(MqttFailure::new(MqttCause::Transport(Cause::Reset), text));
+                    }
                     Ok(n) => buf.extend_from_slice(&chunk[..n]),
-                    Err(e) => return Err(format!("reading the acknowledgement failed: {e}")),
+                    Err(e) => return Err(MqttFailure::io(&e, format!("reading the acknowledgement failed: {e}"))),
                 }
                 let mut at = 0usize;
                 loop {
@@ -623,14 +679,16 @@ pub async fn publish_once(
                                     stream
                                         .write_all(&encode_pubrel(pid))
                                         .await
-                                        .map_err(|e| format!("PUBREL failed: {e}"))?;
+                                        .map_err(|e| MqttFailure::io(&e, format!("PUBREL failed: {e}")))?;
                                 }
                                 Packet::PubComp(_) => return Ok(()),
                                 _ => {}
                             }
                         }
                         Ok(None) => break,
-                        Err(e) => return Err(format!("malformed acknowledgement: {e}")),
+                        Err(e) => {
+                            return Err(MqttFailure::new(MqttCause::Protocol, format!("malformed acknowledgement: {e}")))
+                        }
                     }
                 }
                 if at > 0 {
@@ -639,7 +697,7 @@ pub async fn publish_once(
             }
         })
         .await
-        .map_err(|_| format!("{broker} never acknowledged the publish"))?;
+        .map_err(|_| MqttFailure::new(MqttCause::NoAnswer, format!("{broker} never acknowledged the publish")))?;
         settled?;
     }
 

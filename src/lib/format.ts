@@ -21,3 +21,17 @@ export function fmtTime(ts: number): string {
 export function statusClass(code: number): string {
   return `status-${Math.floor(code / 100)}`;
 }
+
+/**
+ * A JSON body, indented for reading — or null when it is not a JSON object or
+ * array (or too large to be worth reformatting on every render).
+ */
+export function prettyJson(text: string): string | null {
+  const trimmed = text.trim();
+  if (trimmed.length > 1024 * 1024 || !/^[[{]/.test(trimmed)) return null;
+  try {
+    return JSON.stringify(JSON.parse(trimmed), null, 2);
+  } catch {
+    return null;
+  }
+}

@@ -7,7 +7,7 @@ import { fmtBytes, fmtNum } from "../lib/format";
 import { Scope } from "../components/Scope";
 
 export function StormView() {
-  const { pushLog, refreshJobs, stopJob, jobGone } = useStore();
+  const { pushLog, pushError, refreshJobs, stopJob, jobGone } = useStore();
   const t = useT();
 
   const [target, setTarget] = useState("127.0.0.1:9000");
@@ -41,7 +41,7 @@ export function StormView() {
       });
       refreshJobs();
     } catch (e) {
-      pushLog("err", "storm", String(e));
+      pushError("storm", e);
     }
   };
 

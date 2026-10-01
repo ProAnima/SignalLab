@@ -21,7 +21,7 @@ function Slider({ label, value, onChange, min, max, step, unit }: {
 }
 
 export function NetsimView() {
-  const { pushLog, refreshJobs, stopJob, jobGone } = useStore();
+  const { pushLog, pushError, refreshJobs, stopJob, jobGone } = useStore();
   const t = useT();
 
   const [listen, setListen] = useState("0.0.0.0:9010");
@@ -55,7 +55,7 @@ export function NetsimView() {
       pushLog("ok", "netsim", "log.netsimStarted", { listen, target, latency, jitter, loss });
       refreshJobs();
     } catch (e) {
-      pushLog("err", "netsim", String(e));
+      pushError("netsim", e);
     }
   };
 

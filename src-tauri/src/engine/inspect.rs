@@ -106,10 +106,11 @@ impl Frame {
         self
     }
 
-    /// Record the payload: sets `bytes` and renders the hex pane.
+    /// Record the payload: sets `bytes` and renders the hex pane. Secret
+    /// values in use are overwritten before the dump is made.
     pub fn payload(mut self, bytes: &[u8]) -> Self {
         self.bytes = bytes.len();
-        self.hex = Some(hex_dump(bytes));
+        self.hex = Some(hex_dump(&super::secrets::mask_bytes(bytes, &super::secrets::active())));
         self
     }
 
@@ -302,8 +303,22 @@ fn export_dir() -> std::path::PathBuf {
 /// Publish a frame from anywhere that holds an `AppHandle`.
 pub fn publish(app: &AppHandle, frame: Frame) {
     if let Some(cap) = app.try_state::<Capture>() {
-        cap.push(frame);
+        cap.push(redact(frame, &super::secrets::active()));
     }
+}
+
+/// A frame with secret values in use masked in every text it carries.
+fn redact(mut frame: Frame, values: &[String]) -> Frame {
+    if values.is_empty() {
+        return frame;
+    }
+    let mask = |text: &str| super::secrets::mask(text, values);
+    frame.summary = mask(&frame.summary);
+    frame.detail = frame.detail.as_deref().map(mask);
+    frame.remote = mask(&frame.remote);
+    frame.local = mask(&frame.local);
+    frame.verdict = frame.verdict.as_deref().map(mask);
+    frame
 }
 
 /// Is capture armed? Lets hot paths skip building a frame at all.
@@ -326,7 +341,7 @@ pub fn spawn_pump(app: AppHandle, capture: Capture) {
             idle_ticks = if frames.is_empty() { idle_ticks + 1 } else { 0 };
             // Emit whenever there is traffic, and occasionally when idle so the
             // counters in the UI stay honest without a per-tick event storm.
-            if frames.is_empty() && idle_ticks % 8 != 0 {
+            if frames.is_empty() && !idle_ticks.is_multiple_of(8) {
                 continue;
             }
             let _ = app.emit(
@@ -498,5 +513,23 @@ mod tests {
         assert_eq!(snap.len(), 3);
         assert_eq!(snap[0].summary, "#7");
         assert_eq!(snap[2].summary, "#9");
+    }
+
+    #[test]
+    fn frames_mask_secret_values_in_use() {
+        let guard = super::super::secrets::redact(vec!["hunter2-token".into()]);
+        let frame = Frame::tx("http", "http")
+            .remote("http://127.0.0.1/?key=hunter2-token")
+            .summary("GET with hunter2-token")
+            .detail("Authorization: Bearer hunter2-token")
+            .payload(b"key=hunter2-token");
+        let frame = redact(frame, &super::super::secrets::active());
+        assert!(!frame.remote.contains("hunter2") && !frame.summary.contains("hunter2"));
+        assert!(!frame.detail.as_deref().unwrap().contains("hunter2"));
+        let hex = frame.hex.unwrap();
+        assert!(!hex.contains("hunter") && hex.contains("|key=****"), "{hex}");
+        drop(guard);
+        let clean = Frame::tx("udp", "test").payload(b"hunter2-token");
+        assert!(clean.hex.unwrap().contains("hunter2-token"), "after the run nothing is masked");
     }
 }

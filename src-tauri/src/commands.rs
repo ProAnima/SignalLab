@@ -3,11 +3,20 @@
 
 use tauri::{AppHandle, State};
 
+use std::collections::BTreeMap;
+
 use crate::engine::broadcast::{DiscoveryConfig, EmitConfig, EmitResult};
+use crate::engine::error::{EngineError, EngineResult};
+use crate::engine::experiment::{Experiment, Node};
+use crate::engine::experiment_data;
+use crate::engine::experiment_files;
+use crate::engine::experiment_run::{self, NodeSendResult};
+use crate::engine::experiment_validate::{self, ProfileIssue};
+use crate::engine::secrets::{self, SystemStore};
 use crate::engine::http::{BurstConfig, HttpRequest, HttpResponse};
 use crate::engine::inspect::{CaptureStats, Frame};
-use crate::engine::net::{host_info, HostInfo};
 use crate::engine::mqtt::{Cmd, MqttConfig, MqttHub, Sub};
+use crate::engine::net::{host_info, HostInfo};
 use crate::engine::netsim::ProxyConfig;
 use crate::engine::osc::{send_once, start_generator, start_monitor, GenConfig};
 use crate::engine::osc_codec::OscArg;
@@ -40,6 +49,98 @@ pub fn job_stop(jobs: State<'_, JobRegistry>, id: u64) -> bool {
 #[tauri::command]
 pub fn jobs_stop_all(jobs: State<'_, JobRegistry>) {
     jobs.stop_all()
+}
+
+// ---- Experiments ----------------------------------------------------------
+// These commands fail with an `EngineError` (code, values, node, field,
+// detail) that the interface renders in the user's language.
+
+#[tauri::command]
+pub fn experiment_load() -> EngineResult<Experiment> {
+    experiment_files::load()
+}
+
+#[tauri::command]
+pub fn experiment_save(document: Experiment) -> EngineResult<String> {
+    experiment_files::save(&document)
+}
+
+#[tauri::command]
+pub fn experiment_parse(text: String) -> EngineResult<Experiment> {
+    experiment_files::parse(&text)
+}
+
+#[tauri::command]
+pub fn experiment_export(document: Experiment) -> EngineResult<String> {
+    experiment_files::export(&document)
+}
+
+/// Blocking problems are the error; problems of the other profiles come back
+/// on success, so the switcher can warn before anyone switches.
+#[tauri::command]
+pub fn experiment_validate(document: Experiment, overrides: Option<BTreeMap<String, String>>) -> EngineResult<Vec<ProfileIssue>> {
+    experiment_validate::validate_run(&document, &overrides.unwrap_or_default())?;
+    experiment_data::load_secrets(&document.nodes, &SystemStore)?;
+    Ok(experiment_validate::profile_issues(&document))
+}
+
+#[derive(serde::Serialize)]
+pub struct ResolvedNode {
+    node: Node,
+    missing: Vec<String>,
+}
+
+#[tauri::command]
+pub fn experiment_resolve(
+    document: Experiment,
+    node_id: String,
+    vars: BTreeMap<String, serde_json::Value>,
+) -> EngineResult<ResolvedNode> {
+    let node = experiment_data::find_node(&document, &node_id)?;
+    let status = secrets::status(&SystemStore, &experiment_data::node_secrets(&node.kind))?;
+    let stored: Vec<String> = status.into_iter().filter(|(_, stored)| *stored).map(|(name, _)| name).collect();
+    experiment_data::resolve_node(&document, &node_id, &vars, &stored).map(|(node, missing)| ResolvedNode { node, missing })
+}
+
+/// *Send now*: an action is sent, a wait listens.
+#[tauri::command]
+pub async fn experiment_send_node(
+    app: AppHandle,
+    document: Experiment,
+    node_id: String,
+    vars: BTreeMap<String, serde_json::Value>,
+) -> EngineResult<NodeSendResult> {
+    experiment_run::send_node(&app, &document, &node_id, &vars, &SystemStore).await
+}
+
+// ---- Secrets (values never leave the engine) ------------------------------
+
+#[tauri::command]
+pub fn secret_status(names: Vec<String>) -> EngineResult<BTreeMap<String, bool>> {
+    secrets::status(&SystemStore, &names)
+}
+
+#[tauri::command]
+pub fn secret_set(name: String, value: String) -> EngineResult<()> {
+    secrets::set(&SystemStore, &name, &value)
+}
+
+#[tauri::command]
+pub fn secret_delete(name: String) -> EngineResult<()> {
+    secrets::delete(&SystemStore, &name)
+}
+
+/// Async so the wait listeners are opened before the job exists: a taken port
+/// is an error on the Run button, like a validation problem.
+#[tauri::command]
+pub async fn experiment_start(
+    app: AppHandle,
+    jobs: State<'_, JobRegistry>,
+    document: Experiment,
+    overrides: Option<BTreeMap<String, String>>,
+    seed: Option<u64>,
+) -> Result<JobInfo, EngineError> {
+    experiment_run::start(app, jobs.inner().clone(), document, overrides.unwrap_or_default(), seed, &SystemStore).await
 }
 
 // ---- OSC -----------------------------------------------------------------

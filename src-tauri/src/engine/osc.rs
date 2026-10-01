@@ -231,7 +231,7 @@ pub async fn start_generator(
         let amp = span / 2.0;
         let start = std::time::Instant::now();
         let mut sent: u64 = 0;
-        let mut rng_state: u64 = 0x9E3779B97F4A7C15 ^ (id as u64).wrapping_mul(2654435761);
+        let mut rng_state: u64 = 0x9E3779B97F4A7C15 ^ id.wrapping_mul(2654435761);
 
         loop {
             ticker.tick().await;
@@ -293,7 +293,7 @@ pub async fn start_generator(
             }
 
             // Throttle UI telemetry to ~30 Hz regardless of send rate.
-            if sent % ((rate / 30.0).max(1.0) as u64) == 0 {
+            if sent.is_multiple_of((rate / 30.0).max(1.0) as u64) {
                 let _ = app_cl.emit(
                     "osc://gen-tick",
                     GenTick {
@@ -322,19 +322,25 @@ pub async fn send_once(
     let addr: SocketAddr = target
         .parse()
         .map_err(|e| format!("invalid target '{target}': {e}"))?;
-    let socket = UdpSocket::bind("0.0.0.0:0")
-        .await
-        .map_err(|e| format!("socket create failed: {e}"))?;
-    let packet = encode_message(&address, &args);
-    let sent = socket
-        .send_to(&packet, addr)
-        .await
-        .map_err(|e| format!("send failed: {e}"))?;
+    send_to(&app, addr, address, &args).await.map_err(|e| format!("send to {addr} failed: {e}"))
+}
 
-    if inspect::armed(&app) {
+/// The send itself, with the socket error intact so a caller can tell
+/// "unreachable" from "not allowed" (experiments report it localized).
+pub async fn send_to(
+    app: &AppHandle,
+    addr: SocketAddr,
+    address: String,
+    args: &[OscArg],
+) -> std::io::Result<usize> {
+    let socket = UdpSocket::bind(if addr.is_ipv6() { "[::]:0" } else { "0.0.0.0:0" }).await?;
+    let packet = encode_message(&address, args);
+    let sent = socket.send_to(&packet, addr).await?;
+
+    if inspect::armed(app) {
         let arg_text = args.iter().map(arg_str).collect::<Vec<_>>().join(" ");
         inspect::publish(
-            &app,
+            app,
             Frame::tx("osc", "osc-send")
                 .local(
                     socket

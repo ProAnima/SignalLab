@@ -1,25 +1,36 @@
-import { useEffect, useState } from "react";
-import { api, EV, type HttpResponse, type JobInfo, type BurstProgress } from "../lib/api";
+import { useEffect, useMemo, useState } from "react";
+import { api, EV, type HttpResponse, type JobInfo, type BurstProgress, type SignalBody } from "../lib/api";
 import { useStore } from "../lib/store";
+import { describeError, responseFailure } from "../lib/errors";
+import { ErrorMessage } from "../components/ErrorMessage";
 import { useT } from "../lib/i18n";
-import { useJobStream, useSeries } from "../lib/hooks";
-import { fmtBytes, fmtNum, statusClass } from "../lib/format";
+import { useJobStream, usePersistentState, useSeries } from "../lib/hooks";
+import { fmtBytes, fmtNum, fmtTime, prettyJson, statusClass } from "../lib/format";
 import { Scope } from "../components/Scope";
 
 const METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
 
-export function HttpView() {
-  const { pushLog, refreshJobs, stopJob, jobGone } = useStore();
+const isHeaders = (value: unknown) => Array.isArray(value)
+  && value.every((pair) => Array.isArray(pair) && pair.length === 2 && pair.every((part) => typeof part === "string"));
+
+export function HttpView({ onToExperiment }: { onToExperiment?: (body: SignalBody) => void }) {
+  const { pushLog, pushError, refreshJobs, stopJob, jobGone } = useStore();
   const t = useT();
 
-  const [method, setMethod] = useState("GET");
-  const [url, setUrl] = useState("https://httpbin.org/get");
-  const [headers, setHeaders] = useState<[string, string][]>([["Accept", "application/json"]]);
-  const [body, setBody] = useState("");
-  const [timeout, setTimeoutMs] = useState(10000);
+  // The request is kept across screens and restarts; the response is not.
+  const [method, setMethod] = usePersistentState("signal-lab.http.method", "GET", (value) => METHODS.includes(value as string));
+  const [url, setUrl] = usePersistentState("signal-lab.http.url", "https://httpbin.org/get");
+  const [headers, setHeaders] = usePersistentState<[string, string][]>("signal-lab.http.headers", [["Accept", "application/json"]], isHeaders);
+  const [body, setBody] = usePersistentState("signal-lab.http.body", "");
+  const [timeout, setTimeoutMs] = usePersistentState("signal-lab.http.timeout", 10000);
   const [busy, setBusy] = useState(false);
   const [resp, setResp] = useState<HttpResponse | null>(null);
+  const [sentAt, setSentAt] = useState(0);
+  // The URL the shown response is for; the field may have changed since.
+  const [sentUrl, setSentUrl] = useState("");
   const [showHeaders, setShowHeaders] = useState(false);
+  const [raw, setRaw] = useState(false);
+  const pretty = useMemo(() => (resp ? prettyJson(resp.body) : null), [resp]);
 
   const buildReq = () => ({
     method, url,
@@ -29,22 +40,36 @@ export function HttpView() {
   });
 
   const send = async () => {
+    if (busy) return;
     setBusy(true);
     try {
       const r = await api.httpRequest(buildReq());
       setResp(r);
+      setSentAt(Date.now());
+      setSentUrl(url);
       if (r.error) {
-        pushLog("err", "http", "log.httpFailed", { method, url, error: r.error });
+        pushError("http", responseFailure(r, url), "log.httpFailed", { method, url });
       } else {
         pushLog(r.ok ? "ok" : "warn", "http", "log.httpDone", {
           method, url, status: r.status, ms: r.latency_ms.toFixed(0),
         });
       }
     } catch (e) {
-      pushLog("err", "http", String(e));
+      pushError("http", e);
+      setResp({ ok: false, status: 0, status_text: "", latency_ms: 0, headers: [], body: "", body_bytes: 0, truncated: false, error: describeError(e, t).text });
+      setSentAt(Date.now());
+      setSentUrl(url);
     } finally {
       setBusy(false);
     }
+  };
+
+  // Ctrl+Enter sends from any field of the request, the body included.
+  const onRequestKey = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); void send(); }
+  };
+  const onEnterSend = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" && !e.ctrlKey && !e.metaKey) { e.preventDefault(); void send(); }
   };
 
   // ---- burst ----
@@ -74,7 +99,7 @@ export function HttpView() {
       pushLog("ok", "http", "log.httpBurst", { method, url, workers: concurrency });
       refreshJobs();
     } catch (e) {
-      pushLog("err", "http", String(e));
+      pushError("http", e);
     }
   };
 
@@ -86,7 +111,7 @@ export function HttpView() {
       </div>
 
       <div className="cols side">
-        <div className="panel">
+        <div className="panel" onKeyDown={onRequestKey}>
           <p className="section-label">{t("http.request")}</p>
           <div className="row" style={{ marginBottom: 12 }}>
             <select style={{ flex: "0 0 110px" }} value={method} onChange={(e) => setMethod(e.target.value)}>
@@ -95,8 +120,9 @@ export function HttpView() {
             <input
               value={url}
               onChange={(e) => setUrl(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter" && !busy) { e.preventDefault(); void send(); } }}
+              onKeyDown={onEnterSend}
               placeholder="https://..."
+              aria-label="URL"
             />
           </div>
           <div className="field">
@@ -105,15 +131,19 @@ export function HttpView() {
               <div className="row tight" key={i} style={{ marginBottom: 6 }}>
                 <input
                   placeholder={t("http.headerName")}
+                  aria-label={t("http.headerName")}
+                  onKeyDown={onEnterSend}
                   value={h[0]}
                   onChange={(e) => setHeaders(headers.map((x, j) => j === i ? [e.target.value, x[1]] : x))}
                 />
                 <input
                   placeholder={t("http.headerValue")}
+                  aria-label={t("http.headerValue")}
+                  onKeyDown={onEnterSend}
                   value={h[1]}
                   onChange={(e) => setHeaders(headers.map((x, j) => j === i ? [x[0], e.target.value] : x))}
                 />
-                <button className="ghost sm" style={{ flex: "0 0 auto" }} onClick={() => setHeaders(headers.filter((_, j) => j !== i))}>✕</button>
+                <button className="ghost sm" style={{ flex: "0 0 auto" }} aria-label={t("exp.removeHeader")} onClick={() => setHeaders(headers.filter((_, j) => j !== i))}>✕</button>
               </div>
             ))}
             <button className="ghost sm" onClick={() => setHeaders([...headers, ["", ""]])}>
@@ -128,13 +158,26 @@ export function HttpView() {
           )}
           <div className="field">
             <label>{t("common.timeoutMs")}</label>
-            <input type="number" value={timeout} onChange={(e) => setTimeoutMs(+e.target.value)} />
+            <input type="number" value={timeout} onChange={(e) => setTimeoutMs(+e.target.value)} onKeyDown={onEnterSend} />
           </div>
           <div className="btn-row">
-            <button className="primary" onClick={send} disabled={busy}>
+            <button className="primary" onClick={send} disabled={busy} title={`${t("common.send")} · Enter / Ctrl+Enter`}>
               {busy ? t("common.sending") : t("common.send")}
             </button>
+            {onToExperiment && (
+              <button className="ghost" title={t("common.toExperimentHint")}
+                onClick={() => onToExperiment({ transport: "http", request: buildReq() })}>
+                {t("common.toExperiment")}
+              </button>
+            )}
           </div>
+          {/* The response panel can sit below the fold on a small window; the verdict never does. */}
+          {resp && !busy && (
+            <p className={"send-result " + (resp.error ? "err" : resp.ok ? "ok" : "warn")} role="status">
+              <span>{resp.error ? `✕ ${describeError(responseFailure(resp, sentUrl), t).text}` : `${resp.status} ${resp.status_text} · ${resp.latency_ms.toFixed(0)} ms · ${fmtBytes(resp.body_bytes)}`}</span>
+              <time>{fmtTime(sentAt).slice(0, 8)}</time>
+            </p>
+          )}
         </div>
 
         <div className="panel" style={{ minHeight: 320 }}>
@@ -158,7 +201,7 @@ export function HttpView() {
                   <div className="v">{fmtBytes(resp.body_bytes)}</div>
                 </div>
               </div>
-              {resp.error && <div className="hint amber" style={{ marginBottom: 12 }}>{resp.error}</div>}
+              {resp.error && <ErrorMessage className="hint amber" error={responseFailure(resp, sentUrl)} />}
               <button className="ghost sm" onClick={() => setShowHeaders(!showHeaders)} style={{ marginBottom: 8 }}>
                 {showHeaders ? "▾" : "▸"} {t("http.responseHeaders", { n: resp.headers.length })}
               </button>
@@ -171,9 +214,15 @@ export function HttpView() {
                   </tbody></table>
                 </div>
               )}
+              {pretty && (
+                <button className="ghost sm" style={{ marginBottom: 8, marginLeft: 6 }} aria-pressed={!raw} onClick={() => setRaw(!raw)}>
+                  {raw ? t("http.formatJson") : t("http.rawBody")}
+                </button>
+              )}
               <textarea
                 readOnly
-                value={resp.body + (resp.truncated ? "\n" + t("http.truncated") : "")}
+                aria-label={t("http.response")}
+                value={(pretty && !raw ? pretty : resp.body) + (resp.truncated ? "\n" + t("http.truncated") : "")}
                 style={{ minHeight: 160, fontSize: 11 }}
               />
             </>

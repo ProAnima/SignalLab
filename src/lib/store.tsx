@@ -8,14 +8,16 @@ import {
 } from "./api";
 import { fireSignal } from "./signals";
 import { ingestTopic, makeTopicRoot, type TopicNode } from "./topics";
-import type { TextKey } from "./i18n";
+import { describeError, type Failure } from "./errors";
+import type { TextKey, Translate } from "./i18n";
 
 export type LogLevel = "info" | "ok" | "warn" | "err";
 
 /**
  * A console line stores its dictionary key and parameters rather than finished
- * text, so switching language re-renders the whole console in the new one. Raw
- * engine errors are passed as free text and fall through `t` untouched.
+ * text, so switching language re-renders the whole console in the new one. A
+ * failure is stored as it came (a structured engine error or legacy text) and
+ * described when the line is shown, through the same renderer as everywhere.
  */
 export interface LogEntry {
   id: number;
@@ -24,6 +26,8 @@ export interface LogEntry {
   tag: string;
   key: TextKey;
   params?: Record<string, string | number>;
+  /** Shown as `{error}` in the message. */
+  error?: Failure;
 }
 
 type PushLog = (
@@ -32,6 +36,20 @@ type PushLog = (
   key: TextKey,
   params?: Record<string, string | number>
 ) => void;
+
+/** Log a failure. `key` may place it (`{error}`) in a sentence; by default the line is the failure. */
+type PushError = (
+  tag: string,
+  error: Failure,
+  key?: TextKey,
+  params?: Record<string, string | number>
+) => void;
+
+/** The text of a console line in the current language. */
+export function logText(entry: LogEntry, t: Translate): string {
+  const params = entry.error === undefined ? entry.params : { ...entry.params, error: describeError(entry.error, t).text };
+  return t(entry.key, params);
+}
 
 /** Where the library file stands right now, for the header line in the view. */
 export type SaveState = "idle" | "saving" | "saved" | "error";
@@ -53,13 +71,14 @@ interface Store {
   stopAll: () => void;
   log: LogEntry[];
   pushLog: PushLog;
+  pushError: PushError;
   clearLog: () => void;
 
   /** The signal library, in file order. */
   library: Signal[];
   libraryPath: string;
   /** Set when the file on disk could not be read — the list is then empty. */
-  libraryError: string | null;
+  libraryError: Failure | null;
   saveState: SaveState;
   /** Replace the library; the file follows on its own shortly after. */
   setLibrary: (next: Signal[]) => void;
@@ -98,7 +117,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [log, setLog] = useState<LogEntry[]>([]);
   const [library, setLibraryState] = useState<Signal[]>([]);
   const [libraryPath, setLibraryPath] = useState("");
-  const [libraryError, setLibraryError] = useState<string | null>(null);
+  const [libraryError, setLibraryError] = useState<Failure | null>(null);
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const [lastFired, setLastFired] = useState<Record<string, number>>({});
   const saveTimer = useRef<number | null>(null);
@@ -107,12 +126,19 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [mqttVersion, setMqttVersion] = useState(0);
   const [mqttDropped, setMqttDropped] = useState(0);
 
-  const pushLog = useCallback<PushLog>((level, tag, key, params) => {
+  const append = useCallback((entry: Omit<LogEntry, "id" | "ts">) => {
     setLog((prev) => {
-      const next = [...prev, { id: ++logSeq, ts: Date.now(), level, tag, key, params }];
+      const next = [...prev, { ...entry, id: ++logSeq, ts: Date.now() }];
       return next.length > LOG_CAPACITY ? next.slice(next.length - LOG_CAPACITY) : next;
     });
   }, []);
+
+  const pushLog = useCallback<PushLog>((level, tag, key, params) => append({ level, tag, key, params }), [append]);
+
+  const pushError = useCallback<PushError>(
+    (tag, error, key = "log.error", params) => append({ level: "err", tag, key, params, error }),
+    [append]
+  );
 
   const refreshJobs = useCallback(() => {
     const asked = Date.now();
@@ -170,21 +196,21 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       (e) => {
         // A hand-edited file with a typo must say so and stay untouched, not be
         // silently replaced by the starter set.
-        setLibraryError(String(e));
-        pushLog("err", "signals", String(e));
+        setLibraryError(e);
+        pushError("signals", e);
       }
     );
-  }, [pushLog]);
+  }, [pushLog, pushError]);
 
   const writeLibrary = useCallback((next: Signal[]) => {
     api.signalsSave({ version: 1, signals: next }).then(
       () => setSaveState("saved"),
       (e) => {
         setSaveState("error");
-        pushLog("err", "signals", String(e));
+        pushError("signals", e);
       }
     );
-  }, [pushLog]);
+  }, [pushError]);
 
   /**
    * The file is ours alone, so there is nothing to merge and no reason to make
@@ -211,9 +237,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setLastFired((prev) => ({ ...prev, [signal.id]: Date.now() }));
       pushLog("ok", "signals", "log.signalFired", { name: signal.name, detail });
     } catch (e) {
-      pushLog("err", "signals", "log.signalFailed", { name: signal.name, error: String(e) });
+      pushError("signals", e, "log.signalFailed", { name: signal.name });
     }
-  }, [pushLog, jobs]);
+  }, [pushLog, pushError, jobs]);
 
   useEffect(() => {
     api.hostInfo().then(setHost).catch(() => {});
@@ -225,7 +251,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     unlisteners.push(
       on<JobEnded>(EV.jobEnded, (e) => {
         const p = e.payload;
-        if (p.error) pushLog("err", p.kind, "log.jobFailed", { id: p.job_id, error: p.error });
+        if (p.error) pushError(p.kind, p.error, "log.jobFailed", { id: p.job_id });
         else pushLog("ok", p.kind, "log.jobFinished", { id: p.job_id });
         refreshJobs();
       })
@@ -244,7 +270,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       clearInterval(poll);
       unlisteners.forEach((u) => u.then((f) => f()));
     };
-  }, [pushLog, refreshJobs, loadLibrary]);
+  }, [pushLog, pushError, refreshJobs, loadLibrary]);
 
   // A debounced write must not be lost to teardown: cancel the timer and do
   // the write now instead of dropping it.
@@ -258,7 +284,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, [writeLibrary]);
 
   const value: Store = {
-    host, jobs, refreshJobs, jobGone, stopJob, stopAll, log, pushLog, clearLog,
+    host, jobs, refreshJobs, jobGone, stopJob, stopAll, log, pushLog, pushError, clearLog,
     library, libraryPath, libraryError, saveState, setLibrary,
     reloadLibrary: loadLibrary, fire, lastFired,
     mqttTopics, mqttVersion, mqttDropped, clearMqttTopics,

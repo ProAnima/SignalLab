@@ -79,3 +79,36 @@ export function useRollingList<T>(capacity = 300) {
   const clear = useCallback(() => setItems([]), []);
   return { items, push, clear };
 }
+
+/**
+ * useState that survives switching screens and restarting the app — for the
+ * fields you retype all day (a target, an address, a URL). Storage can be
+ * unavailable or hold an older shape, so a stored value is only taken back
+ * when `valid` accepts it.
+ */
+export function usePersistentState<T>(
+  key: string,
+  initial: T,
+  valid: (value: unknown) => boolean = (value) => typeof value === typeof initial,
+) {
+  const [value, setValue] = useState<T>(() => {
+    try {
+      const raw = localStorage.getItem(key);
+      if (raw !== null) {
+        const parsed: unknown = JSON.parse(raw);
+        if (valid(parsed)) return parsed as T;
+      }
+    } catch {
+      // Unavailable or corrupt: start from the default.
+    }
+    return initial;
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem(key, JSON.stringify(value));
+    } catch {
+      // The value just won't persist; editing still works this session.
+    }
+  }, [key, value]);
+  return [value, setValue] as const;
+}

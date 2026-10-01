@@ -1,0 +1,20 @@
+{
+  "version": 3,
+  "name": "HTTP check",
+  "params": [],
+  "profiles": [],
+  "profile": null,
+  "seed": null,
+  "nodes": [
+    { "id": "start", "type": "start", "x": 40, "y": 80 },
+    { "id": "request", "type": "http", "x": 270, "y": 80,
+      "request": { "method": "GET", "url": "http://127.0.0.1:8080/", "headers": [], "body": null, "timeout_ms": 4000 } },
+    { "id": "check", "type": "assert_status", "status": 200, "x": 500, "y": 80 },
+    { "id": "end", "type": "end", "x": 730, "y": 80 }
+  ],
+  "edges": [
+    { "from": "start", "to": "request", "port": "next" },
+    { "from": "request", "to": "check", "port": "next" },
+    { "from": "check", "to": "end", "port": "next" }
+  ]
+}

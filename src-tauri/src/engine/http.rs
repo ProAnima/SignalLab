@@ -9,6 +9,7 @@ use tauri::{AppHandle, Emitter};
 
 use super::inspect::{self, Frame, Gate};
 use super::jobs::{now_ms, JobInfo, JobRegistry, TaskGuard};
+use super::transport::{self, Cause};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct HttpRequest {
@@ -27,7 +28,7 @@ fn default_timeout() -> u64 {
     10_000
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HttpResponse {
     pub ok: bool,
     pub status: u16,
@@ -38,7 +39,11 @@ pub struct HttpResponse {
     pub body_bytes: usize,
     /// True if the body was truncated for display.
     pub truncated: bool,
+    /// The failure with every layer of its cause, when there was no response.
     pub error: Option<String>,
+    /// What kind of failure `error` is, for a localized message.
+    #[serde(default)]
+    pub cause: Option<Cause>,
 }
 
 const MAX_BODY_PREVIEW: usize = 256 * 1024;
@@ -91,6 +96,7 @@ async fn execute(client: &reqwest::Client, req: &HttpRequest) -> HttpResponse {
                 body_bytes,
                 truncated,
                 error: None,
+                cause: None,
             }
         }
         Err(e) => HttpResponse {
@@ -102,7 +108,8 @@ async fn execute(client: &reqwest::Client, req: &HttpRequest) -> HttpResponse {
             body: String::new(),
             body_bytes: 0,
             truncated: false,
-            error: Some(e.to_string()),
+            error: Some(transport::chain(&e)),
+            cause: Some(transport::of_reqwest(&e)),
         },
     }
 }

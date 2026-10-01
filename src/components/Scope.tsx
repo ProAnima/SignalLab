@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
 interface Props {
   data: number[];
@@ -10,7 +10,11 @@ interface Props {
   grid?: boolean;
 }
 
-/** Rolling line plot on a canvas. Auto-ranges when min/max are omitted. */
+/**
+ * Rolling line plot on a canvas. Auto-ranges when min/max are omitted.
+ * Screens stay mounted while another tab shows, so the plot is drawn for the
+ * width it has: a hidden canvas (width 0) is skipped and redrawn on return.
+ */
 export function Scope({
   data,
   min,
@@ -21,12 +25,22 @@ export function Scope({
   grid = true,
 }: Props) {
   const ref = useRef<HTMLCanvasElement>(null);
+  const [width, setWidth] = useState(0);
 
   useEffect(() => {
     const canvas = ref.current;
     if (!canvas) return;
-    const dpr = window.devicePixelRatio || 1;
+    const observer = new ResizeObserver(() => setWidth(canvas.clientWidth));
+    observer.observe(canvas);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    const canvas = ref.current;
+    if (!canvas) return;
     const w = canvas.clientWidth;
+    if (w === 0) return;
+    const dpr = window.devicePixelRatio || 1;
     const h = height;
     canvas.width = w * dpr;
     canvas.height = h * dpr;
@@ -102,7 +116,7 @@ export function Scope({
     ctx.shadowColor = color;
     ctx.shadowBlur = 6;
     ctx.stroke();
-  }, [data, min, max, color, fill, height, grid]);
+  }, [data, min, max, color, fill, height, grid, width]);
 
   return <canvas ref={ref} style={{ height }} />;
 }

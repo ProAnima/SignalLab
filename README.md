@@ -27,18 +27,104 @@ choice. See [Interface & localization](#interface--localization).
 
 | Module | What it does |
 | --- | --- |
+| **Experiments** | A node canvas for mixed HTTP, OSC, UDP, TCP and MQTT tests. Add a node after the selected one with `A`, drag a wire out of a port to create or connect the next step, send any single action node on its own, and branch on HTTP status or run two branches in parallel. Focus and native fullscreen modes give the graph more room. Runs highlight each step and save a JSON report under `Documents/SignalLab/runs/`. Event listeners, loops and retries are planned in [ROADMAP.md](ROADMAP.md). |
 | **Signals** | The library: a named, editable packet you can fire again — OSC, raw UDP or an HTTP request — grouped, searchable, and fired from anywhere with `Ctrl+K`. Ships with the recipes for the gear it was written against, saves itself as hand-editable JSON in `Documents/SignalLab/signals.json`, and turns any frame the Inspector caught into a byte-exact replay. |
 | **OSC** | Send OSC 1.0 messages with typed arguments, monitor an incoming port with live decoding, and drive continuous waveforms (sine / triangle / saw / square / ramp / random) into any endpoint with an on-screen oscilloscope. |
 | **MQTT** | Connect to a broker, subscribe to `#` and watch every topic it holds build up as a live tree — last value, retain flag, QoS, message count. Publish at QoS 0/1/2, announce a last will, and **clear a retained value** (the empty-payload trick), which is the one thing a stuck broker needs and no other tool makes easy. MQTT 3.1.1, hand-written, plain TCP. |
 | **Broadcast** | Fan a payload — OSC, text, or raw hex — out to a **list** of hosts, a **broadcast** address (`SO_BROADCAST`), a **multicast** group, or every host in a **CIDR sweep**. One-shot or as a repeating beacon. The paired **discovery listener** joins multicast groups, tables every peer that answers, and can auto-reply to impersonate a device. |
 | **Inspector** | One timeline for every module: each OSC send, monitor packet, beacon, discovery probe and impaired relay frame, decoded, with a hex dump and the relay's verdict on it. Filter by protocol / direction / text, then export the buffer to `.jsonl` or `.txt`. |
-| **HTTP** | Inspect a single request/response (status, latency, headers, body), then run a concurrent **load burst** with live RPS and latency percentiles. |
+| **HTTP** | Inspect a single request/response (status, latency, headers, body), then run a concurrent **load burst** with live RPS and min/avg/max latency (percentiles and rate profiles are planned in [ROADMAP.md](ROADMAP.md)). |
 | **Impairment** | A UDP relay that sits between a client and a target and injects **latency, jitter, packet loss, duplication and corruption** — a software network conditioner. |
 | **Storm** | A controlled **UDP/TCP traffic generator** for stress-testing your own servers, with live pps / Mbps metering and a bounded duration. |
 | **Scanner** | Concurrency-bounded **TCP connect port scan** with best-effort service banners and progress. |
 
 Every long-running action is a **job**: it streams telemetry to the UI over Tauri
 events and can be stopped individually or all at once from the console strip.
+
+### Working with an experiment
+
+The **Experiments** button beside the document name opens the templates:
+empty, HTTP status check, HTTP → OSC with a status branch, parallel flows, and
+*OSC ping → reply* (send `/ping` with the run id, wait for `/pong` carrying it).
+The same dialog imports JSON files of any earlier version (up to 4 MiB; they are
+migrated on open) and exports the current document to
+`Documents/SignalLab/exports/`. Import checks the file before showing a preview;
+**Open experiment** replaces the canvas as one undo action. Invalid files leave
+the current experiment intact. Export includes parameters and positions; opening
+a template or file does not run it. Incomplete connections are valid drafts.
+
+Building a flow is mostly the keyboard: select a node, press `A`, type a few
+letters of the node you want and press Enter. The new node is wired in **after
+the selected one** (spliced into its existing connection, or onto its free Yes/No
+output), downstream nodes make room, and its main field — URL, OSC address, topic,
+delay — is focused and selected, so you can type straight away. `Escape` returns
+from the form to the canvas for the next `A`. With the mouse, drag from an output
+port onto a node to connect it, or onto empty canvas to create the next node right
+there; the ＋ on a wire inserts into it. Saved Signals appear in the same menu and
+become nodes with their parameters filled in.
+
+**Parameters** (`{ }` in the toolbar) hold values such as `api = http://127.0.0.1:8080`;
+any text field can use them as `{{api}}/login`. Typing `{{` (or `Ctrl+Space`) suggests
+parameters, variables set upstream and generators (`{{uuid}}`, `{{now.iso}}`,
+`{{counter}}`, `{{random_int(1, 100)}}`, `{{pick(a, b)}}`). **Extract value** saves a JSON
+field, header, status, body or regex match of the latest response as a variable;
+**Check value** and **Branch on value** compare it. The properties panel previews what
+a node will send with current values. *Send now* on a request also fills in the
+variables of the Extract nodes after it, and clicking a value in its JSON response
+inserts an Extract node for that path. Every run records its seed; **Pin** stores it in
+the experiment so random values repeat exactly.
+
+**Profiles** are named sets of parameter values — *Stage*, *Venue* — edited as tabs in
+the Parameters panel: a profile overrides some parameters and inherits the rest. The
+switch in the toolbar chooses the profile used by runs, the preview and *Send now*,
+and marks with ⚠ a profile that would fail validation before you switch to it.
+**Run with…** (the arrow next to Run) runs once with another profile, changed values
+or a given seed without changing the experiment; the timeline shows what was used.
+
+**Secrets** — tokens and passwords — are written as `{{secret.API_TOKEN}}` and stored in
+the Windows Credential Manager from the Secrets section of the Parameters panel; the
+experiment file keeps only the names. Values never reach the interface: *Send now* runs
+in the engine, the preview shows `••••`, and every value is masked in the timeline,
+responses, run reports and the Inspector while it is in use. A run is refused before
+any traffic if a secret it needs is not stored on this computer. The full language is described in
+[docs/milestone-3-data.md](docs/milestone-3-data.md).
+
+Outputs that still need a wire pulse amber and nodes that Start cannot reach are
+drawn dashed. **Complete the graph** in the toolbar (and **Run** on an invalid
+graph) names the problem and jumps to the node. **Send now** (`Ctrl+Enter`) on an
+HTTP, OSC, UDP or MQTT node sends just that step through the same path as the
+direct instruments and shows the result — for HTTP, the formatted response —
+without running the experiment.
+
+The OSC and HTTP screens have **Add to experiment**, which appends the message or
+request you just tried as the next step. Their fields are kept across screens and
+restarts, and a one-line verdict appears under **Send**; the app reopens on the
+screen you used last.
+
+Use **Nodes** to find an existing node by type, URL, payload, or ID and jump to it.
+**Arrange** places the graph from left to right; **Fit graph** shows its full extent.
+Duplicate creates an unconnected copy with independent parameters. Drafts are
+autosaved even while connections are incomplete.
+
+| Shortcut | Action |
+| --- | --- |
+| `A` | Add a node after the selected one (or mid-view when nothing is selected) |
+| Double-click empty canvas | Add a node there |
+| Drag from an output port | Connect to the node you drop on, or add the next node on empty canvas |
+| `Ctrl+Enter` | Send the selected action node on its own |
+| `{{` or `Ctrl+Space` in a field | Suggest parameters, variables and generators |
+| `Ctrl+Z` / `Ctrl+Shift+Z` (also `Ctrl+Y`) | Undo / redo |
+| `Ctrl+D` | Duplicate selected action or check |
+| `Ctrl+F` | Find and reveal a node |
+| `Ctrl+0` / `Ctrl+1` | Fit graph / actual size |
+| `Ctrl` + wheel | Zoom around the pointer |
+| Arrow keys on a focused node | Move by 5 px; hold `Shift` for 20 px |
+| `Delete` | Remove the selected action or check |
+| `Escape` | Leave a node's form for the canvas; close the active popup/connection; leave fullscreen/focus mode |
+
+Text fields retain their native editing shortcuts. A node drag or field-edit
+session is one undo action. Up to 100 actions are kept for the current app
+session, including while switching between protocol instruments.
 
 ---
 
@@ -49,6 +135,14 @@ src/                     React + TypeScript UI (Vite)
   lib/api.ts             typed wrappers over Tauri invoke + event channels
   lib/store.tsx          shared jobs, console and signal-library state
   lib/signals.ts         firing, describing and capturing library signals
+  lib/experimentGraph.ts graph editing, duplication and DAG layout
+  lib/experimentData.ts  template suggestions, upstream variables, JSON paths
+  lib/editHistory.ts     bounded, grouped document history (pure reducer)
+  lib/useExperimentViewport.ts canvas zoom, fit and reveal behavior
+  lib/useExperimentDocument.ts document load, history, validation and autosave
+  lib/experimentTemplates.ts template catalog (shared JSON definitions)
+  lib/errors.ts          one renderer for every failure: engine errors and legacy text
+  components/ErrorMessage.tsx  where · what — why, with the technical detail folded
   lib/i18n.tsx           locale provider + t() with {placeholder} interpolation
   lib/locales/en.ts      source-of-truth dictionary (every key)
   lib/locales/ru.ts      Russian, typed against en.ts
@@ -62,6 +156,19 @@ src-tauri/src/engine/    the Rust engine
   osc.rs                 monitor + waveform generator
   broadcast.rs           broadcast / multicast / sweep emitter + discovery listener
   inspect.rs             the capture bus every module publishes to
+  error.rs               EngineError: code, values, node, field, detail
+  transport.rs           network failure causes (refused, timeout, DNS …)
+  experiment.rs          the document model: nodes, edges, outputs, versions
+  experiment_validate.rs structural and run-time validation
+  experiment_data.rs     parameters, templated fields, extraction and value checks
+  experiment_actions.rs  one network action, its failure classified
+  experiment_steps.rs    what one step does: send, check, extract, branch, wait
+  experiment_run.rs      the runner: branches, joins, listeners, events, reports
+  matching.rs            OSC address patterns, argument rules, UDP payloads, comparisons
+  listen.rs              wait listeners: armed per bind, bounded queues
+  template.rs            the {{template}} language and seeded generators
+  secrets.rs             credential-store secrets, masking, Inspector redaction
+  experiment_files.rs    JSON parsing, atomic working-file replacement and exports
   http.rs                request runner + concurrent burst
   netsim.rs              UDP impairment relay
   storm.rs               UDP/TCP load generator
@@ -72,6 +179,10 @@ src-tauri/src/engine/    the Rust engine
   jobs.rs                job registry (start / list / stop)
   commands.rs            thin #[tauri::command] layer
 ```
+
+Bundled definitions live in `experiments/templates/`. The starter experiment and
+template chooser use these same files; Rust tests check that each can run and
+round-trip through the document format.
 
 The engine uses `tokio` for async sockets, `socket2` for the socket options
 tokio can't set before bind (`SO_REUSEADDR`), and `reqwest` (native-tls /
@@ -104,8 +215,17 @@ The UI is fully bilingual (**English / Russian**), switched live from the header
   `Dict` type; `ru.ts` is typed against it, so a missing or misspelled key is a
   **compile error**, never a blank label at runtime.
 - `t("key", { name })` fills `{name}` placeholders. Unknown keys fall back to
-  English, then to the key string itself — which is how raw engine error
-  messages (not translatable) pass straight through.
+  English, then to the key string itself.
+- **Errors are translated too.** The experiment engine never builds a sentence:
+  it reports an `EngineError` — a stable `code`, values, the node and field it is
+  about, and the system's own wording as `detail`. `src/lib/errors.ts` renders it
+  as *Node · Field — message* from `err.<code>` and `field.<key>`, with the
+  detail folded underneath, in the banner, the properties panel, the timeline,
+  *Send now*, the console and the HTTP screen alike. Network failures are
+  classified (refused, timeout, name not found, unreachable, port in use, TLS …)
+  because each has a different fix. A `cargo test` scans the engine for every
+  code and field key and fails if `en.ts` has no text for one. Commands outside
+  the experiment engine still reject with plain text, which is shown as it is.
 - Console log lines store a **key + params**, not finished text, so switching
   language re-renders the whole history in the new one.
 - The initial language comes from `navigator.language`, and the choice persists
@@ -135,10 +255,15 @@ Worth knowing before editing the interface:
   that hands ~146px back to the module.
 - Click targets that belong next to a field go *beside* the `<label>`, never
   inside it — a click inside a label also activates the labelled input.
+- **Switching screens loses nothing.** A screen is mounted the first time it is
+  opened and then kept, hidden, for the session: typed values, the last
+  response, a running monitor's list and its job, and the scroll position are
+  all where they were left. Fields you would want again after a restart (the
+  OSC message, the HTTP request) are also stored in `localStorage`.
 
 ## Prerequisites
 
-- **Node.js** 18+ and npm
+- **Node.js** 22.18+ and npm (editor tests use native TypeScript stripping)
 - **Rust** (stable) — install via [rustup](https://rustup.rs)
 - **Windows:** Visual Studio C++ build tools (MSVC) + WebView2 runtime
   (WebView2 ships with Windows 10/11)
@@ -152,6 +277,10 @@ npm run tauri dev
 
 This launches the Vite dev server and the native window with hot reload for the
 UI and automatic Rust rebuilds.
+
+Run `npm test` for editor history and graph-transformation checks, `npm run build`
+for TypeScript and the production UI, and `cargo test --lib` in `src-tauri` for
+engine tests.
 
 ## Build a desktop bundle
 
@@ -231,3 +360,31 @@ Issues and pull requests are welcome. A few things worth knowing:
 ## License
 
 [MIT](LICENSE) © 2026 ProAnimaStudio.
+
+### Experiment node catalogue
+
+The editor supports Start/End, HTTP requests, OSC messages, UDP datagrams, TCP,
+MQTT publishing, Log, Delay, **Wait for OSC** and **Wait for UDP**, Extract, value
+checks and branches, status branching, parallel branch/join, and HTTP
+status/body/header/latency checks. The palette groups actions, waits (*Observe*),
+data, checks and flow; search supports Russian/English labels and protocol names,
+with arrow-key selection and Enter to insert. HTTP node forms include request
+headers, and OSC forms include typed arguments.
+
+A wait listens on `bind` (`IP:port`) from the moment the run starts, so a device
+that answers faster than the next step begins is not missed; replies count from
+the latest request on the same path. *Wait for OSC* matches an OSC 1.0 address
+pattern (`*`, `?`, `[0-9]`, `{ping,pong}`) and optional argument rules
+(`args[0] equals {{nonce}}`); *Wait for UDP* matches any datagram, text, a regular
+expression or a hex byte sequence. **Matched** continues with the reply in a
+variable (`{{reply.address}}`, `{{reply.args[0]}}`, `{{reply.text}}`,
+`{{reply.from}}`, `{{reply.ms}}`); an optional **Timeout** wire handles silence —
+without it a timeout fails the step and says how many other messages arrived.
+A port that cannot be opened stops the run before any traffic. *Listen now* on a
+wait listens with that step alone.
+
+MQTT nodes use unauthenticated brokers (QoS 0–2, retain, 15-second deadline).
+Body checks search the bounded HTTP preview: a match succeeds; a missing match in
+a truncated preview fails explicitly. Header names are case-insensitive; values
+and body text are case-sensitive. Retries, repeats, loops and Wait for MQTT are
+on the roadmap.

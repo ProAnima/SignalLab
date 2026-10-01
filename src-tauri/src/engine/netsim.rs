@@ -255,14 +255,9 @@ pub async fn start_proxy(
             };
             tokio::spawn(async move {
                 let mut buf = vec![0u8; 65_536];
-                loop {
-                    match down.recv_from(&mut buf).await {
-                        Ok((n, from)) => {
-                            *client_addr.lock().unwrap() = Some(from);
-                            schedule(buf[..n].to_vec(), &profile, &stats, up.clone(), None, &tap);
-                        }
-                        Err(_) => break,
-                    }
+                while let Ok((n, from)) = down.recv_from(&mut buf).await {
+                    *client_addr.lock().unwrap() = Some(from);
+                    schedule(buf[..n].to_vec(), &profile, &stats, up.clone(), None, &tap);
                 }
             })
         };
@@ -286,22 +281,17 @@ pub async fn start_proxy(
             };
             tokio::spawn(async move {
                 let mut buf = vec![0u8; 65_536];
-                loop {
-                    match up.recv(&mut buf).await {
-                        Ok(n) => {
-                            let dest = *client_addr.lock().unwrap();
-                            if let Some(addr) = dest {
-                                schedule(
-                                    buf[..n].to_vec(),
-                                    &profile,
-                                    &stats,
-                                    down.clone(),
-                                    Some(addr),
-                                    &tap,
-                                );
-                            }
-                        }
-                        Err(_) => break,
+                while let Ok(n) = up.recv(&mut buf).await {
+                    let dest = *client_addr.lock().unwrap();
+                    if let Some(addr) = dest {
+                        schedule(
+                            buf[..n].to_vec(),
+                            &profile,
+                            &stats,
+                            down.clone(),
+                            Some(addr),
+                            &tap,
+                        );
                     }
                 }
             })

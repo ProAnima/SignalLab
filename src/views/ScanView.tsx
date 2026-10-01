@@ -13,7 +13,7 @@ const PRESETS: { key: TKey; range: [number, number] }[] = [
 ];
 
 export function ScanView() {
-  const { pushLog, refreshJobs, stopJob, jobGone } = useStore();
+  const { pushLog, pushError, refreshJobs, stopJob, jobGone } = useStore();
   const t = useT();
 
   const [host, setHost] = useState("127.0.0.1");
@@ -47,7 +47,7 @@ export function ScanView() {
       pushLog("ok", "scan", "log.scanStarted", { host, from: portStart, to: portEnd });
       refreshJobs();
     } catch (e) {
-      pushLog("err", "scan", String(e));
+      pushError("scan", e);
     }
   };
 

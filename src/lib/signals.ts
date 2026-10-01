@@ -9,7 +9,7 @@
  */
 import {
   api,
-  type Frame, type MqttConfig, type RawPayload, type Signal, type SignalBody,
+  type ExperimentNode, type Frame, type MqttConfig, type RawPayload, type Signal, type SignalBody,
 } from "./api";
 import type { TKey } from "./i18n";
 
@@ -49,7 +49,7 @@ export function signalSummary(s: Signal): string {
 }
 
 /** host:port, split at the last colon so an IPv6 literal survives. */
-function splitBroker(broker: string): { host: string; port: number } {
+export function splitBroker(broker: string): { host: string; port: number } {
   const at = broker.lastIndexOf(":");
   if (at < 1) return { host: broker.trim(), port: 1883 };
   return { host: broker.slice(0, at).trim(), port: Number(broker.slice(at + 1)) || 1883 };
@@ -208,4 +208,38 @@ export function signalFromFrame(frame: Frame, taken: Signal[], name: string): Si
     note: `#${frame.seq} ${frame.proto} ${frame.dir === "rx" ? "←" : "→"} ${frame.remote} · ${frame.summary}`,
     body: { transport: "udp", target, payload },
   };
+}
+
+/**
+ * A signal as an experiment action with the same parameters. Hex UDP payloads
+ * have no node form yet (the UDP node sends text), so they return null.
+ */
+export function nodeFromSignal(body: SignalBody, x: number, y: number): ExperimentNode | null {
+  const base = { x: Math.max(12, Math.round(x)), y: Math.max(12, Math.round(y)) };
+  const id = (type: string) => `${type}-${crypto.randomUUID()}`;
+  switch (body.transport) {
+    case "osc":
+      return { ...base, id: id("osc"), type: "osc", target: body.target, address: body.address, args: structuredClone(body.args) };
+    case "http":
+      return { ...base, id: id("http"), type: "http", request: structuredClone(body.request) };
+    case "udp":
+      return body.payload.kind === "text"
+        ? { ...base, id: id("udp"), type: "udp", target: body.target, text: body.payload.text }
+        : null;
+    case "mqtt": {
+      const { host, port } = splitBroker(body.broker);
+      return { ...base, id: id("mqtt"), type: "mqtt", host, port, topic: body.topic, payload: body.payload, qos: body.qos, retain: body.retain };
+    }
+  }
+}
+
+/** The inverse, for sending one action node on its own through the direct path. */
+export function signalBodyOfNode(node: ExperimentNode): SignalBody | null {
+  switch (node.type) {
+    case "osc": return { transport: "osc", target: node.target, address: node.address, args: node.args };
+    case "http": return { transport: "http", request: node.request };
+    case "udp": return { transport: "udp", target: node.target, payload: { kind: "text", text: node.text } };
+    case "mqtt": return { transport: "mqtt", broker: `${node.host}:${node.port}`, topic: node.topic, payload: node.payload, qos: node.qos, retain: node.retain };
+    default: return null;
+  }
 }

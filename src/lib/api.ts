@@ -42,7 +42,104 @@ export interface HttpResponse {
   body: string;
   body_bytes: number;
   truncated: boolean;
+  /** The failure with every layer of its cause, when there was no response. */
   error: string | null;
+  /** What kind of failure `error` is; the screen shows `err.transport.<cause>`. */
+  cause?: TransportCause | null;
+}
+
+/** Why a network operation failed (`engine/transport.rs`). */
+export type TransportCause = "refused" | "timeout" | "dns" | "unreachable" | "reset" | "address_in_use"
+  | "address_unavailable" | "denied" | "tls" | "target_invalid" | "failed";
+
+/**
+ * The structured error of the experiment engine (`engine/error.rs`): a code
+ * the interface translates as `err.<code>`, values for its message, and where
+ * it happened. Other modules still reject with plain strings; `lib/errors.ts`
+ * renders both.
+ */
+export interface EngineError {
+  code: string;
+  params?: Record<string, string>;
+  node?: string;
+  field?: { key: string; index?: number };
+  /** Technical text from the system, a parser or a library. */
+  detail?: string;
+}
+
+// ---- experiments ----
+
+export type ExtractFrom = "json" | "header" | "status" | "body" | "regex";
+export type CompareOp = "eq" | "ne" | "lt" | "le" | "gt" | "ge" | "contains" | "matches" | "empty" | "not_empty";
+
+export type ExperimentNode = {
+  id: string; x: number; y: number;
+} & (
+  | { type: "start" | "end" | "fork" | "join" }
+  | { type: "delay"; ms: number }
+  | { type: "log"; message: string }
+  | { type: "http"; request: HttpRequest }
+  | { type: "tcp"; host: string; port: number; payload: string; timeout_ms: number }
+  | { type: "assert_status"; status: number }
+  | { type: "assert_body"; contains: string }
+  | { type: "assert_header"; name: string; contains: string }
+  | { type: "assert_latency"; max_ms: number }
+  | { type: "mqtt"; host: string; port: number; topic: string; payload: string; qos: number; retain: boolean }
+  | { type: "branch_status"; status: number }
+  | { type: "osc"; target: string; address: string; args: OscArg[] }
+  | { type: "udp"; target: string; text: string }
+  | { type: "extract"; variable: string; from: ExtractFrom; expr: string }
+  | { type: "assert_value"; value: string; op: CompareOp; expected: string }
+  | { type: "branch_value"; value: string; op: CompareOp; expected: string }
+  | { type: "wait_osc"; bind: string; address: string; args: ArgRule[]; timeout_ms: number; variable: string }
+  | { type: "wait_udp"; bind: string; mode: UdpMode; pattern: string; timeout_ms: number; variable: string }
+);
+
+/** `args[index] <op> value` on a received OSC message; the value is a template. */
+export interface ArgRule { index: number; op: CompareOp; value: string }
+export type UdpMode = "any" | "contains" | "regex" | "hex";
+export type ExperimentPort = "next" | "yes" | "no" | "branch1" | "branch2" | "matched" | "timeout";
+
+export interface ExperimentParam { name: string; value: string }
+/** What Send now reports; the resolved request never comes back. */
+export interface NodeSendResult {
+  detail: string;
+  response: HttpResponse | null;
+  /** A wait's reply, or the values the Extract nodes after a request take from its response. */
+  vars: Record<string, unknown>;
+}
+/** A named set of parameter values; parameters it does not set keep their default. */
+export interface ExperimentProfile { name: string; values: Record<string, string> }
+/** A profile (null: the defaults) that would fail validation if it were active. */
+export interface ProfileIssue { profile: string | null; error: EngineError }
+
+export interface Experiment {
+  version: number;
+  name: string;
+  /** Default values. */
+  params: ExperimentParam[];
+  profiles: ExperimentProfile[];
+  /** The active profile; null runs with the defaults. */
+  profile: string | null;
+  /** null: a fresh seed for every run. */
+  seed: number | null;
+  nodes: ExperimentNode[];
+  edges: { from: string; to: string; port?: ExperimentPort }[];
+}
+
+export interface ExperimentStep {
+  job_id: number; ts: number; node_id: string;
+  state: "running" | "passed" | "failed"; detail: string;
+  message_key?: string | null; message_params?: Record<string, string | number>;
+  /** Variables this step wrote. */
+  vars?: Record<string, unknown>;
+  /** Why the step failed. */
+  error?: EngineError;
+}
+
+export interface ExperimentEnded {
+  job_id: number; kind: string; seed: number; profile: string | null; overridden: boolean; error: EngineError | null;
+  report_path: string | null; report_error: EngineError | null;
 }
 
 export type Waveform =
@@ -292,7 +389,8 @@ export interface StormStat {
 }
 export interface OpenPort { job_id: number; ts: number; port: number; banner: string | null; }
 export interface ScanProgress { job_id: number; ts: number; done: number; total: number; open: number; }
-export interface JobEnded { job_id: number; kind: string; error: string | null; }
+/** Experiments end with an `EngineError`; the other jobs with text. */
+export interface JobEnded { job_id: number; kind: string; error: string | EngineError | null; }
 export interface EmitStat {
   job_id: number; ts: number; rounds: number; packets: number;
   bytes: number; errors: number; pps: number;
@@ -337,6 +435,26 @@ export const api = {
   jobsList: () => invoke<JobInfo[]>("jobs_list"),
   jobStop: (id: number) => invoke<boolean>("job_stop", { id }),
   jobsStopAll: () => invoke<void>("jobs_stop_all"),
+  experimentLoad: () => invoke<Experiment>("experiment_load"),
+  experimentSave: (document: Experiment) => invoke<string>("experiment_save", { document }),
+  experimentParse: (text: string) => invoke<Experiment>("experiment_parse", { text }),
+  experimentExport: (document: Experiment) => invoke<string>("experiment_export", { document }),
+  /** Throws the blocking problem; otherwise returns what the other profiles would fail on. */
+  experimentValidate: (document: Experiment, overrides?: Record<string, string>) =>
+    invoke<ProfileIssue[]>("experiment_validate", { document, overrides: overrides ?? null }),
+  /** `overrides` and `seed` (Run with…) apply to this run only. */
+  experimentStart: (document: Experiment, overrides?: Record<string, string>, seed?: number | null) =>
+    invoke<JobInfo>("experiment_start", { document, overrides: overrides ?? null, seed: seed ?? null }),
+  /** A node with its templates resolved; names without a value stay as written and are listed. */
+  experimentResolve: (document: Experiment, nodeId: string, vars: Record<string, unknown>) =>
+    invoke<{ node: ExperimentNode; missing: string[] }>("experiment_resolve", { document, nodeId, vars }),
+  /** Send one node through the runner's code; secret values are masked in what comes back. */
+  experimentSendNode: (document: Experiment, nodeId: string, vars: Record<string, unknown>) =>
+    invoke<NodeSendResult>("experiment_send_node", { document, nodeId, vars }),
+  /** Which secret names are stored on this machine. Values are never returned. */
+  secretStatus: (names: string[]) => invoke<Record<string, boolean>>("secret_status", { names }),
+  secretSet: (name: string, value: string) => invoke<void>("secret_set", { name, value }),
+  secretDelete: (name: string) => invoke<void>("secret_delete", { name }),
 
   oscSend: (target: string, address: string, args: OscArg[]) =>
     invoke<number>("osc_send", { target, address, args }),
@@ -383,6 +501,8 @@ export function on<T>(event: string, handler: EventCallback<T>): Promise<Unliste
 }
 
 export const EV = {
+  experimentStep: "experiment://step",
+  experimentEnded: "experiment://ended",
   oscMessage: "osc://message",
   oscGenTick: "osc://gen-tick",
   burstProgress: "http://burst-progress",

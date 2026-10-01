@@ -132,7 +132,7 @@ function fromLocalIp(ip: string, mode: TargetMode): string | null {
 }
 
 export function BroadcastView() {
-  const { pushLog, refreshJobs, stopJob, jobGone, host } = useStore();
+  const { pushLog, pushError, refreshJobs, stopJob, jobGone, host } = useStore();
   const t = useT();
 
   // ---- emitter ----
@@ -191,7 +191,7 @@ export function BroadcastView() {
         });
       }
     } catch (e) {
-      pushLog("err", "broadcast", String(e));
+      pushError("broadcast", e);
     } finally {
       setBusy(false);
     }
@@ -210,7 +210,7 @@ export function BroadcastView() {
       pushLog("ok", "broadcast", "log.beaconStarted", { mode: t(`bc.mode.${mode}` as TKey), target, rate });
       refreshJobs();
     } catch (e) {
-      pushLog("err", "broadcast", String(e));
+      pushError("broadcast", e);
     }
   };
 
@@ -271,7 +271,7 @@ export function BroadcastView() {
       }
       refreshJobs();
     } catch (e) {
-      pushLog("err", "discovery", String(e));
+      pushError("discovery", e);
     }
   };
 

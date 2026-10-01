@@ -21,9 +21,20 @@ serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "io-util"] }
 reqwest = { version = "0.12", features = ["json", "gzip"] }
 rand = "0.8"
+# Extract by pattern and the "matches" comparison in experiments.
+regex = "1"
 # Socket options tokio doesn't expose before bind — SO_REUSEADDR, so the
 # discovery listener can share a port with the real service.
 socket2 = "0.5"
+
+# Experiment secrets live in the operating system's credential store, never in
+# a file. Only stores that persist are enabled; other platforms report that
+# secrets are unavailable instead of keeping them in memory.
+[target.'cfg(windows)'.dependencies]
+keyring = { version = "3", features = ["windows-native"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3", features = ["apple-native"] }
 
 [profile.release]
 opt-level = "s"
