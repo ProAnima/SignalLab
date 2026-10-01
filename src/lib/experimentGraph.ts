@@ -60,8 +60,21 @@ export function requiredPortsFor(type: NodeType): Port[] {
 
 export function portOf(edge: GraphEdge): Port { return edge.port ?? "next"; }
 
-/** An output a new node can be attached to. */
-export interface Anchor { from: string; port: Port }
+/**
+ * An output a new node can be attached to. An output may have several wires
+ * (their nodes run in parallel); `to` names one of them.
+ */
+export interface Anchor { from: string; port: Port; to?: string }
+
+/** The wire an anchor means: the one it names, else the output's first. */
+function wireOf(doc: Experiment, anchor: Anchor): GraphEdge | undefined {
+  return doc.edges.find((edge) => edge.from === anchor.from && portOf(edge) === anchor.port && (anchor.to === undefined || edge.to === anchor.to));
+}
+
+/** Is there a wire from this output to `to` already? */
+export function isWired(doc: Experiment, from: string, port: Port, to: string): boolean {
+  return doc.edges.some((edge) => edge.from === from && portOf(edge) === port && edge.to === to);
+}
 
 /** The first unconnected output, else the first output (a new node then splices in). */
 export function defaultPort(doc: Experiment, id: string): Port | null {
@@ -93,7 +106,7 @@ function overlaps(nodes: ExperimentNode[], x: number, y: number): boolean {
 export function placeAfter(doc: Experiment, anchor: Anchor): { x: number; y: number } {
   const source = doc.nodes.find((node) => node.id === anchor.from);
   if (!source) return { x: 40, y: 40 };
-  const edge = doc.edges.find((item) => item.from === anchor.from && portOf(item) === anchor.port);
+  const edge = wireOf(doc, anchor);
   const target = edge && doc.nodes.find((node) => node.id === edge.to);
   const x = source.x + STEP_X;
   if (target) return { x, y: target.y };
@@ -104,13 +117,25 @@ export function placeAfter(doc: Experiment, anchor: Anchor): { x: number; y: num
 
 /**
  * Attach `node` to an output. A connected output keeps its flow: the node is
- * spliced in between. Without a usable anchor the node is only added.
+ * spliced into the wire (the one the anchor names, else the first). Without a
+ * usable anchor the node is only added.
  */
 export function addAfter(doc: Experiment, anchor: Anchor | null, node: ExperimentNode): Experiment {
   const source = anchor && doc.nodes.find((item) => item.id === anchor.from);
   if (!anchor || !source || !validPortsFor(source.type).includes(anchor.port)) return { ...doc, nodes: [...doc.nodes, node] };
-  const edge = doc.edges.find((item) => item.from === anchor.from && portOf(item) === anchor.port);
+  const edge = wireOf(doc, anchor);
   if (edge) return insertOnEdge(doc, edge, node);
+  return { ...doc, nodes: [...doc.nodes, node], edges: [...doc.edges, { from: anchor.from, to: node.id, port: anchor.port }] };
+}
+
+/**
+ * Attach `node` on a new wire of the output, beside the ones it has: a wire
+ * dragged out of a connected output starts parallel work instead of cutting
+ * into the existing flow.
+ */
+export function addBranch(doc: Experiment, anchor: Anchor | null, node: ExperimentNode): Experiment {
+  const source = anchor && doc.nodes.find((item) => item.id === anchor.from);
+  if (!anchor || !source || !validPortsFor(source.type).includes(anchor.port)) return { ...doc, nodes: [...doc.nodes, node] };
   return { ...doc, nodes: [...doc.nodes, node], edges: [...doc.edges, { from: anchor.from, to: node.id, port: anchor.port }] };
 }
 
@@ -150,18 +175,23 @@ function reaches(edges: GraphEdge[], from: string, target: string): boolean {
   return false;
 }
 
+/**
+ * Add a wire. An output keeps the wires it has — several wires run their
+ * nodes in parallel. Refused (the same document back) for a wire that exists,
+ * a loop, or a port the node does not have.
+ */
 export function connect(doc: Experiment, from: string, port: Port, to: string): Experiment {
   const source = doc.nodes.find((node) => node.id === from);
   const target = doc.nodes.find((node) => node.id === to);
   if (!source || !target || from === to || source.type === "end" || target.type === "start") return doc;
-  if (!validPortsFor(source.type).includes(port)) return doc;
-  const otherEdges = doc.edges.filter((edge) => !(edge.from === from && portOf(edge) === port));
-  if (reaches(otherEdges, to, from)) return doc;
-  return { ...doc, edges: [...otherEdges, { from, to, port }] };
+  if (!validPortsFor(source.type).includes(port) || isWired(doc, from, port, to)) return doc;
+  if (reaches(doc.edges, to, from)) return doc;
+  return { ...doc, edges: [...doc.edges, { from, to, port }] };
 }
 
-export function disconnect(doc: Experiment, from: string, port: Port): Experiment {
-  return { ...doc, edges: doc.edges.filter((edge) => !(edge.from === from && portOf(edge) === port)) };
+/** Remove one wire of an output, or all of them without `to`. */
+export function disconnect(doc: Experiment, from: string, port: Port, to?: string): Experiment {
+  return { ...doc, edges: doc.edges.filter((edge) => !(edge.from === from && portOf(edge) === port && (to === undefined || edge.to === to))) };
 }
 
 export function insertOnEdge(doc: Experiment, edge: GraphEdge, node: ExperimentNode): Experiment {
@@ -178,7 +208,8 @@ export function insertOnEdge(doc: Experiment, edge: GraphEdge, node: ExperimentN
     downstream.add(id);
     for (const candidate of doc.edges) if (candidate.from === id) stack.push(candidate.to);
   }
-  const before = doc.edges.filter((candidate) => !(candidate.from === edge.from && portOf(candidate) === portOf(edge)));
+  // Only this wire is cut; the output's other wires keep their nodes.
+  const before = doc.edges.filter((candidate) => !(candidate.from === edge.from && portOf(candidate) === portOf(edge) && candidate.to === edge.to));
   const defaultOutPort = validPortsFor(node.type)[0] ?? "next";
   return {
     ...doc,
@@ -193,7 +224,7 @@ export function removeNode(doc: Experiment, id: string): Experiment {
   if (!node || node.type === "start" || node.type === "end") return doc;
   const incoming = doc.edges.filter((edge) => edge.to === id);
   const outgoing = doc.edges.filter((edge) => edge.from === id);
-  const bridge = incoming.length === 1 && outgoing.length === 1
+  const bridge = incoming.length === 1 && outgoing.length === 1 && !isWired(doc, incoming[0].from, portOf(incoming[0]), outgoing[0].to)
     ? [{ from: incoming[0].from, to: outgoing[0].to, port: portOf(incoming[0]) }]
     : [];
   return { ...doc, nodes: doc.nodes.filter((item) => item.id !== id),

@@ -1242,6 +1242,13 @@ kbd {
 .experiment-node-body { cursor: grab; touch-action: none; }
 .experiment-node-body:active { cursor: grabbing; }
 .experiment-port { z-index: 3; display: block; padding: 0; min-width: 12px; min-height: 12px; top: calc(50% - 6px); width: 12px; height: 12px; border-radius: 50%; cursor: crosshair; }
+/* The dot stays small; the area that takes the pointer does not. It reaches
+   mostly away from the node (so grabbing the node still works), grows when the
+   canvas is zoomed out, and stays short enough vertically that two outputs of
+   one node never overlap (they are 28 px apart). */
+.experiment-port::before { content: ""; position: absolute; top: -8px; bottom: -8px; border-radius: 10px; }
+.experiment-port.output::before { left: -8px; right: calc(-18px / var(--zoom, 1)); }
+.experiment-port.input::before { left: calc(-18px / var(--zoom, 1)); right: -8px; }
 .experiment-port:hover, .experiment-port.awaiting { border-color: var(--accent); background: var(--accent-soft); box-shadow: 0 0 0 5px rgba(62,230,176,.12); }
 .experiment-port.output.yes { top: 22px; border-color: var(--accent-deep); }
 .experiment-port.output.no { top: 50px; border-color: var(--amber); }

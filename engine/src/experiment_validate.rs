@@ -215,7 +215,9 @@ pub fn validate_document(doc: &Experiment) -> EngineResult<()> {
     if count(|kind| matches!(kind, NodeKind::Start)) != 1 || count(|kind| matches!(kind, NodeKind::End)) != 1 {
         return Err(EngineError::new("doc.start_end_count"));
     }
-    let mut outputs = HashSet::new();
+    // One output may feed several nodes (they run in parallel), but the same
+    // wire twice is a mistake in the file.
+    let mut wires = HashSet::new();
     for edge in &doc.edges {
         if !ids.contains(edge.from.as_str()) || !ids.contains(edge.to.as_str()) || edge.from == edge.to {
             let error = EngineError::new("doc.connection_invalid").with("from", &edge.from).with("to", &edge.to);
@@ -224,8 +226,8 @@ pub fn validate_document(doc: &Experiment) -> EngineResult<()> {
         if !PORTS.contains(&edge.port.as_str()) {
             return Err(EngineError::new("doc.port_invalid").with("port", &edge.port).at(&edge.from));
         }
-        if !outputs.insert((edge.from.as_str(), edge.port.as_str())) {
-            return Err(EngineError::new("doc.port_taken").with("port", &edge.port).at(&edge.from));
+        if !wires.insert((edge.from.as_str(), edge.port.as_str(), edge.to.as_str())) {
+            return Err(EngineError::new("doc.connection_duplicate").with("from", &edge.from).with("to", &edge.to).at(&edge.from));
         }
     }
     Ok(())
@@ -482,8 +484,12 @@ mod tests {
         doc.edges[0].port = "sideways".into();
         assert!(validate_document(&doc).unwrap_err().is("doc.port_invalid"));
         let mut doc = starter();
+        doc.edges.push(doc.edges[0].clone());
+        assert!(validate_document(&doc).unwrap_err().is("doc.connection_duplicate"));
+        // One output feeding two nodes is parallel work, not a mistake.
+        let mut doc = starter();
         doc.edges[1].from = doc.edges[0].from.clone();
-        assert!(validate_document(&doc).unwrap_err().is("doc.port_taken"));
+        assert!(validate_document(&doc).is_ok());
         let mut doc = starter();
         doc.edges[0].to = "absent".into();
         assert!(validate_document(&doc).unwrap_err().is("doc.connection_invalid"));

@@ -192,6 +192,13 @@ Dockerfile, deploy/compose.yaml, scripts/image.mjs   the server image and its sm
   hides it afterwards, so nothing typed or received is lost on a tab switch. A
   view must therefore not assume it is visible (a canvas measures 0 wide while
   hidden — see `Scope`) and must not grab global keys.
+- **An output may have several wires.** Each wire past the first runs as a
+  parallel branch with a copy of the variables (as Fork does); a Join waits for
+  every incoming wire; End passes once, in `experiment_run::run` after the last
+  branch, and not at all if one failed. `connect()` adds, never replaces;
+  `disconnect()` and an `Anchor` name one wire with `to`. A dragged wire always
+  adds (`addBranch` on empty canvas); *A* / *Add next* / ＋ splice (`addAfter`).
+  The same wire twice is `doc.connection_duplicate`.
 - **Waits listen from the start of the run.** `listen::Listener`s are opened in
   `experiment_run::start` before the job exists (a taken port is a Run error at
   the wait), shared per bind, and dropped with the run. A wait counts datagrams

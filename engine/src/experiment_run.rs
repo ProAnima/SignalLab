@@ -100,7 +100,9 @@ struct EngineShared {
     job_id: u64,
     events: Mutex<Vec<RunEvent>>,
     by_id: HashMap<String, Node>,
-    outgoing: HashMap<(String, String), String>,
+    /// Every wire of an output, in document order: one output may feed several
+    /// nodes, which then run in parallel.
+    outgoing: HashMap<(String, String), Vec<String>>,
     joins: Mutex<HashMap<String, JoinBarrier>>,
     stop_flag: AtomicBool,
     first_error: Mutex<Option<EngineError>>,
@@ -204,6 +206,41 @@ fn spawn_branch(
     };
 }
 
+/// Where a branch goes after `from` leaves through `ports`: every wire, in
+/// document order. The first target continues this branch; each further one
+/// starts a parallel branch with a copy of its variables. A Join counts the
+/// arrival and lets only the last one through, with the merged variables — so
+/// a branch whose every target is a waiting Join ends here (`None`).
+fn fan_out(
+    shared: &Arc<EngineShared>,
+    from: &str,
+    ports: &[&str],
+    context: &BranchContext,
+    active_tasks: &Arc<AtomicUsize>,
+    done_tx: &tokio::sync::mpsc::Sender<()>,
+) -> Option<(String, BranchContext)> {
+    let mut stay = None;
+    for port in ports {
+        let Some(targets) = shared.outgoing.get(&(from.to_string(), port.to_string())) else { continue };
+        for target in targets {
+            let next = if shared.by_id.get(target).is_some_and(|node| matches!(node.kind, NodeKind::Join)) {
+                match arrive(shared, target, from, context) {
+                    Some(merged) => merged,
+                    None => continue,
+                }
+            } else {
+                context.clone()
+            };
+            if stay.is_none() {
+                stay = Some((target.clone(), next));
+            } else {
+                spawn_branch(shared.clone(), target.clone(), next, active_tasks.clone(), done_tx.clone());
+            }
+        }
+    }
+    stay
+}
+
 /// Count the arrival at a Join. Returns the merged context when every input
 /// has arrived, `None` while the Join is still waiting.
 fn arrive(shared: &EngineShared, join: &str, from: &str, context: &BranchContext) -> Option<BranchContext> {
@@ -237,6 +274,15 @@ async fn run_branch(
             fail(&shared, &current, EngineError::new("run.node_missing").with("id", &current));
             break;
         };
+        // End is reached by every parallel branch that leads there, but the run
+        // completes once: End shows as running from the first arrival and passes
+        // in `run`, after the last branch — unless a branch failed meanwhile.
+        if matches!(node.kind, NodeKind::End) {
+            if !shared.end_reached.swap(true, Ordering::SeqCst) {
+                emit(&shared, &current, Step::running());
+            }
+            break;
+        }
         emit(&shared, &current, Step::running());
 
         // Templates are resolved per execution, against this branch's variables.
@@ -282,30 +328,16 @@ async fn run_branch(
             }
         };
 
-        if matches!(node.kind, NodeKind::End) {
-            shared.end_reached.store(true, Ordering::SeqCst);
-            break;
-        }
-        if matches!(node.kind, NodeKind::Fork) {
-            let branch = |port: &str| shared.outgoing.get(&(current.clone(), port.to_string())).cloned();
-            let (Some(first), Some(second)) = (branch("branch1"), branch("branch2")) else {
-                fail(&shared, &current, EngineError::new("graph.outputs_required"));
-                break;
-            };
-            spawn_branch(shared.clone(), second, context.clone(), active_tasks.clone(), done_tx.clone());
-            current = first;
-            continue;
-        }
-        let Some(next) = shared.outgoing.get(&(current.clone(), port.to_string())).cloned() else {
-            break;
-        };
-        if shared.by_id.get(&next).is_some_and(|target| matches!(target.kind, NodeKind::Join)) {
-            match arrive(&shared, &next, &current, &context) {
-                Some(merged) => context = merged,
-                None => break,
+        // A Parallel branch leaves through both of its outputs; any other node
+        // through the one its step chose. Either may have several wires.
+        let ports: &[&str] = if matches!(node.kind, NodeKind::Fork) { &["branch1", "branch2"] } else { &[port] };
+        match fan_out(&shared, &current, ports, &context, &active_tasks, &done_tx) {
+            Some((next, next_context)) => {
+                current = next;
+                context = next_context;
             }
+            None => break,
         }
-        current = next;
     }
 
     if active_tasks.fetch_sub(1, Ordering::SeqCst) == 1 {
@@ -348,7 +380,10 @@ async fn run(host: &Host, events: &mut Vec<RunEvent>, job_id: u64, doc: &Experim
         job_id,
         events: Mutex::new(Vec::new()),
         by_id: doc.nodes.iter().map(|node| (node.id.clone(), node.clone())).collect(),
-        outgoing: doc.edges.iter().map(|edge| ((edge.from.clone(), edge.port.clone()), edge.to.clone())).collect(),
+        outgoing: doc.edges.iter().fold(HashMap::new(), |mut outgoing: HashMap<(String, String), Vec<String>>, edge| {
+            outgoing.entry((edge.from.clone(), edge.port.clone())).or_default().push(edge.to.clone());
+            outgoing
+        }),
         joins: Mutex::new(joins),
         stop_flag: AtomicBool::new(false),
         first_error: Mutex::new(None),
@@ -393,6 +428,13 @@ async fn run(host: &Host, events: &mut Vec<RunEvent>, job_id: u64, doc: &Experim
         }
     }
 
+    // Every branch has finished: now the run is complete.
+    if shared.first_error.lock().unwrap().is_none() {
+        if let Some(end) = doc.nodes.iter().find(|node| matches!(node.kind, NodeKind::End)) {
+            let complete = Step { state: "passed", detail: "Complete".into(), message: Some(("exp.step.complete", serde_json::json!({}))), vars: None, error: None };
+            emit(&shared, &end.id, complete);
+        }
+    }
     if let Ok(list) = shared.events.lock() {
         *events = list.clone();
     }

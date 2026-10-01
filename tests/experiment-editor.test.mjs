@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { historyReducer, newHistory, HISTORY_LIMIT } from "../src/lib/editHistory.ts";
-import { addAfter, anchorAfter, arrangeNodes, connect, createNode, duplicateNode, insertOnEdge, missingOutputs, placeAfter, removeNode, requiredPortsFor, unreachableNodes, validPortsFor, NODE_WIDTH, NODE_HEIGHT } from "../src/lib/experimentGraph.ts";
+import { addAfter, addBranch, anchorAfter, arrangeNodes, connect, createNode, disconnect, duplicateNode, insertOnEdge, isWired, missingOutputs, placeAfter, removeNode, requiredPortsFor, unreachableNodes, validPortsFor, NODE_WIDTH, NODE_HEIGHT } from "../src/lib/experimentGraph.ts";
 import { ADDABLE_NODES, NODE_CATALOG } from "../src/lib/experimentCatalog.ts";
 import { jsonPath, suggestVariableName, templateAt, variablesBefore, isIdent, effectiveParams, renameParam, removeParam, setParamValue, addProfile, renameProfile, removeProfile, secretNames, replyFields, writtenVariable } from "../src/lib/experimentData.ts";
 import { describeError, failureNode, fieldLabel, isEngineError, messageParams, responseFailure } from "../src/lib/errors.ts";
@@ -378,3 +378,34 @@ test("secret names are found in any field, once each", () => {
   assert.deepEqual(secretNames(doc), ["API_TOKEN", "KEY_2"]);
   assert.deepEqual(secretNames(fixture()), []);
 });
+
+test("an output can feed several nodes: wires add up, and each one is cut, spliced and removed on its own", () => {
+  const graph = fixture();
+  const parallel = { ...createNode("delay", 240, 160), id: "parallel" };
+  // A wire dragged out of a connected output adds a parallel node beside the flow.
+  const branched = addBranch(graph, { from: "start", port: "next" }, parallel);
+  assert.deepEqual(branched.edges.filter((edge) => edge.from === "start").map((edge) => edge.to), ["request", "parallel"]);
+  // Dropped on a node: one more wire, the old one stays.
+  const wired = connect(branched, "parallel", "next", "end");
+  assert.ok(isWired(wired, "parallel", "next", "end") && isWired(wired, "request", "next", "end"));
+  assert.equal(connect(wired, "start", "next", "parallel"), wired, "the same wire twice changes nothing");
+  assert.equal(connect(wired, "parallel", "next", "start"), wired, "Start takes no input");
+  // The ＋ on one wire splices into that wire only.
+  const insert = { ...createNode("log", 300, 160), id: "log" };
+  const spliced = addAfter(wired, { from: "start", port: "next", to: "parallel" }, insert);
+  assert.deepEqual(spliced.edges.filter((edge) => edge.from === "start").map((edge) => edge.to).sort(), ["log", "request"]);
+  assert.ok(isWired(spliced, "log", "next", "parallel"));
+  const viaEdge = insertOnEdge(wired, wired.edges.find((edge) => edge.from === "start" && edge.to === "request"), { ...insert, id: "log2" });
+  assert.ok(isWired(viaEdge, "start", "next", "parallel"), "the other wire of the output keeps its node");
+  // × on one connection removes that wire, not the output's others.
+  const cut = disconnect(wired, "start", "next", "parallel");
+  assert.ok(isWired(cut, "start", "next", "request") && !isWired(cut, "start", "next", "parallel"));
+  assert.equal(disconnect(wired, "start", "next").edges.some((edge) => edge.from === "start"), false, "without a target every wire of the output goes");
+  // Removing a node bridges its wire, but never into a duplicate.
+  const diamond = connect(connect(addBranch(graph, { from: "start", port: "next" }, { ...createNode("delay", 0, 0), id: "mid" }), "mid", "next", "end"), "start", "next", "end");
+  const removed = removeNode(diamond, "mid");
+  assert.equal(removed.edges.filter((edge) => edge.from === "start" && edge.to === "end").length, 1);
+  // A loop through parallel wires is still refused.
+  assert.equal(connect(wired, "end", "next", "start"), wired);
+});
+

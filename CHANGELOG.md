@@ -12,6 +12,10 @@ release notes — so what is written here is what users read. See
 
 ### Added
 
+- **Parallel work from any output.** Drag several wires out of one output —
+  Start included — and their nodes run at the same time, each branch with its
+  own copy of the variables. A Join waits for every wire into it; End completes
+  the run once, after the last branch, and never if a branch failed.
 - **Experiments that use data.** Parameters with defaults and target profiles, a
   `{{template}}` language with seeded generators, *Extract* from a response,
   *Check value* and *Branch on value*, a resolved preview of every field, and
@@ -43,6 +47,10 @@ release notes — so what is written here is what users read. See
 
 ### Changed
 
+- Ports are easier to hit: the area that takes the pointer is several times the
+  dot and grows when the canvas is zoomed out, and a wire released next to a
+  node connects to it. Dragging a wire always adds one; *A*, *Add next* and the
+  ＋ on a wire still insert into the flow.
 - **A lighter interface.** Explanatory captions are gone from every screen and the
   sign-in page; what a control does, its shortcut and what `0` means are tooltips
   in your language, on hover and on keyboard focus, also over dialogs. Labels say

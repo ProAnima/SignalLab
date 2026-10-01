@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type PointerEvent, type Ref } from "react";
+import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type CSSProperties, type PointerEvent, type Ref } from "react";
 import { api, EV, on, type Experiment, type ExperimentEnded, type ExperimentNode, type ExperimentStep, type HttpResponse, type JobInfo, type Signal, type SignalBody } from "../lib/api";
-import { addAfter, anchorAfter, arrangeNodes, connect, createNode, disconnect, duplicateNode, missingOutputs, placeAfter, portOf, removeNode, unreachableNodes, validPortsFor, NODE_WIDTH as NODE_W, NODE_HEIGHT as NODE_H, STEP_X, type Anchor, type NodeType, type Port } from "../lib/experimentGraph";
+import { addAfter, addBranch, anchorAfter, arrangeNodes, connect, createNode, disconnect, duplicateNode, isWired, missingOutputs, placeAfter, portOf, removeNode, unreachableNodes, validPortsFor, NODE_WIDTH as NODE_W, NODE_HEIGHT as NODE_H, STEP_X, type Anchor, type NodeType, type Port } from "../lib/experimentGraph";
 import { useExperimentDocument } from "../lib/useExperimentDocument";
 import { useExperimentViewport } from "../lib/useExperimentViewport";
 import { ExperimentFinder } from "../components/ExperimentFinder";
@@ -26,7 +26,8 @@ export interface ExperimentHandle {
   add: (body: SignalBody) => boolean;
 }
 
-type Menu = { screenX: number; screenY: number; x: number; y: number; anchor?: Anchor };
+/** `branch`: the node goes on a new wire of the anchor's output (parallel work), not into its flow. */
+type Menu = { screenX: number; screenY: number; x: number; y: number; anchor?: Anchor; branch?: boolean };
 type MenuItem = { kind: "node"; type: NodeType } | { kind: "signal"; signal: Signal };
 /** What the last Send now of a node did. A failure is kept as it came and described when shown. */
 type NodeTest = { ok: boolean; text: string; ts: number; error?: Failure; missing?: string[]; response?: HttpResponse; body?: string; json?: unknown; values?: Record<string, unknown> };
@@ -491,10 +492,10 @@ export function ExperimentView({ active, focusMode, setFocusMode, ref }: { activ
     return { left: rect.left + x * zoom - scroll.scrollLeft, top: rect.top + y * zoom - scroll.scrollTop };
   };
 
-  const openMenu = (clientX: number, clientY: number, x: number, y: number, anchor?: Anchor) => {
+  const openMenu = (clientX: number, clientY: number, x: number, y: number, anchor?: Anchor, branch = false) => {
     if (busy) return;
     commitEdit();
-    setMenu({ screenX: Math.min(clientX, window.innerWidth - 328), screenY: Math.min(clientY, window.innerHeight - 470), x, y, anchor });
+    setMenu({ screenX: Math.min(clientX, window.innerWidth - 328), screenY: Math.min(clientY, window.innerHeight - 470), x, y, anchor, branch });
     cancelLink();
   };
 
@@ -532,7 +533,7 @@ export function ExperimentView({ active, focusMode, setFocusMode, ref }: { activ
     const node = item.kind === "node" ? createNode(item.type, menu.x, menu.y) : nodeFromSignal(item.signal.body, menu.x, menu.y);
     if (!node) return;
     commitEdit();
-    edit((current) => addAfter(current, menu.anchor ?? null, node));
+    edit((current) => (menu.branch ? addBranch : addAfter)(current, menu.anchor ?? null, node));
     setMenu(null);
     inserted(node.id);
   };
@@ -563,6 +564,8 @@ export function ExperimentView({ active, focusMode, setFocusMode, ref }: { activ
   };
   const endLink = (to: string, anchor = linkStart) => {
     if (!doc || !anchor || busy) return;
+    // The same wire again changes nothing and is not a mistake worth a message.
+    if (isWired(doc, anchor.from, anchor.port, to)) { cancelLink(); return; }
     const updated = connect(doc, anchor.from, anchor.port, to);
     if (updated === doc) setProblem("exp.invalidConnection");
     else { commitEdit(); edit(() => updated); }
@@ -570,8 +573,9 @@ export function ExperimentView({ active, focusMode, setFocusMode, ref }: { activ
   };
 
   // Output ports: drag a wire to a node to connect it, or to empty canvas to
-  // create the next node there. A click without movement starts click-to-link,
-  // which is also what Enter/Space on the focused port does.
+  // create the next node there — always one more wire, so an output can feed
+  // several nodes that run in parallel. A click without movement starts
+  // click-to-link, which is also what Enter/Space on the focused port does.
   const onPortDown = (event: PointerEvent<HTMLButtonElement>, anchor: Anchor) => {
     if (busy || event.button !== 0) return;
     event.stopPropagation();
@@ -591,15 +595,30 @@ export function ExperimentView({ active, focusMode, setFocusMode, ref }: { activ
     if (!d?.moved) return;
     suppressPortClick.current = true;
     const hit = document.elementFromPoint(event.clientX, event.clientY);
-    const target = hit instanceof HTMLElement ? hit.closest<HTMLElement>("[data-node]")?.dataset.node : undefined;
+    // On a node, or near enough to one: a wire need not land exactly on its edge.
+    const target = (hit instanceof HTMLElement ? hit.closest<HTMLElement>("[data-node]")?.dataset.node : undefined) ?? nodeNear(event.clientX, event.clientY);
     const rect = scrollRef.current!.getBoundingClientRect();
     if (target && target !== d.anchor.from) endLink(target, d.anchor);
     else if (!target && event.clientX >= rect.left && event.clientX <= rect.right && event.clientY >= rect.top && event.clientY <= rect.bottom) {
       const point = graphPoint(event.clientX, event.clientY);
-      openMenu(event.clientX, event.clientY, point.x, point.y - NODE_H / 2, d.anchor);
+      openMenu(event.clientX, event.clientY, point.x, point.y - NODE_H / 2, d.anchor, true);
     } else cancelLink();
   };
   const onPortCancel = () => { portDrag.current = null; cancelLink(); };
+  /** The node a released wire is meant for when it lands just outside one: within 24 screen pixels. */
+  const nodeNear = (clientX: number, clientY: number): string | undefined => {
+    if (!doc) return undefined;
+    const point = graphPoint(clientX, clientY);
+    const reach = 24 / zoom;
+    let best: { id: string; distance: number } | undefined;
+    for (const node of doc.nodes) {
+      const dx = Math.max(node.x - point.x, 0, point.x - (node.x + NODE_W));
+      const dy = Math.max(node.y - point.y, 0, point.y - (node.y + NODE_H));
+      const distance = Math.hypot(dx, dy);
+      if (distance <= reach && (!best || distance < best.distance)) best = { id: node.id, distance };
+    }
+    return best?.id;
+  };
 
   const selectedNode = doc?.nodes.find((node) => node.id === selected) ?? null;
   const nodeStates = useMemo(() => new Map(events.map((event) => [event.node_id, event.state])), [events]);
@@ -701,8 +720,8 @@ export function ExperimentView({ active, focusMode, setFocusMode, ref }: { activ
         </div>
         <div className={`experiment-canvas-scroll ${linkStart ? "linking" : ""}`} ref={scrollRef}>
           <div className="experiment-canvas-space" style={{ width: canvasWidth * zoom, height: canvasHeight * zoom }}>
-            <div className="experiment-canvas" style={{ width: canvasWidth, height: canvasHeight, transform: `scale(${zoom})` }}
-              onDoubleClick={(event) => { if (event.target !== event.currentTarget) return; const point = graphPoint(event.clientX, event.clientY); openMenu(event.clientX, event.clientY, point.x - NODE_W / 2, point.y - NODE_H / 2, linkStart ?? undefined); }}
+            <div className="experiment-canvas" style={{ width: canvasWidth, height: canvasHeight, transform: `scale(${zoom})`, "--zoom": zoom } as CSSProperties}
+              onDoubleClick={(event) => { if (event.target !== event.currentTarget) return; const point = graphPoint(event.clientX, event.clientY); openMenu(event.clientX, event.clientY, point.x - NODE_W / 2, point.y - NODE_H / 2, linkStart ?? undefined, !!linkStart); }}
               onPointerDown={(event) => { if (event.target !== event.currentTarget) return; const scroll = scrollRef.current!; pan.current = { clientX: event.clientX, clientY: event.clientY, left: scroll.scrollLeft, top: scroll.scrollTop, moved: false }; event.currentTarget.setPointerCapture(event.pointerId); if (!linkStart) setSelected(null); }}
               onPointerMove={(event) => {
                 if (linkStart && !portDrag.current) setLinkPoint(graphPoint(event.clientX, event.clientY));
@@ -713,7 +732,7 @@ export function ExperimentView({ active, focusMode, setFocusMode, ref }: { activ
               onPointerUp={(event) => {
                 const p = pan.current; pan.current = null;
                 // Click-to-link, then a click on empty canvas: the next node goes right there.
-                if (p && !p.moved && linkStart) { const point = graphPoint(event.clientX, event.clientY); openMenu(event.clientX, event.clientY, point.x, point.y - NODE_H / 2, linkStart); }
+                if (p && !p.moved && linkStart) { const point = graphPoint(event.clientX, event.clientY); openMenu(event.clientX, event.clientY, point.x, point.y - NODE_H / 2, linkStart, true); }
               }} onPointerCancel={() => { pan.current = null; }}>
               <svg className="experiment-wires" width={canvasWidth} height={canvasHeight} aria-hidden="true">
                 {doc.edges.map((edge) => { const a = doc.nodes.find((node) => node.id === edge.from); const b = doc.nodes.find((node) => node.id === edge.to); if (!a || !b) return null;
@@ -722,7 +741,7 @@ export function ExperimentView({ active, focusMode, setFocusMode, ref }: { activ
                   const x2 = b.x, y2 = b.y + NODE_H / 2;
                   const isRunning = nodeStates.get(a.id) === "running" || nodeStates.get(b.id) === "running";
                   const isPassed = nodeStates.get(a.id) === "passed" && (nodeStates.get(b.id) === "passed" || nodeStates.get(b.id) === "running");
-                  return <path key={`${edge.from}-${p}`} className={`wire ${p} ${isRunning ? "active-flow" : ""} ${isPassed ? "passed-flow" : ""}`} d={`M ${x1} ${y1} C ${x1 + 75} ${y1}, ${x2 - 75} ${y2}, ${x2} ${y2}`} />;
+                  return <path key={`${edge.from}-${p}-${edge.to}`} className={`wire ${p} ${isRunning ? "active-flow" : ""} ${isPassed ? "passed-flow" : ""}`} d={`M ${x1} ${y1} C ${x1 + 75} ${y1}, ${x2 - 75} ${y2}, ${x2} ${y2}`} />;
                 })}
                 {linkSource && linkPoint && (() => { const x1 = linkSource.x + NODE_W, y1 = linkSource.y + portY(linkSource, linkStart!.port), { x: x2, y: y2 } = linkPoint;
                   return <path className="wire preview" d={`M ${x1} ${y1} C ${x1 + 75} ${y1}, ${x2 - 75} ${y2}, ${x2} ${y2}`} />; })()}
@@ -730,7 +749,7 @@ export function ExperimentView({ active, focusMode, setFocusMode, ref }: { activ
               {doc.edges.map((edge) => { const a = doc.nodes.find((node) => node.id === edge.from); const b = doc.nodes.find((node) => node.id === edge.to); if (!a || !b) return null;
                 const p = portOf(edge);
                 const y1 = a.y + portY(a, p); const x = (a.x + NODE_W + b.x) / 2; const y = (y1 + b.y + NODE_H / 2) / 2;
-                return <button key={`${edge.from}-${p}`} className="experiment-edge-add" style={{ left: x - 11, top: y - 11 }} data-tip={t("exp.insertNode")} aria-label={`${t("exp.insertNode")}: ${label(a.type)} → ${label(b.type)}`} disabled={busy} onClick={(event) => openMenu(event.clientX, event.clientY, Math.max(x - NODE_W / 2, a.x + STEP_X), y - NODE_H / 2, { from: edge.from, port: p })}>＋</button>;
+                return <button key={`${edge.from}-${p}-${edge.to}`} className="experiment-edge-add" style={{ left: x - 11, top: y - 11 }} data-tip={t("exp.insertNode")} aria-label={`${t("exp.insertNode")}: ${label(a.type)} → ${label(b.type)}`} disabled={busy} onClick={(event) => openMenu(event.clientX, event.clientY, Math.max(x - NODE_W / 2, a.x + STEP_X), y - NODE_H / 2, { from: edge.from, port: p, to: edge.to })}>＋</button>;
               })}
               {doc.nodes.map((node) => <div key={node.id} data-node={node.id} data-group={NODE_CATALOG[node.type].group}
                 className={`experiment-node ${selected === node.id ? "selected" : ""} ${nodeStates.get(node.id) ?? ""} ${detached.has(node.id) ? "detached" : ""} ${problemNodeId === node.id ? "invalid" : ""} ${linkStart && linkStart.from !== node.id ? "link-target" : ""}`}
@@ -791,7 +810,7 @@ export function ExperimentView({ active, focusMode, setFocusMode, ref }: { activ
             {selectedTest?.response && selectedTest.body && <details className="experiment-test-body" open={!!selectedTest.json}><summary>{t("http.response")} · {fmtBytes(selectedTest.response.body_bytes)}</summary>
               {selectedTest.json !== undefined ? <JsonPicker value={selectedTest.json} tip={t("exp.extractHere")} onPick={(path, value) => extractPicked(selectedNode, path, value)} /> : <pre>{selectedTest.body}</pre>}</details>}
           </div>}
-          {doc.edges.filter((edge) => edge.from === selectedNode.id).map((edge) => <div className="experiment-connection" key={portOf(edge)}><span>{portLabel(portOf(edge))} → {label(doc.nodes.find((node) => node.id === edge.to)?.type ?? "end")}</span><button className="ghost sm" data-tip={t("exp.disconnect")} aria-label={t("exp.disconnect")} onClick={() => edit((current) => disconnect(current, edge.from, portOf(edge)))}>×</button></div>)}
+          {doc.edges.filter((edge) => edge.from === selectedNode.id).map((edge) => <div className="experiment-connection" key={`${portOf(edge)}-${edge.to}`}><span>{portLabel(portOf(edge))} → {label(doc.nodes.find((node) => node.id === edge.to)?.type ?? "end")}</span><button className="ghost sm" data-tip={t("exp.disconnect")} aria-label={t("exp.disconnect")} onClick={() => edit((current) => disconnect(current, edge.from, portOf(edge), edge.to))}>×</button></div>)}
           {selectedNode.type !== "end" && <div className="experiment-node-actions"><button className="ghost sm" data-tip={`${t("exp.addAfter")} · A`} onClick={openAddMenu}>＋ {t("exp.addNext")}</button>
             {selectedNode.type !== "start" && <><button className="ghost sm" data-tip={`${t("exp.duplicate")} · Ctrl+D`} onClick={duplicateSelected}>{t("exp.duplicate")}</button><button className="ghost sm experiment-delete" data-tip={`${t("exp.delete")} · Delete`} onClick={removeSelected}>{t("exp.delete")}</button></>}</div>}
         </fieldset></> : <p className="experiment-empty">{t("exp.selectNode")}</p>}
@@ -806,7 +825,7 @@ export function ExperimentView({ active, focusMode, setFocusMode, ref }: { activ
       {timelineOpen && <div className="experiment-events">{events.length === 0 ? <span className="experiment-empty">{t("exp.noEvents")}</span> : events.map((event, index) => <button key={index} onClick={() => { const node = doc.nodes.find((item) => item.id === event.node_id); if (node) showNode(node); }} className={event.state}><time>{new Date(event.ts).toLocaleTimeString()}</time><b>{label(doc.nodes.find((node) => node.id === event.node_id)?.type ?? "end")}</b><span data-tip={event.error?.detail}>{t(`exp.${event.state}`)}{stepText(event) && ` · ${stepText(event)}`}</span></button>)}</div>}
     </div>
     {menu && <div className="experiment-menu-backdrop" onPointerDown={() => setMenu(null)}><div className="experiment-add-menu" role="dialog" aria-label={t("exp.addNode")} style={{ left: Math.max(8, menu.screenX), top: Math.max(8, menu.screenY) }} onPointerDown={(event) => event.stopPropagation()}>
-      {menu.anchor && <p className="experiment-menu-context">{t("exp.addingAfter", { node: anchorLabel(menu.anchor) })}</p>}
+      {menu.anchor && <p className="experiment-menu-context">{t(menu.branch ? "exp.addingBranch" : "exp.addingAfter", { node: anchorLabel(menu.anchor) })}</p>}
       <input autoFocus value={search} onChange={(event) => { setSearch(event.target.value); setMenuIndex(0); }} placeholder={t("exp.searchNodes")} aria-label={t("exp.searchNodes")} data-tip={t("exp.menuHint")} aria-controls="experiment-catalog" onKeyDown={(event) => {
         if (event.key === "Escape") { event.preventDefault(); setMenu(null); return; }
         if (event.key === "Enter" && menuItems[menuIndex]) { event.preventDefault(); addFromMenu(menuItems[menuIndex]); }
