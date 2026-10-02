@@ -19,6 +19,11 @@ regex = "1"
 # Socket options tokio doesn't expose before bind — SO_REUSEADDR, so the
 # discovery listener can share a port with the real service.
 socket2 = "0.5"
+# The HTTP emulator's server: HTTP/1.1 on hyper, already in the tree through reqwest.
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+bytes = "1"
 
 # Experiment secrets live in the operating system's credential store, never in
 # a file. Only stores that persist are enabled; other platforms report that

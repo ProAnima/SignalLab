@@ -297,6 +297,18 @@ fn check_node(kind: &NodeKind, params: &BTreeMap<String, String>) -> EngineResul
             }
             check_timeout(*timeout_ms)?;
         }
+        // Its own rules, with the run's parameters; its port is opened before the first step.
+        NodeKind::Emulator { emulator } => crate::emulator::check(emulator, params)?,
+        NodeKind::WaitHttp { bind, path, when, timeout_ms, .. } => {
+            check_bind(bind)?;
+            if path.trim().is_empty() {
+                return Err(required(Field::new("path")));
+            }
+            if when.len() > crate::emulator::MAX_CONDITIONS {
+                return Err(EngineError::new("emulator.conditions_too_many").with("max", crate::emulator::MAX_CONDITIONS).in_field(Field::new("conditions")));
+            }
+            check_timeout(*timeout_ms)?;
+        }
     }
     Ok(())
 }
@@ -493,6 +505,7 @@ pub fn validate_with(doc: &Experiment, params: &BTreeMap<String, String>) -> Eng
             check_repeat(&node.kind, repeat).map_err(|error| error.at(&node.id))?;
         }
     }
+    crate::emulator::check_run_binds(&doc.nodes)?;
     // validate_document guarantees exactly one Start.
     let start = doc.nodes.iter().find(|node| matches!(node.kind, NodeKind::Start)).map(|node| node.id.clone()).unwrap_or_default();
     let by_id: HashMap<_, _> = doc.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
@@ -539,10 +552,13 @@ pub fn validate_with(doc: &Experiment, params: &BTreeMap<String, String>) -> Eng
         return Err(EngineError::new("graph.unreachable").at(&unreachable.id));
     }
     order.reverse();
-    let mut states = vec![(start.as_str(), false)];
+    // `looped`: reached over a wire back from a Loop's body. A Loop's body runs
+    // at least once, so Done and Limit follow only such an arrival — and a
+    // request made in the body is there for the checks after the loop.
+    let mut states = vec![(start.as_str(), false, false)];
     let mut seen = HashSet::new();
-    while let Some((id, has_http)) = states.pop() {
-        if !seen.insert((id, has_http)) {
+    while let Some((id, has_http, looped)) = states.pop() {
+        if !seen.insert((id, has_http, looped)) {
             continue;
         }
         let node = by_id[id];
@@ -550,9 +566,10 @@ pub fn validate_with(doc: &Experiment, params: &BTreeMap<String, String>) -> Eng
             return Err(EngineError::new("graph.needs_http").at(id));
         }
         let has_http = has_http || matches!(node.kind, NodeKind::Http { .. });
+        let entering = matches!(node.kind, NodeKind::Loop { .. }) && !looped;
         if let Some(edges) = outgoing.get(id) {
-            for edge in edges {
-                states.push((&edge.to, has_http));
+            for edge in edges.iter().filter(|edge| !entering || edge.port == "body") {
+                states.push((&edge.to, has_http, shape.is_back(edge)));
             }
         }
     }
@@ -872,6 +889,31 @@ mod tests {
             { "from": "start", "to": "login" }, { "from": "login", "to": "pick" }, { "from": "pick", "to": "end", "port": "yes" }
         ]));
         assert_eq!(problem(validate(&branch)), ("graph.outputs_required".into(), Some("pick".into()), None));
+    }
+
+    /// A Loop's body runs at least once: a request it makes is there after Done.
+    #[test]
+    fn a_request_in_a_loop_body_counts_for_the_checks_after_the_loop() {
+        let looped = |inside: serde_json::Value| -> Experiment {
+            serde_json::from_value(json!({
+                "version": VERSION, "name": "poll", "params": [], "profiles": [], "profile": null, "seed": null,
+                "nodes": [
+                    { "id": "start", "type": "start", "x": 0, "y": 0 },
+                    node("loop", json!({ "type": "loop", "max": 3 })),
+                    node("inside", inside),
+                    node("status", json!({ "type": "assert_status", "status": 200 })),
+                    { "id": "end", "type": "end", "x": 0, "y": 0 }
+                ],
+                "edges": [
+                    { "from": "start", "to": "loop" }, { "from": "loop", "to": "inside", "port": "body" }, { "from": "inside", "to": "loop" },
+                    { "from": "loop", "to": "status", "port": "done" }, { "from": "status", "to": "end" }
+                ]
+            }))
+            .unwrap()
+        };
+        let request = json!({ "type": "http", "request": { "method": "GET", "url": "http://127.0.0.1:8080/", "headers": [], "body": null, "timeout_ms": 1000 } });
+        assert!(validate(&looped(request)).is_ok());
+        assert_eq!(problem(validate(&looped(json!({ "type": "delay", "ms": 1 })))), ("graph.needs_http".into(), Some("status".into()), None));
     }
 
     #[test]

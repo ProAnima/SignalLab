@@ -142,7 +142,7 @@ impl Subscription {
                                         } else {
                                             None
                                         };
-                                        filled.push(Datagram { bytes: payload, from: peer, at: Instant::now(), topic: Some(topic), frame });
+                                        filled.push(Datagram { bytes: payload, from: peer, at: Instant::now(), topic: Some(topic), frame, request: None });
                                     }
                                 }
                                 Ok(None) => break,

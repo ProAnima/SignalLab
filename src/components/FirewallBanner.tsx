@@ -5,7 +5,7 @@ import { useT } from "../lib/i18n";
 import { useStore } from "../lib/store";
 
 /** The jobs that listen for what other machines send. */
-const LISTENING = new Set(["osc-monitor", "discovery", "netsim", "experiment"]);
+const LISTENING = new Set(["osc-monitor", "discovery", "netsim", "experiment", "emulator"]);
 
 /** Other machines' datagrams may not arrive: the firewall is on, and nothing lets them in or something blocks them. */
 export const inTheWay = (status: FirewallStatus) => status.applies && status.enabled && (status.blocked || !status.allowed);

@@ -9,6 +9,7 @@
 //! `/api/run` and the command line wait for. Both are the same run.
 
 use std::collections::{BTreeMap, HashMap};
+use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -18,6 +19,7 @@ use serde_json::Value;
 use tokio::sync::{mpsc, oneshot};
 use crate::host::Host;
 
+use super::emulator::{self, EmulatorSummary, HttpListeners, RunServing};
 use super::error::{EngineError, EngineResult, Field};
 use super::experiment::{Experiment, Node, NodeKind, Repeat, RepeatUntil, RUN_LIMIT};
 use super::experiment_data as data;
@@ -25,7 +27,7 @@ use super::experiment_steps::{self as steps, BranchContext, StepEnv, StepOutcome
 use super::experiment_validate::{check_bind, check_reply_bind, validate_run};
 use super::http::HttpResponse;
 use super::jobs::{now_ms, JobInfo, JobRegistry, TaskGuard};
-use super::listen::{FrameSink, Listener, Listeners};
+use super::listen::{FrameSink, Listener, Listeners, Tap};
 use super::secrets::{self, SecretStore};
 use super::subscribe::{self, Subscription, Subscriptions};
 use super::paths::data_dir;
@@ -33,8 +35,8 @@ use super::template::{Renderer, Scope};
 
 /// How often a repeating step reports how far it has got.
 const REPEAT_REPORT_EVERY: Duration = Duration::from_secs(1);
-/// Version of the run report file.
-const REPORT_VERSION: u32 = 2;
+/// Version of the run report file: 3 added the emulators' counters.
+const REPORT_VERSION: u32 = 3;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct RunEvent {
@@ -131,6 +133,9 @@ pub struct RunResult {
     pub error: Option<EngineError>,
     /// Every step, in the order they happened.
     pub steps: Vec<RunEvent>,
+    /// What each Emulator node received and answered, rule by rule.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub emulators: Vec<EmulatorSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub report_path: Option<String>,
     /// The report could not be written.
@@ -159,6 +164,8 @@ pub struct RunHandle {
     /// What a stopped run reports — it is aborted, so it hands over nothing itself.
     events: Arc<Mutex<Vec<RunEvent>>>,
     params: BTreeMap<String, String>,
+    /// The emulators' counters, which a stopped run reports too.
+    emulators: Vec<(String, Arc<emulator::Emulation>)>,
 }
 
 impl RunHandle {
@@ -214,10 +221,15 @@ impl RunHandle {
             ended_ms: now_ms(),
             error: None,
             steps: self.events.lock().map(|events| events.clone()).unwrap_or_default(),
+            emulators: summaries(&self.emulators),
             report_path: None,
             report_error: None,
         }
     }
+}
+
+fn summaries(emulators: &[(String, Arc<emulator::Emulation>)]) -> Vec<EmulatorSummary> {
+    emulators.iter().map(|(node, emulation)| emulation.summary(Some(node))).collect()
 }
 
 #[derive(Serialize)]
@@ -235,6 +247,8 @@ struct RunReport<'a> {
     outcome: &'static str,
     error: &'a Option<EngineError>,
     steps: &'a [RunEvent],
+    #[serde(skip_serializing_if = "<[EmulatorSummary]>::is_empty")]
+    emulators: &'a [EmulatorSummary],
 }
 
 struct JoinBarrier {
@@ -285,6 +299,10 @@ struct EngineShared {
     listeners: Mutex<Listeners>,
     /// Broker connections the MQTT waits listen on; closed with the run.
     subscriptions: Mutex<Subscriptions>,
+    /// The HTTP listeners of the *Wait for HTTP request* steps.
+    http: HttpListeners,
+    /// The run's emulators and HTTP listeners, serving until the run ends.
+    serving: Mutex<RunServing>,
     started: Instant,
 }
 
@@ -303,6 +321,9 @@ impl Drop for CancelBranches {
         }
         if let Ok(mut subscriptions) = self.0.subscriptions.lock() {
             subscriptions.clear();
+        }
+        if let Ok(mut serving) = self.0.serving.lock() {
+            drop(std::mem::take(&mut *serving));
         }
     }
 }
@@ -497,6 +518,7 @@ async fn run_branch(
             seed: shared.seed,
             listeners: shared.listeners.lock().map(|listeners| listeners.clone()).unwrap_or_default(),
             subscriptions: shared.subscriptions.lock().map(|subscriptions| subscriptions.clone()).unwrap_or_default(),
+            http: shared.http.clone(),
             has_timeout: shared.outgoing.contains_key(&(current.clone(), "timeout".to_string())),
             has_limit: shared.outgoing.contains_key(&(current.clone(), "limit".to_string())),
             inputs: shared.joins.lock().ok().and_then(|joins| joins.get(&current).map(|barrier| barrier.expected)).unwrap_or(1),
@@ -615,9 +637,16 @@ async fn repeated(shared: &EngineShared, env: &StepEnv<'_>, node: &Node, first: 
 
 /// One socket per distinct bind address, opened before the first step so a
 /// reply that beats the wait is not lost. A port that cannot be opened stops
-/// the run before any traffic, at the first wait that uses it.
-async fn arm_listeners(nodes: &[Node], sink: Arc<dyn FrameSink>) -> EngineResult<Listeners> {
+/// the run before any traffic, at the first wait that uses it. An OSC or UDP
+/// emulator's port is one of them, with `taps` answering what arrives.
+async fn arm_listeners(nodes: &[Node], sink: Arc<dyn FrameSink>, taps: &HashMap<SocketAddr, Arc<dyn Tap>>) -> EngineResult<Listeners> {
     let mut listeners = Listeners::new();
+    for node in nodes {
+        let NodeKind::Emulator { emulator } = &node.kind else { continue };
+        let Some((address, tap)) = emulator.bind.trim().parse::<SocketAddr>().ok().and_then(|address| taps.get(&address).map(|tap| (address, tap))) else { continue };
+        let listener = Listener::arm_with(address, sink.clone(), Some(tap.clone())).await.map_err(|error| error.in_field(Field::new("bind")).at(&node.id))?;
+        listeners.insert(address, Arc::new(listener));
+    }
     for node in nodes {
         let Some(bind) = node.kind.bind() else { continue };
         // A send that expects a reply may listen on any free port (0): it sends from there.
@@ -663,6 +692,8 @@ struct Prepared {
     secrets: BTreeMap<String, String>,
     listeners: Listeners,
     subscriptions: Subscriptions,
+    http: HttpListeners,
+    serving: RunServing,
     /// The run fails with `run.timeout` after this long.
     limit: Duration,
 }
@@ -702,6 +733,8 @@ async fn run(host: &Host, followers: Followers, job_id: u64, doc: &Experiment, p
         tasks: Mutex::new(TaskGuard::new()),
         listeners: Mutex::new(prepared.listeners),
         subscriptions: Mutex::new(prepared.subscriptions),
+        http: prepared.http,
+        serving: Mutex::new(prepared.serving),
         started: Instant::now(),
     });
     let _cancel = CancelBranches(shared.clone());
@@ -759,7 +792,8 @@ fn file_error(path: &std::path::Path, error: impl ToString) -> EngineError {
     EngineError::new("file.io").with("path", path.display()).because(error)
 }
 
-fn save_report(id: u64, settings: &RunSettings, started_ms: u64, ended_ms: u64, doc: &Experiment, steps: &[RunEvent], error: &Option<EngineError>) -> EngineResult<String> {
+#[allow(clippy::too_many_arguments)]
+fn save_report(id: u64, settings: &RunSettings, started_ms: u64, ended_ms: u64, doc: &Experiment, steps: &[RunEvent], emulators: &[EmulatorSummary], error: &Option<EngineError>) -> EngineResult<String> {
     let dir = data_dir().join("runs");
     std::fs::create_dir_all(&dir).map_err(|error| file_error(&dir, error))?;
     let report = RunReport {
@@ -775,6 +809,7 @@ fn save_report(id: u64, settings: &RunSettings, started_ms: u64, ended_ms: u64, 
         outcome: if error.is_some() { Outcome::Failed.as_str() } else { Outcome::Passed.as_str() },
         error,
         steps,
+        emulators,
     };
     let bytes = serde_json::to_vec_pretty(&report).map_err(|error| file_error(&dir, error))?;
     // Never over another report: two processes sharing a data folder (command
@@ -830,14 +865,20 @@ pub async fn start_followed(host: Host, jobs: JobRegistry, doc: Experiment, opti
     data::check_seed(seed)?;
     let (_order, params) = validate_run(&doc, &overrides)?;
     let secret_values = data::load_secrets(&doc.nodes, store)?;
-    let listeners = arm_listeners(&doc.nodes, Arc::new(host.clone())).await?;
-    let subscriptions = arm_subscriptions(&host, &doc.nodes, &params).await?;
+    // The job's number and the seed come first: the emulators report under the one and draw from the other.
     let id = jobs.next_id();
+    let seed = seed.or(doc.seed).unwrap_or_else(|| rand::random::<u64>() & data::MAX_SEED);
+    let mut emulators = emulator::arm_run(&host, &doc.nodes, &params, seed, id).await?;
+    let listeners = arm_listeners(&doc.nodes, Arc::new(host.clone()), &emulators.taps).await?;
+    let subscriptions = arm_subscriptions(&host, &doc.nodes, &params).await?;
+    let serving = emulators.take_serving();
+    let reports = std::mem::take(&mut emulators.reports);
+    let http = std::mem::take(&mut emulators.http);
     let info = JobInfo::new(id, "experiment", doc.name.clone()).with("name", &doc.name);
     let host_cl = host.clone();
     let jobs_cl = jobs.clone();
     let started_ms = info.started_ms;
-    let seed = seed.or(doc.seed).unwrap_or_else(|| rand::random::<u64>() & data::MAX_SEED);
+    let handle_reports = reports.clone();
     let started = RunStarted {
         job_id: id,
         experiment: doc.name.clone(),
@@ -858,11 +899,12 @@ pub async fn start_followed(host: Host, jobs: JobRegistry, doc: Experiment, opti
             return;
         }
         let events = followers.events.clone();
-        let prepared = Prepared { seed, params: settings.params.clone(), secrets: secret_values, listeners, subscriptions, limit };
+        let prepared = Prepared { seed, params: settings.params.clone(), secrets: secret_values, listeners, subscriptions, http, serving, limit };
         let error = run(&host_cl, followers, id, &doc, prepared).await.err();
         let steps = events.lock().map(|list| list.clone()).unwrap_or_default();
         let ended_ms = now_ms();
-        let (report_path, report_error) = match save_report(id, &settings, started_ms, ended_ms, &doc, &steps, &error) {
+        let emulators = summaries(&reports);
+        let (report_path, report_error) = match save_report(id, &settings, started_ms, ended_ms, &doc, &steps, &emulators, &error) {
             Ok(path) => (Some(path), None),
             Err(error) => (None, Some(error)),
         };
@@ -892,13 +934,14 @@ pub async fn start_followed(host: Host, jobs: JobRegistry, doc: Experiment, opti
             ended_ms,
             error,
             steps,
+            emulators,
             report_path,
             report_error,
         });
     });
     jobs.insert(info.clone(), task);
     let _ = ready_tx.send(());
-    Ok(RunHandle { started, info, steps: steps_rx, end: end_rx, ended: None, done: false, events, params: handle_params })
+    Ok(RunHandle { started, info, steps: steps_rx, end: end_rx, ended: None, done: false, events, params: handle_params, emulators: handle_reports })
 }
 
 /// What *Send now* reports. Secret values are masked and the resolved request
@@ -934,8 +977,12 @@ pub async fn send_node(
     let scope = Scope { params: &params, vars, secrets: &secret_values, run_id: 0, seed, node_id, count: 1, now_ms: now_ms() };
     let failed = |error: EngineError| error.at(node_id).masked(&masked);
     let kind = data::render_kind(&node.kind, &mut Renderer::new(scope)).map_err(failed)?;
-    let listeners = arm_listeners(std::slice::from_ref(node), Arc::new(host.clone())).await.map_err(failed)?;
-    let subscriptions = arm_subscriptions(host, std::slice::from_ref(node), &params).await.map_err(failed)?;
+    let nodes = std::slice::from_ref(node);
+    // A *Wait for HTTP request* listens now on a listener of its own, like a run's.
+    let mut emulators = emulator::arm_run(host, nodes, &params, seed, 0).await.map_err(failed)?;
+    let _serving = emulators.take_serving();
+    let listeners = arm_listeners(nodes, Arc::new(host.clone()), &emulators.taps).await.map_err(failed)?;
+    let subscriptions = arm_subscriptions(host, nodes, &params).await.map_err(failed)?;
     let env = StepEnv {
         host,
         node_id,
@@ -944,6 +991,7 @@ pub async fn send_node(
         seed,
         listeners,
         subscriptions,
+        http: std::mem::take(&mut emulators.http),
         has_timeout: false,
         has_limit: false,
         inputs: 1,
@@ -988,12 +1036,12 @@ mod tests {
         let taken = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
         let free = std::net::UdpSocket::bind("127.0.0.1:0").unwrap().local_addr().unwrap();
         let nodes = [wait_node("a", &free.to_string()), wait_node("b", &free.to_string())];
-        let listeners = arm_listeners(&nodes, Arc::new(NoFrames)).await.unwrap();
+        let listeners = arm_listeners(&nodes, Arc::new(NoFrames), &HashMap::new()).await.unwrap();
         assert_eq!(listeners.len(), 1);
         drop(listeners);
 
         let busy = [wait_node("free", &free.to_string()), wait_node("busy", &taken.local_addr().unwrap().to_string())];
-        let error = arm_listeners(&busy, Arc::new(NoFrames)).await.err().unwrap();
+        let error = arm_listeners(&busy, Arc::new(NoFrames), &HashMap::new()).await.err().unwrap();
         assert_eq!((error.code.as_str(), error.node.as_deref(), error.field.as_ref().map(|field| field.key.clone())), ("transport.address_in_use", Some("busy"), Some("bind".to_string())));
     }
 }

@@ -48,6 +48,14 @@ impl FrameSink for Host {
     }
 }
 
+/// Something besides the waits that answers what a run's socket receives: an
+/// OSC or UDP emulator on the same port. It reports the datagram to the
+/// Inspector itself (with the rule that answered) and returns the frame's
+/// number; called in the receive loop, so it must not block.
+pub trait Tap: Send + Sync {
+    fn received(&self, socket: &Arc<UdpSocket>, datagram: &Datagram) -> Option<u64>;
+}
+
 #[cfg(test)]
 pub struct NoFrames;
 
@@ -184,6 +192,11 @@ async fn bind_socket(bind: SocketAddr) -> io::Result<UdpSocket> {
 
 impl Listener {
     pub async fn arm(bind: SocketAddr, sink: Arc<dyn FrameSink>) -> EngineResult<Listener> {
+        Self::arm_with(bind, sink, None).await
+    }
+
+    /// A socket whose datagrams `tap` answers as well; the waits still see every one.
+    pub async fn arm_with(bind: SocketAddr, sink: Arc<dyn FrameSink>, tap: Option<Arc<dyn Tap>>) -> EngineResult<Listener> {
         // A taken port and a foreign address are causes a person can fix.
         let socket = Arc::new(bind_socket(bind).await.map_err(|error| crate::net::bind_error(&bind.to_string(), error))?);
         let local = socket.local_addr().unwrap_or(bind);
@@ -195,8 +208,11 @@ impl Listener {
             loop {
                 match receiving.recv_from(&mut buffer).await {
                     Ok((size, from)) => {
-                        let mut datagram = Datagram { bytes: buffer[..size].to_vec(), from, at: Instant::now(), topic: None, frame: None };
-                        datagram.frame = sink.received(local, &datagram);
+                        let mut datagram = Datagram { bytes: buffer[..size].to_vec(), from, at: Instant::now(), topic: None, frame: None, request: None };
+                        datagram.frame = match &tap {
+                            Some(tap) => tap.received(&receiving, &datagram),
+                            None => sink.received(local, &datagram),
+                        };
                         filled.push(datagram);
                     }
                     // An ICMP "port unreachable" for an earlier send; the socket itself is fine.
@@ -351,7 +367,7 @@ mod tests {
         let queue = Inbox::default();
         let from: SocketAddr = "127.0.0.1:1".parse().unwrap();
         for index in 0..QUEUE + 6 {
-            queue.push(Datagram { bytes: index.to_string().into_bytes(), from, at: Instant::now(), topic: None, frame: None });
+            queue.push(Datagram { bytes: index.to_string().into_bytes(), from, at: Instant::now(), topic: None, frame: None, request: None });
         }
         assert_eq!((queue.datagrams.lock().unwrap().len(), queue.dropped.load(Ordering::Relaxed)), (QUEUE, 6));
         assert_eq!(queue.datagrams.lock().unwrap().front().unwrap().bytes, b"6", "the oldest are dropped");

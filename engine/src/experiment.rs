@@ -6,19 +6,20 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+use super::emulator::{Condition, Emulator};
 use super::experiment_data::{CompareOp, ExtractFrom, Param, Profile};
 use super::http::HttpRequest;
 use super::matching::{ArgRule, UdpMode};
 use super::osc_codec::OscArg;
 use super::template::Rng;
 
-pub const VERSION: u32 = 5;
+pub const VERSION: u32 = 6;
 /// Read and migrated on load (see `experiment_files::parse`): 1 had no
 /// parameters, 2 had no profiles, 3 had no retries or expected replies, 4 had
-/// no repeats or loops; serde defaults supply what is missing. Each new
-/// version exists so that an older Signal Lab refuses a newer file instead of
-/// silently dropping those settings.
-pub const LEGACY_VERSIONS: &[u32] = &[1, 2, 3, 4];
+/// no repeats or loops, 5 had no emulators or HTTP waits; serde defaults
+/// supply what is missing. Each new version exists so that an older Signal
+/// Lab refuses a newer file instead of silently dropping those settings.
+pub const LEGACY_VERSIONS: &[u32] = &[1, 2, 3, 4, 5];
 /// A run that takes longer than this is stopped.
 pub const RUN_LIMIT: Duration = Duration::from_secs(300);
 pub const MAX_NODES: usize = 64;
@@ -313,6 +314,27 @@ pub enum NodeKind {
         #[serde(default = "default_reply_variable")]
         variable: String,
     },
+    /// An emulator serving for the whole run: opened before the first step,
+    /// closed with the run. In the flow it passes at once.
+    Emulator {
+        emulator: Emulator,
+    },
+    /// Wait for an HTTP request on `bind` — to the run's emulator there, or to
+    /// a listener of the run's own that answers 204 — whose method, path and
+    /// conditions match.
+    WaitHttp {
+        bind: String,
+        #[serde(default = "default_method")]
+        method: String,
+        #[serde(default = "default_path")]
+        path: String,
+        #[serde(default)]
+        when: Vec<Condition>,
+        #[serde(default = "default_wait_timeout")]
+        timeout_ms: u64,
+        #[serde(default = "default_request_variable")]
+        variable: String,
+    },
 }
 
 /// A Loop's exit condition: the comparison of *Check value*.
@@ -337,13 +359,13 @@ impl NodeKind {
             NodeKind::End => &[],
             NodeKind::BranchStatus { .. } | NodeKind::BranchValue { .. } => &["yes", "no"],
             NodeKind::Fork => &["branch1", "branch2"],
-            NodeKind::WaitOsc { .. } | NodeKind::WaitUdp { .. } | NodeKind::WaitMqtt { .. } => &["matched"],
+            kind if kind.is_wait() => &["matched"],
             NodeKind::Loop { .. } => &["body", "done"],
             _ => &["next"],
         };
         let optional: &'static [&'static str] = match self {
             // Without a Timeout wire, a timeout fails the step.
-            NodeKind::WaitOsc { .. } | NodeKind::WaitUdp { .. } | NodeKind::WaitMqtt { .. } => &["timeout"],
+            kind if kind.is_wait() => &["timeout"],
             // Without a Limit wire, running out of iterations before the exit condition fails the step.
             NodeKind::Loop { .. } => &["limit"],
             _ => &[],
@@ -357,7 +379,7 @@ impl NodeKind {
     }
 
     pub fn is_wait(&self) -> bool {
-        matches!(self, NodeKind::WaitOsc { .. } | NodeKind::WaitUdp { .. } | NodeKind::WaitMqtt { .. })
+        matches!(self, NodeKind::WaitOsc { .. } | NodeKind::WaitUdp { .. } | NodeKind::WaitMqtt { .. } | NodeKind::WaitHttp { .. })
     }
 
     /// The broker and topic filter a *Wait for MQTT* subscribes to.
@@ -381,7 +403,8 @@ impl NodeKind {
         )
     }
 
-    /// The address a wait — or an action expecting a reply — listens on.
+    /// The UDP address a wait — or an action expecting a reply — listens on.
+    /// (*Wait for HTTP request* listens on TCP: `emulator::arm_run` opens it.)
     pub fn bind(&self) -> Option<&str> {
         match self {
             NodeKind::WaitOsc { bind, .. } | NodeKind::WaitUdp { bind, .. } => Some(bind),
@@ -424,6 +447,18 @@ fn default_wait_timeout() -> u64 {
 
 fn default_reply_variable() -> String {
     "reply".into()
+}
+
+fn default_request_variable() -> String {
+    "request".into()
+}
+
+fn default_method() -> String {
+    "ANY".into()
+}
+
+fn default_path() -> String {
+    "/*".into()
 }
 
 pub fn starter() -> Experiment {

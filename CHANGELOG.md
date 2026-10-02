@@ -12,6 +12,31 @@ release notes — so what is written here is what users read. See
 
 ### Added
 
+- **Emulators: Signal Lab as the other side.** A new *Emulators* screen plays the API,
+  device or service your system talks to. An **HTTP API** answers by routes — method,
+  a path with `:name` segments, conditions on headers, query, body or JSON — with
+  responses in sequence (500, 500, then 200, for retries), in turn, or a seeded mix by
+  weight, with delays, jitter and faults (no answer, a closed connection). An **OSC**,
+  **UDP** or **TCP device** answers by rules: on this address, payload or line, reply
+  that, to the sender or elsewhere, after a delay; a TCP device greets and can hang up.
+  Replies are templates read with what arrived (`{{request.params.id}}`,
+  `{{request.args[0]}}`, `{{request.json.name}}`). Every exchange is counted per rule,
+  listed as it happens and goes to the Inspector. A starter set (an API, an OSC, a UDP
+  and a TCP device) is in the library, on loopback. **Mock this** on the HTTP screen turns
+  a response into a route that answers exactly so.
+- **Emulators in experiments.** The *Emulator* node serves for the whole run — open
+  before the first step, closed with the run — and the report counts what it received.
+  *Wait for HTTP request* waits for a request to it (or to a listener of the run that
+  answers 204) by method, path and conditions, so an experiment proves that the system
+  under test called it, and with what. An OSC or UDP emulator shares its port with the
+  run's waits. The template *Retry a flaky API* shows it end to end. Experiment files are
+  now version 6; older ones open as before.
+- **Emulators everywhere.** `signallab emulate <file|name>` runs emulators from a file or
+  the app's library until Ctrl+C or `--for`, printing every request and the counts at the
+  end (`--json` for one object per line, `--server` to run them on a lab server);
+  `signallab emulators` lists the library. An assistant gets `start_emulator`,
+  `emulator_exchanges` and `list_emulators` over MCP. The server's API has the same
+  commands (`emulator_start`, `emulator_exchanges`, `emulators_load`, …).
 - **For an assistant (LLM).** `signallab mcp` serves Signal Lab over the Model Context
   Protocol: an assistant in Claude Code, Claude Desktop, Cursor or VS Code can learn what
   an experiment is made of, write one, validate it, run it and read step by step why it
@@ -175,6 +200,9 @@ release notes — so what is written here is what users read. See
 
 ### Fixed
 
+- A check of the last HTTP response right after a Loop (*HTTP status* on Done, an
+  *Extract*) was refused as having no request before it, although the Loop's body, which
+  always runs, made one.
 - A failed UDP signal reported its payload instead of the reason; a failed HTTP
   signal showed the HTTP client's raw English; an MQTT broker given as an IPv6
   address was dialled without brackets. The starter signals' notes carried long

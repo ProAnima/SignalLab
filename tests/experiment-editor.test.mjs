@@ -463,7 +463,7 @@ test("a loop's body may wire back to it, and nothing else may go back; the edito
   const loop = { ...createNode("loop", 240, 40), id: "loop" };
   const ask = { ...createNode("osc", 470, 40), id: "ask" };
   const pause = { ...createNode("delay", 700, 40), id: "pause" };
-  let doc = { version: 5, name: "Loop", params: [], profiles: [], profile: null, seed: null, nodes: [start, loop, ask, pause, end], edges: [] };
+  let doc = { version: 6, name: "Loop", params: [], profiles: [], profile: null, seed: null, nodes: [start, loop, ask, pause, end], edges: [] };
   assert.deepEqual(validPortsFor("loop"), ["body", "done", "limit"]);
   assert.deepEqual(requiredPortsFor("loop"), ["body", "done"], "Limit is optional, like a wait's Timeout");
   doc = connect(doc, "start", "next", "loop");

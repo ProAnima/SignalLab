@@ -15,6 +15,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::broadcast::{self, DiscoveryConfig, EmitConfig};
+use crate::emulator::{self, Emulator, EmulatorHub, StartOptions};
+use crate::emulator_files::{self, EmulatorLibrary};
 use crate::error::EngineError;
 use crate::experiment::{Experiment, Node};
 use crate::experiment_data;
@@ -77,6 +79,7 @@ pub struct Service {
     host: Host,
     jobs: JobRegistry,
     mqtt: MqttHub,
+    emulators: EmulatorHub,
     secrets: Arc<dyn SecretStore>,
     mode: Mode,
     pump: tokio::task::JoinHandle<()>,
@@ -130,14 +133,14 @@ macro_rules! args {
 /// Commands that start a long-running job; a server logs who started them.
 pub const JOB_COMMANDS: &[&str] = &[
     "experiment_start", "osc_monitor_start", "osc_generator_start", "http_burst_start", "netsim_start",
-    "storm_start", "scan_start", "broadcast_beacon_start", "discovery_start", "mqtt_connect",
+    "storm_start", "scan_start", "broadcast_beacon_start", "discovery_start", "mqtt_connect", "emulator_start",
 ];
 
 impl Service {
     /// Must be called inside a Tokio runtime: it starts the Inspector's pump.
     pub fn new(host: Host, mode: Mode, secrets: Arc<dyn SecretStore>) -> Self {
         let pump = inspect::spawn_pump(host.clone());
-        Service { host, jobs: JobRegistry::new(), mqtt: MqttHub::new(), secrets, mode, pump }
+        Service { host, jobs: JobRegistry::new(), mqtt: MqttHub::new(), emulators: EmulatorHub::new(), secrets, mode, pump }
     }
 
     pub fn jobs(&self) -> &JobRegistry {
@@ -371,6 +374,30 @@ impl Service {
             "signals_save" => {
                 let a = args!(command, value, { library: Library });
                 reply(signals::save(&a.library)?)
+            }
+
+            // ---- emulators: Signal Lab as the other side
+            "emulators_load" => reply(emulator_files::load()?),
+            "emulators_save" => {
+                let a = args!(command, value, { library: EmulatorLibrary });
+                reply(emulator_files::save(&a.library)?)
+            }
+            // The problems an emulator would be refused for, before anyone presses Start.
+            "emulator_check" => {
+                let a = args!(command, value, { emulator: Emulator, params: Option<BTreeMap<String, String>> });
+                emulator::check(&a.emulator, &a.params.unwrap_or_default())?;
+                reply(())
+            }
+            // `source`: the library entry it came from, kept on the job for the screen.
+            "emulator_start" => {
+                let a = args!(command, value, { emulator: Emulator, params: Option<BTreeMap<String, String>>, seed: Option<u64>, source: Option<String> });
+                let options = StartOptions { params: a.params.unwrap_or_default(), seed: a.seed, source: a.source };
+                reply(emulator::start(host(), jobs(), self.emulators.clone(), a.emulator, options).await?)
+            }
+            // What a running emulator received and answered after `after` (a sequence number).
+            "emulator_exchanges" => {
+                let a = args!(command, value, { job_id: u64, after: Option<u64>, limit: Option<usize> });
+                reply(self.emulators.snapshot(a.job_id, a.after.unwrap_or(0), a.limit.unwrap_or(emulator::RECENT))?)
             }
 
             _ => Err(EngineError::new("command.unknown").with("name", command).into()),

@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 use crate::host::Host;
 
+use super::emulator::{HttpListener, HttpListeners, RequestMatcher};
 use super::error::{EngineError, EngineResult, Field};
 use super::experiment::{NodeKind, Until};
 use super::experiment_actions as actions;
@@ -91,6 +92,8 @@ pub struct StepEnv<'a> {
     pub listeners: Listeners,
     /// The MQTT subscriptions of the run's *Wait for MQTT* steps.
     pub subscriptions: Subscriptions,
+    /// The HTTP listeners of the run's *Wait for HTTP request* steps.
+    pub http: HttpListeners,
     /// The node's Timeout output is connected.
     pub has_timeout: bool,
     /// A Loop's Limit output is connected.
@@ -166,6 +169,9 @@ fn check_response(kind: &NodeKind, response: Option<&HttpResponse>) -> EngineRes
 
 /// One line for the timeline about a matched reply.
 fn reply_summary(reply: &Value) -> String {
+    if let (Some(method), Some(path)) = (reply.get("method").and_then(Value::as_str), reply.get("path").and_then(Value::as_str)) {
+        return format!("{method} {path}");
+    }
     match (reply.get("address").and_then(Value::as_str), reply.get("topic").and_then(Value::as_str)) {
         (Some(address), _) => {
             let args: Vec<String> = reply["args"].as_array().into_iter().flatten().map(|arg| arg.to_string()).collect();
@@ -181,6 +187,7 @@ fn matcher(kind: &NodeKind) -> EngineResult<Box<dyn Matcher>> {
     match kind {
         NodeKind::WaitOsc { address, args, .. } => Ok(Box::new(OscMatcher::new(address, args)?)),
         NodeKind::WaitUdp { mode, pattern, .. } | NodeKind::WaitMqtt { mode, pattern, .. } => Ok(Box::new(UdpMatcher::new(*mode, pattern)?)),
+        NodeKind::WaitHttp { method, path, when, .. } => Ok(Box::new(RequestMatcher::new(method, path, when)?)),
         _ => Err(EngineError::new("run.not_a_wait")),
     }
 }
@@ -194,10 +201,11 @@ fn listener_for(listeners: &Listeners, bind: &str, field: &'static str) -> Engin
         .ok_or_else(|| EngineError::new("wait.not_listening").with("target", bind).in_field(Field::new(field)))
 }
 
-/// What a wait listens to: one of the run's UDP sockets or MQTT subscriptions.
+/// What a wait listens to: one of the run's UDP sockets, MQTT subscriptions or HTTP listeners.
 enum Source {
     Socket(Arc<Listener>),
     Broker(Arc<Subscription>),
+    Http(Arc<HttpListener>),
 }
 
 impl Source {
@@ -205,6 +213,7 @@ impl Source {
         match self {
             Source::Socket(listener) => listener.inbox(),
             Source::Broker(subscription) => subscription.inbox(),
+            Source::Http(listener) => &listener.inbox,
         }
     }
 
@@ -212,6 +221,7 @@ impl Source {
         match self {
             Source::Socket(listener) => listener.local().to_string(),
             Source::Broker(subscription) => subscription.broker().to_string(),
+            Source::Http(listener) => listener.local.to_string(),
         }
     }
 }
@@ -251,12 +261,20 @@ fn source_of(env: &StepEnv<'_>, kind: &NodeKind) -> EngineResult<Source> {
             EngineError::new("wait.not_listening").with("target", format!("{} {}", key.0, key.1)).in_field(Field::new("topic"))
         });
     }
+    if let NodeKind::WaitHttp { bind, .. } = kind {
+        let listener = bind.trim().parse::<SocketAddr>().ok().and_then(|address| env.http.get(&address).cloned());
+        return listener.map(Source::Http).ok_or_else(|| EngineError::new("wait.not_listening").with("target", bind).in_field(Field::new("bind")));
+    }
     let bind = kind.bind().ok_or_else(|| EngineError::new("run.not_a_wait"))?;
     listener_for(&env.listeners, bind, "bind").map(Source::Socket)
 }
 
 async fn wait(env: &StepEnv<'_>, kind: &NodeKind, context: &BranchContext) -> EngineResult<StepOutcome> {
-    let (NodeKind::WaitOsc { timeout_ms, variable, .. } | NodeKind::WaitUdp { timeout_ms, variable, .. } | NodeKind::WaitMqtt { timeout_ms, variable, .. }) = kind else {
+    let (NodeKind::WaitOsc { timeout_ms, variable, .. }
+    | NodeKind::WaitUdp { timeout_ms, variable, .. }
+    | NodeKind::WaitMqtt { timeout_ms, variable, .. }
+    | NodeKind::WaitHttp { timeout_ms, variable, .. }) = kind
+    else {
         return Err(EngineError::new("run.not_a_wait"));
     };
     let matcher = matcher(kind)?;
@@ -381,7 +399,12 @@ pub async fn execute(env: &StepEnv<'_>, kind: &NodeKind, context: &mut BranchCon
             Ok(StepOutcome { port, detail: comparison.text(), message: Some((key, comparison.params())), written: None, frame: None })
         }
         NodeKind::Loop { max, until } => loop_step(env, *max, until.as_ref(), context),
-        NodeKind::WaitOsc { .. } | NodeKind::WaitUdp { .. } | NodeKind::WaitMqtt { .. } => {
+        // It has been serving since before the first step; the flow just passes.
+        NodeKind::Emulator { emulator } => {
+            let (name, local) = (emulator.name.trim(), emulator.bind.trim());
+            Ok(StepOutcome::next(format!("{name} on {local}")).said("exp.step.emulating", json!({ "name": name, "local": local })))
+        }
+        kind if kind.is_wait() => {
             let outcome = wait(env, kind, context).await?;
             if let Some(written) = &outcome.written {
                 context.vars.extend(written.iter().map(|(name, value)| (name.clone(), value.clone())));
@@ -463,7 +486,7 @@ mod tests {
     }
 
     fn env<'a>(host: &'a Host, listeners: &Listeners, has_timeout: bool, started: Instant) -> StepEnv<'a> {
-        StepEnv { host, node_id: "wait", client_id: "test".into(), seed: 0, listeners: listeners.clone(), subscriptions: Subscriptions::new(), has_timeout, has_limit: false, inputs: 1, run_started: started }
+        StepEnv { host, node_id: "wait", client_id: "test".into(), seed: 0, listeners: listeners.clone(), subscriptions: Subscriptions::new(), http: HttpListeners::new(), has_timeout, has_limit: false, inputs: 1, run_started: started }
     }
 
     /// `wait` as the old signature read, for the tests below.
@@ -514,5 +537,6 @@ mod tests {
         assert_eq!(reply_summary(&json!({ "address": "/pong", "args": [42, "ok"] })), "/pong 42 \"ok\"");
         assert_eq!(reply_summary(&json!({ "address": "/pong", "args": [] })), "/pong");
         assert_eq!(reply_summary(&json!({ "text": "PONG" })), "PONG");
+        assert_eq!(reply_summary(&json!({ "method": "POST", "path": "/hook", "body": "{}" })), "POST /hook");
     }
 }

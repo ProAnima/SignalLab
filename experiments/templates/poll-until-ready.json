@@ -1,5 +1,5 @@
 {
-  "version": 5,
+  "version": 6,
   "name": "Poll until ready",
   "params": [
     { "name": "device", "value": "127.0.0.1:9000" }

@@ -116,27 +116,31 @@ async fn every_tool_works_for_a_client_here() {
 
         let tools = client.request("tools/list", json!({}));
         let names: Vec<&str> = tools["result"]["tools"].as_array().unwrap().iter().map(|tool| tool["name"].as_str().unwrap()).collect();
-        for name in ["describe_nodes", "list_templates", "get_template", "validate_experiment", "run_experiment", "send_osc", "send_udp", "send_http", "send_mqtt", "listen", "list_signals", "fire_signal", "list_jobs", "stop_job"] {
+        for name in [
+            "describe_nodes", "list_templates", "get_template", "validate_experiment", "run_experiment", "send_osc", "send_udp", "send_http", "send_mqtt", "listen",
+            "list_signals", "fire_signal", "list_emulators", "start_emulator", "emulator_exchanges", "list_jobs", "stop_job",
+        ] {
             assert!(names.contains(&name), "{name} in {names:?}");
         }
 
         // What an experiment is made of, and the templates to start from.
         let (_, catalogue, failed) = client.call("describe_nodes", json!({}));
-        assert!(!failed && catalogue["nodes"].as_array().unwrap().len() == 23, "{catalogue}");
+        assert!(!failed && catalogue["nodes"].as_array().unwrap().len() == 25, "{catalogue}");
+        assert!(catalogue["emulators"]["protocols"]["http"]["fields"]["responses"].is_string(), "the emulator document is described too");
         let (text, _, _) = client.call("list_templates", json!({}));
         assert!(text.contains("osc-ping-reply") && text.contains("device="), "{text}");
         let (_, template, _) = client.call("get_template", json!({ "name": "empty" }));
         assert_eq!(template["document"]["name"], "Empty experiment");
 
         // Validate, then run — a document the model wrote, with a parameter.
-        let document = json!({ "version": 5, "name": "Model's check", "params": [{ "name": "who", "value": "x" }],
+        let document = json!({ "version": 6, "name": "Model's check", "params": [{ "name": "who", "value": "x" }],
             "nodes": [{ "id": "start", "type": "start", "x": 0, "y": 0 }, { "id": "say", "type": "log", "x": 200, "y": 0, "message": "hi {{who}}" },
                       { "id": "get", "type": "http", "x": 400, "y": 0, "request": { "method": "GET", "url": format!("http://{http}/") } },
                       { "id": "ok", "type": "assert_status", "x": 600, "y": 0, "status": 200 }, { "id": "end", "type": "end", "x": 800, "y": 0 }],
             "edges": [{ "from": "start", "to": "say" }, { "from": "say", "to": "get" }, { "from": "get", "to": "ok" }, { "from": "ok", "to": "end" }] });
         let (text, data, failed) = client.call("validate_experiment", json!({ "document": document }));
         assert!(!failed && data["valid"] == true, "{text}");
-        let broken = json!({ "version": 5, "name": "Broken", "nodes": [{ "id": "start", "type": "start", "x": 0, "y": 0 }], "edges": [] });
+        let broken = json!({ "version": 6, "name": "Broken", "nodes": [{ "id": "start", "type": "start", "x": 0, "y": 0 }], "edges": [] });
         let (text, data, failed) = client.call("validate_experiment", json!({ "document": broken }));
         assert!(failed && data["error"]["code"].is_string(), "a broken document says why: {text}");
 
@@ -196,7 +200,7 @@ async fn every_tool_works_for_a_client_here() {
         assert!(failed);
 
         // A run that is cancelled stops, and nothing answers the cancelled request.
-        let slow = json!({ "version": 5, "name": "Slow", "nodes": [{ "id": "start", "type": "start", "x": 0, "y": 0 }, { "id": "wait", "type": "delay", "x": 200, "y": 0, "ms": 20000 }, { "id": "end", "type": "end", "x": 400, "y": 0 }],
+        let slow = json!({ "version": 6, "name": "Slow", "nodes": [{ "id": "start", "type": "start", "x": 0, "y": 0 }, { "id": "wait", "type": "delay", "x": 200, "y": 0, "ms": 20000 }, { "id": "end", "type": "end", "x": 400, "y": 0 }],
             "edges": [{ "from": "start", "to": "wait" }, { "from": "wait", "to": "end" }] });
         let cancelled = client.start_request("tools/call", json!({ "name": "run_experiment", "arguments": { "document": slow } }));
         std::thread::sleep(Duration::from_millis(500));
@@ -217,6 +221,60 @@ async fn every_tool_works_for_a_client_here() {
         let ping = client.request("ping", json!({}));
         assert_eq!(ping["result"], json!({}));
         client.send(Value::String("not an object".into()));
+        client.close();
+    })
+    .await
+    .unwrap();
+}
+
+/// An assistant plays the dependency: starts one of the user's emulators,
+/// points traffic at it, reads what arrived, and stops it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_emulator_is_started_read_and_stopped_by_a_client() {
+    let dir = folder("mcp-emulators");
+    let library = dir.join("emulators.json");
+    std::fs::write(&library, serde_json::to_string(&signal_lab_engine::emulator_files::seed()).unwrap()).unwrap();
+    let library_path = library.display().to_string();
+    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let udp = free_udp_port();
+    tokio::task::spawn_blocking(move || {
+        let mut client = Client::start(&["--emulators", &library_path], &[]);
+        let (text, listed, failed) = client.call("list_emulators", json!({}));
+        assert!(!failed && listed["emulators"].as_array().unwrap().len() == 4 && text.contains("Demo API [demo-api] — http on 127.0.0.1:8080"), "{text}");
+
+        // One from the library, on a port of the test's choosing.
+        let (text, started, failed) = client.call("start_emulator", json!({ "name": "demo-api", "bind": format!("127.0.0.1:{port}") }));
+        assert!(!failed && started["url"] == format!("http://127.0.0.1:{port}"), "{text}");
+        let job = started["job_id"].as_u64().unwrap();
+        let (text, response, failed) = client.call("send_http", json!({ "method": "GET", "url": format!("http://127.0.0.1:{port}/users/7") }));
+        assert!(!failed && response["status"] == 200 && response["body"].as_str().unwrap().contains("User 7"), "{text}");
+        client.call("send_http", json!({ "method": "GET", "url": format!("http://127.0.0.1:{port}/flaky") }));
+        let (text, seen, failed) = client.call("emulator_exchanges", json!({ "job_id": job }));
+        assert!(!failed && seen["counts"]["total"] == 2 && seen["exchanges"][0]["data"]["params"]["id"] == "7", "{text}");
+        assert!(text.contains("GET /users/7 #2 → 200 OK") && text.contains("GET /flaky #5 → 503"), "{text}");
+        let after = seen["exchanges"][1]["seq"].clone();
+        let (_, later, _) = client.call("emulator_exchanges", json!({ "job_id": job, "after": after }));
+        assert_eq!(later["exchanges"], json!([]), "only what came after");
+
+        // One the assistant wrote itself.
+        let device = json!({ "name": "Echo", "bind": format!("127.0.0.1:{udp}"), "protocol": "udp", "rules": [{ "mode": "any", "reply": { "kind": "text", "text": "echo {{request.text}}" } }] });
+        let (text, echo, failed) = client.call("start_emulator", json!({ "emulator": device }));
+        assert!(!failed && echo["protocol"] == "udp", "{text}");
+        let (_, _, failed) = client.call("send_udp", json!({ "target": format!("127.0.0.1:{udp}"), "text": "hi" }));
+        assert!(!failed);
+        std::thread::sleep(Duration::from_millis(200));
+        let (text, heard, _) = client.call("emulator_exchanges", json!({ "job_id": echo["job_id"] }));
+        assert_eq!(heard["exchanges"][0]["reply"], "echo hi", "{text}");
+
+        let (text, _, failed) = client.call("start_emulator", json!({ "emulator": { "name": "Bad", "bind": "127.0.0.1:1", "protocol": "http", "routes": [{ "path": "nope", "responses": [{}] }] } }));
+        assert!(failed && text.contains("A path starts with /"), "{text}");
+        let (text, _, failed) = client.call("start_emulator", json!({}));
+        assert!(failed && text.contains("one of them"), "{text}");
+
+        client.call("stop_job", json!({ "id": job }));
+        client.call("stop_job", json!({ "id": echo["job_id"] }));
+        let (text, gone, failed) = client.call("emulator_exchanges", json!({ "job_id": job }));
+        assert!(failed && gone["error"]["code"] == "emulator.not_running", "{text}");
         client.close();
     })
     .await

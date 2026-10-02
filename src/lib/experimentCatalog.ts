@@ -15,6 +15,8 @@ export const NODE_CATALOG = {
   wait_osc: { title: "exp.node.wait_osc", description: "exp.description.wait_osc", group: "observe" },
   wait_udp: { title: "exp.node.wait_udp", description: "exp.description.wait_udp", group: "observe" },
   wait_mqtt: { title: "exp.node.wait_mqtt", description: "exp.description.wait_mqtt", group: "observe" },
+  wait_http: { title: "exp.node.wait_http", description: "exp.description.wait_http", group: "observe" },
+  emulator: { title: "exp.node.emulator", description: "exp.description.emulator", group: "emulate" },
   assert_status: { title: "exp.node.assert_status", description: "exp.description.assert_status", group: "check" },
   assert_body: { title: "exp.node.assert_body", description: "exp.description.assert_body", group: "check" },
   assert_header: { title: "exp.node.assert_header", description: "exp.description.assert_header", group: "check" },
@@ -27,7 +29,7 @@ export const NODE_CATALOG = {
   loop: { title: "exp.node.loop", description: "exp.description.loop", group: "flow" },
 } satisfies Record<NodeType, { title: TKey; description: TKey; group: NodeGroup }>;
 
-export type NodeGroup = "action" | "observe" | "data" | "check" | "flow";
-/** Order of the add menu: send, then wait for the answer, then work with it. */
-export const NODE_GROUPS: NodeGroup[] = ["action", "observe", "data", "check", "flow"];
+export type NodeGroup = "action" | "observe" | "emulate" | "data" | "check" | "flow";
+/** Order of the add menu: send, then wait for the answer, play the other side, then work with it. */
+export const NODE_GROUPS: NodeGroup[] = ["action", "observe", "emulate", "data", "check", "flow"];
 export const ADDABLE_NODES = (Object.keys(NODE_CATALOG) as NodeType[]).filter(type => type !== "start" && type !== "end");

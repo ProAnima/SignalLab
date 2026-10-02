@@ -98,7 +98,8 @@
                 "broadcast_send", "broadcast_beacon_start", "discovery_start",
                 "inspect_set_enabled", "inspect_stats", "inspect_snapshot", "inspect_clear", "inspect_export",
                 "mqtt_connect", "mqtt_publish", "mqtt_subscribe", "mqtt_unsubscribe", "mqtt_publish_once",
-                "signals_load", "signals_save"
+                "signals_load", "signals_save",
+                "emulators_load", "emulators_save", "emulator_check", "emulator_start", "emulator_exchanges"
               ]
             }
           }
@@ -159,7 +160,12 @@
           "mqtt_unsubscribe": { "arguments": { "jobId": "integer", "filters": "string[]" }, "returns": "null" },
           "mqtt_publish_once": { "arguments": { "config": "MqttConfig", "topic": "string", "payload": "string", "qos": "0 | 1 | 2", "retain": "boolean" }, "returns": "string: what the broker answered" },
           "signals_load": { "arguments": {}, "returns": "{path, library, seeded}" },
-          "signals_save": { "arguments": { "library": "Library" }, "returns": "string: the path written" }
+          "signals_save": { "arguments": { "library": "Library" }, "returns": "string: the path written" },
+          "emulators_load": { "arguments": {}, "returns": "{path, library: {version, emulators: [{id, note, emulator}]}, seeded}: the emulator library of the data folder" },
+          "emulators_save": { "arguments": { "library": "EmulatorLibrary" }, "returns": "string: the path written" },
+          "emulator_check": { "arguments": { "emulator": "Emulator", "params": "object?" }, "returns": "null, or the EngineError it would be refused with (with the rule and response it is in)" },
+          "emulator_start": { "arguments": { "emulator": "Emulator", "params": "object?", "seed": "integer?", "source": "string? — the library id, kept on the job" }, "returns": "JobInfo; its port is open, emulator://activity reports what it answers", "job": true },
+          "emulator_exchanges": { "arguments": { "jobId": "integer", "after": "integer?", "limit": "integer?" }, "returns": "{job_id, name, protocol, local, counts: {total, unmatched, failed, hits}, exchanges}: what a running emulator received after `after`" }
         }
       }
     },
@@ -236,7 +242,7 @@
         "additionalProperties": false,
         "properties": {
           "document": { "type": "object", "description": "An experiment as the app saves and exports it; older versions are migrated" },
-          "template": { "type": "string", "enum": ["empty", "http-check", "status-branch", "parallel-flows", "osc-ping-reply", "poll-until-ready"], "description": "A bundled template by file name (`.json` optional)" },
+          "template": { "type": "string", "enum": ["empty", "http-check", "status-branch", "parallel-flows", "osc-ping-reply", "poll-until-ready", "flaky-api"], "description": "A bundled template by file name (`.json` optional)" },
           "overrides": { "type": "object", "additionalProperties": { "type": ["string", "number", "boolean"] }, "description": "Parameter values for this run only; each must be a parameter of the experiment" },
           "profile": { "type": "string", "description": "The profile to run with; an empty string runs with the defaults" },
           "seed": { "type": "integer", "minimum": 0, "maximum": 9007199254740991, "description": "Random values repeat with the same seed" },

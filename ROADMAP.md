@@ -1,6 +1,6 @@
 # SignalLab roadmap: network behaviour laboratory
 
-Status: 2026-10-01. This document fixes product direction, delivery order and the design of each step. It is not a release schedule; sizes are relative (S, M, L).
+Status: 2026-10-02. This document fixes product direction, delivery order and the design of each step. It is not a release schedule; sizes are relative (S, M, L).
 
 ## Positioning
 
@@ -33,10 +33,11 @@ This decides what we build and what we leave to others:
 - **Runner:** one job per run; Stop cancels every branch; a Join that never fills fails at that Join.
 - **Data and replies** (milestones 3 and 4.1): parameters, profiles, secrets, `{{templates}}`, Extract / Check value / Branch on value, Wait for OSC and Wait for UDP with Matched and Timeout outputs.
 - **Server mode** (delivery D1–D4): the same engine and interface in a browser, and a Docker image.
+- **Emulators** (milestone 5): HTTP APIs and OSC/UDP/TCP devices with templated replies, sequences and faults — on their own screen, as an experiment node with *Wait for HTTP request*, from `signallab emulate` and over MCP.
 
 ### Known gaps in what exists
 
-- No wait for HTTP requests or other protocols yet; SignalLab cannot play a dependency (milestone 5).
+- Emulators play HTTP, OSC, UDP and TCP; there is no MQTT broker of our own yet, so MQTT tests need one running.
 - HTTP burst reports min/avg/max, not percentiles; there is no rate control.
 - The Inspector ring truncates payloads at 1 KiB and holds 8192 frames: good for looking, not for replay.
 - Remaining editor work: multi-selection and copy/paste.
@@ -125,6 +126,8 @@ Detailed design: [docs/milestone-4-reactive.md](docs/milestone-4-reactive.md). *
 ## 5. Mock services
 
 **Goal.** SignalLab plays the dependency: the service, device or API the system under test calls.
+
+**Status:** delivered as **emulators** — an *Emulators* screen with a library (`emulators.json`, a demo API and a demo OSC, UDP and TCP device on loopback), HTTP routes (method, `:name` path segments, header/query/body/JSON conditions) with responses in sequence, in turn or a seeded weighted mix, delays with seeded jitter and the faults *no answer* and *connection closed*; OSC/UDP responders and a TCP line device (greeting, hang-up); templated replies (`{{request.…}}`); per-rule counts, a live exchange list and Inspector frames; **Mock this** on the HTTP screen; the **Emulator** node (opened before the first step, its counts in the report) and **Wait for HTTP request**; the template *Retry a flaky API* (the "done when" below, also an engine test); `signallab emulate`, MCP tools and the API commands. Still open from this section: *Mock this* on a *Send now* response, *Copy URL* per route, malformed-body and flapping faults (milestone 6).
 
 **What the user gets**
 
@@ -272,9 +275,9 @@ Detailed design: [docs/delivery.md](docs/delivery.md).
 - **Performance.** All high-rate events go through the rate gate and report what was not drawn.
 - **Tests.** Local protocol fixtures in `cargo test`; editor transformations in `npm test`; every new node kind round-trips through JSON and appears in both locales.
 
-## Next concrete slice (milestone 5 — mock services)
+## Next concrete slice (milestone 6 — faults as nodes)
 
-Milestone 4 is delivered: PR 4.3 added **Repeat** on every action (a number of sends or a time, interval, seeded jitter, `{{counter}}` per send) and the bounded **Loop** node (Body, Done, optional Limit; an exit condition read after each iteration; the only cycle a document may have), with the template *Poll until ready*; document version 5. Every screen is now walked end to end in CI — desktop app and server, Windows and Linux, and the published image (`npm run e2e`). Next: **Mock HTTP** (milestone 5) — a direct screen and a node, routes with templated responses, response sequences, and *Wait for HTTP request*.
+Milestone 5 is delivered as emulators (HTTP, OSC, UDP, TCP), the *Emulator* node and *Wait for HTTP request*; document version 6. Milestone 4 before it added **Repeat** and the bounded **Loop** (version 5). Every screen, the Emulators screen included, is walked end to end — desktop app and server, Windows and Linux, and the published image (`npm run e2e`). Next: **faults as nodes and phases** (milestone 6) — the impairment relay as a node with profiles that change mid-run, and the emulators' fault vocabulary (error rate, flapping) on the same schedule. An MQTT broker emulator is a candidate for the same slice, since show and installation gear test against one.
 
 ### PR 4.2 as planned
 

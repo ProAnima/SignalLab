@@ -43,12 +43,17 @@ Every send and run puts real traffic on the network, so aim at the devices the u
 templates point at loopback). To build an experiment: describe_nodes explains the document and every node; \
 get_template gives working examples; validate_experiment checks one without sending anything; \
 run_experiment runs it and says, step by step, what happened and why it failed. send_* sends one message; \
-listen shows what arrives on a port; list_signals and fire_signal use the user's signal library.";
+listen shows what arrives on a port; list_signals and fire_signal use the user's signal library. To play a \
+dependency the system under test calls — an HTTP API, an OSC, UDP or TCP device — start_emulator starts one \
+(list_emulators names the user's), emulator_exchanges shows what it received and answered, stop_job ends it; \
+inside an experiment, an emulator node and wait_http do the same for one run.";
 
 struct State {
     ctx: Ctx,
     engine: Engine,
     library: Option<PathBuf>,
+    /// The emulator library for list_emulators and start_emulator; `None`: the app's.
+    emulators: Option<PathBuf>,
     /// The job of a run a request started, so cancelling the request stops it.
     runs: Mutex<HashMap<String, u64>>,
     out: mpsc::UnboundedSender<Value>,
@@ -87,6 +92,8 @@ pub async fn serve(ctx: Ctx, args: McpArgs) -> Exit {
     // The app's data folder unless told otherwise: an assistant's runs and their reports
     // land where the app keeps them, and stay after the session.
     let data_dir = args.data_dir.clone().or_else(|| args.place.server.is_none().then(signal_lab_engine::paths::data_dir));
+    // Read from the app's folder even when the runs go elsewhere.
+    let emulators = args.emulators.clone().or_else(|| Some(signal_lab_engine::emulator_files::library_path()));
     let engine = match Engine::new(&args.place, data_dir.as_deref()) {
         Ok(engine) => engine,
         Err(failure) => return failure.report(&ctx, "signallab mcp: "),
@@ -102,7 +109,7 @@ pub async fn serve(ctx: Ctx, args: McpArgs) -> Exit {
             }
         }
     });
-    let state = Arc::new(State { ctx, engine, library: args.library.clone(), runs: Mutex::default(), out: out.clone() });
+    let state = Arc::new(State { ctx, engine, library: args.library.clone(), emulators, runs: Mutex::default(), out: out.clone() });
     let tasks: Arc<Mutex<HashMap<String, tokio::task::JoinHandle<()>>>> = Arc::default();
 
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
@@ -259,7 +266,15 @@ fn tools() -> Vec<Value> {
             json!({ "library": { "type": "string", "description": "Path of a library file" } }), &[], true),
         tool("fire_signal", "Fire a signal", "Send a library signal, by its id or name, exactly as the app fires it.",
             json!({ "signal": { "type": "string" }, "library": { "type": "string" } }), &["signal"], false),
-        tool("list_jobs", "List jobs", "What is running: monitors, generators, runs.", json!({}), &[], true),
+        tool("list_emulators", "List emulators", "The emulators of the user's library (the app's emulators.json, or the file given): what each one plays, where it listens, how many rules. describe_nodes (\"emulators\") explains the document.",
+            json!({ "library": { "type": "string", "description": "Path of an emulator library file" } }), &[], true),
+        tool("start_emulator", "Start an emulator", "Play the other side — an HTTP API, an OSC, UDP or TCP device — until stop_job: open its port and answer by its rules. Give an emulator document (describe_nodes, \"emulators\") or the id or name of one in the library. Returns the job id; emulator_exchanges says what arrived.",
+            json!({ "emulator": { "type": "object", "description": "An emulator document: {name, bind, protocol, …}" }, "name": { "type": "string", "description": "Id or name of one in the library" },
+                    "library": { "type": "string", "description": "Path of an emulator library file" }, "bind": { "type": "string", "description": "Listen here instead, IP:port" },
+                    "params": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Values its templates read as parameters" }, "seed": { "type": "integer", "minimum": 0 } }), &[], false),
+        tool("emulator_exchanges", "What an emulator received", "The requests a running emulator received and what it answered, rule by rule, each with what it carried (method, path, headers, body, JSON; address and arguments; text). after: only those after this sequence number.",
+            json!({ "job_id": { "type": "integer" }, "after": { "type": "integer", "minimum": 0 } }), &["job_id"], true),
+        tool("list_jobs", "List jobs", "What is running: monitors, generators, emulators, runs.", json!({}), &[], true),
         tool("stop_job", "Stop a job", "Stop a running job by its id.", json!({ "id": { "type": "integer" } }), &["id"], false),
     ]
 }
@@ -287,6 +302,9 @@ async fn call(state: &State, name: &str, arguments: &Value, request: &str, progr
         "listen" => listen(state, arguments).await,
         "list_signals" => list_signals(state, arguments),
         "fire_signal" => fire(state, arguments).await,
+        "list_emulators" => list_emulators(state, arguments),
+        "start_emulator" => start_emulator(state, arguments).await,
+        "emulator_exchanges" => emulator_exchanges(state, arguments).await,
         "list_jobs" => match state.engine.invoke("jobs_list", json!({})).await {
             Ok(jobs) => {
                 let lines: Vec<String> = jobs.as_array().into_iter().flatten().map(|job| format!("#{} {} — {}", job["id"], job["kind"].as_str().unwrap_or_default(), job["label"].as_str().unwrap_or_default())).collect();
@@ -438,12 +456,19 @@ async fn run(state: &State, arguments: &Value, request: &str, progress: Value) -
         }
         text.push_str(&format!("\n{:>7.3}s  {label} ({})  {}{}", step.ts.saturating_sub(first) as f64 / 1000.0, step.node_id, step.state, if said.is_empty() { String::new() } else { format!(" · {said}") }));
     }
+    // What the emulators of the run were asked: the proof the system under test called them.
+    if !ended.emulators.is_empty() {
+        text.push_str("\n\nEmulators:");
+        for emulator in &ended.emulators {
+            text.push_str(&format!("\n  {}", crate::emulate::counts_line(texts, emulator["name"].as_str().unwrap_or_default(), &emulator["counts"])));
+        }
+    }
     if let Some(path) = &ended.report_path {
         text.push_str(&format!("\n\nReport: {path}"));
     }
     let data = json!({
         "outcome": ended.outcome, "experiment": ended.experiment, "seed": ended.seed, "duration_ms": ended.ended_ms.saturating_sub(ended.started_ms),
-        "error": ended.error, "steps": steps, "report_path": ended.report_path,
+        "error": ended.error, "steps": steps, "emulators": ended.emulators, "report_path": ended.report_path,
     });
     // A run that failed is an answer, not a failed call: the steps say why.
     Answer::ok(text, data)
@@ -694,6 +719,91 @@ async fn fire(state: &State, arguments: &Value) -> Answer {
     };
     match fired {
         Ok(line) => Answer::ok(line, json!({ "fired": signal.id })),
+        Err(failure) => Answer::failed(state, &failure),
+    }
+}
+
+// ---- emulators --------------------------------------------------------------------
+
+fn emulator_library_path(state: &State, arguments: &Value) -> Option<PathBuf> {
+    arguments["library"].as_str().map(PathBuf::from).or_else(|| state.emulators.clone())
+}
+
+fn list_emulators(state: &State, arguments: &Value) -> Answer {
+    match crate::emulate::library(emulator_library_path(state, arguments).as_deref()) {
+        Ok((path, library)) => {
+            let mut lines = vec![format!("{} emulators in {}", library.emulators.len(), path.display())];
+            let mut list = Vec::new();
+            for stored in &library.emulators {
+                let emulator = &stored.emulator;
+                lines.push(format!("{} [{}] — {} on {}, {} rules{}", emulator.name, stored.id, emulator.kind.protocol(), emulator.bind, emulator.kind.rules(), if stored.note.is_empty() { String::new() } else { format!(" — {}", stored.note) }));
+                list.push(json!({ "id": stored.id, "note": stored.note, "emulator": emulator }));
+            }
+            Answer::ok(lines.join("\n"), json!({ "path": path.display().to_string(), "emulators": list }))
+        }
+        Err(failure) => Answer::failed(state, &failure),
+    }
+}
+
+async fn start_emulator(state: &State, arguments: &Value) -> Answer {
+    let (mut emulator, source) = match (arguments.get("emulator").filter(|value| !value.is_null()), arguments["name"].as_str()) {
+        (Some(document), None) => match serde_json::from_value::<signal_lab_engine::emulator::Emulator>(document.clone()) {
+            Ok(emulator) => (emulator, None),
+            Err(error) => return Answer::wrong(format!("emulator is not an emulator document: {error} — describe_nodes shows the shape under \"emulators\"")),
+        },
+        (None, Some(name)) => {
+            let (path, library) = match crate::emulate::library(emulator_library_path(state, arguments).as_deref()) {
+                Ok(found) => found,
+                Err(failure) => return Answer::failed(state, &failure),
+            };
+            match signal_lab_engine::emulator_files::find(&library, name) {
+                Some(stored) => (stored.emulator.clone(), Some(stored.id.clone())),
+                None => return Answer::failed(state, &Failure::invalid(EngineError::new("cli.emulator_unknown").with("name", name).with("path", path.display()))),
+            }
+        }
+        _ => return Answer::wrong("Give emulator (a document) or name (from the library), one of them"),
+    };
+    if let Some(bind) = arguments["bind"].as_str() {
+        emulator.bind = bind.to_string();
+    }
+    let params: BTreeMap<String, String> = arguments["params"].as_object().into_iter().flatten().map(|(name, value)| (name.clone(), value.as_str().map(str::to_string).unwrap_or_else(|| value.to_string()))).collect();
+    let request = json!({ "emulator": emulator, "params": params, "seed": arguments["seed"].as_u64(), "source": source });
+    match state.engine.invoke("emulator_start", request).await {
+        Ok(job) => {
+            let (id, local) = (job["id"].as_u64().unwrap_or_default(), job["params"]["local"].as_str().unwrap_or_default().to_string());
+            let protocol = emulator.kind.protocol();
+            let url = (protocol == "http").then(|| format!("http://{local}"));
+            let text = format!(
+                "{} ({protocol}) is answering on {local}{} — job #{id}. emulator_exchanges with job_id {id} says what arrives; stop_job ends it.",
+                emulator.name,
+                url.as_ref().map(|url| format!(" ({url})")).unwrap_or_default()
+            );
+            Answer::ok(text, json!({ "job_id": id, "name": emulator.name, "protocol": protocol, "local": local, "url": url }))
+        }
+        Err(failure) => Answer::failed(state, &crate::emulate::starting(failure)),
+    }
+}
+
+async fn emulator_exchanges(state: &State, arguments: &Value) -> Answer {
+    let Some(id) = arguments["job_id"].as_u64() else { return Answer::wrong("job_id is the number start_emulator gave") };
+    match state.engine.invoke("emulator_exchanges", json!({ "jobId": id, "after": arguments["after"].as_u64() })).await {
+        Ok(snapshot) => {
+            let mut text = crate::emulate::counts_line(&state.ctx.texts, snapshot["name"].as_str().unwrap_or_default(), &snapshot["counts"]);
+            for exchange in snapshot["exchanges"].as_array().into_iter().flatten() {
+                let rule = exchange["rule"].as_u64().map(|rule| format!("#{rule}")).unwrap_or_else(|| "no rule".into());
+                let answered = match (exchange.get("error").filter(|error| !error.is_null()), exchange["fault"].as_str(), exchange["reply"].as_str().unwrap_or_default()) {
+                    (Some(error), _, _) => {
+                        let error: EngineError = serde_json::from_value(error.clone()).unwrap_or_else(|_| EngineError::new("emulator.failed"));
+                        format!("failed: {}", state.ctx.texts.describe(&error, &["cli.err."], &|_| None).text)
+                    }
+                    (None, Some(fault), _) => fault.to_string(),
+                    (None, None, "") => "no reply".to_string(),
+                    (None, None, reply) => reply.to_string(),
+                };
+                text.push_str(&format!("\n[{}] {} {rule} → {answered} · {} ms ← {}", exchange["seq"], exchange["request"].as_str().unwrap_or_default(), exchange["ms"], exchange["from"].as_str().unwrap_or_default()));
+            }
+            Answer::ok(clip(&text), snapshot)
+        }
         Err(failure) => Answer::failed(state, &failure),
     }
 }

@@ -61,6 +61,9 @@ pub struct Ended {
     pub error: Option<EngineError>,
     #[serde(default)]
     pub steps: Vec<Step>,
+    /// What each Emulator node received: `{node, name, protocol, local, counts}`.
+    #[serde(default)]
+    pub emulators: Vec<Value>,
     #[serde(default)]
     pub report_path: Option<String>,
     #[serde(default)]
@@ -219,7 +222,7 @@ pub(crate) fn read_input(label: &str) -> Result<Input, Failure> {
 }
 
 /// `NAME=VALUE` pairs.
-fn parse_params(given: &[String]) -> Result<Vec<(String, String)>, Failure> {
+pub(crate) fn parse_params(given: &[String]) -> Result<Vec<(String, String)>, Failure> {
     given
         .iter()
         .map(|pair| match pair.split_once('=') {
@@ -477,6 +480,10 @@ fn summarize(ctx: &Ctx, record: &Record, ended: &Ended, remote: bool) {
             }
             eprintln!("  {}", texts.t("cli.rerun", &params! { "seed" => ended.seed }));
         }
+    }
+    // What the dependencies the run played were asked: the proof a mock was called.
+    for emulator in &ended.emulators {
+        eprintln!("  {}", crate::emulate::counts_line(texts, emulator["name"].as_str().unwrap_or_default(), &emulator["counts"]));
     }
     if let Some(error) = &ended.report_error {
         eprintln!("  {}", texts.describe(error, &["cli.err."], &|_| None).text);

@@ -1,4 +1,4 @@
-//! Milestone 4.3: an action sent again and again (Repeat) вЂ” end to end through
+//! Milestone 4.3: an action sent again and again (Repeat) — end to end through
 //! the command table, against loopback sockets.
 
 use std::net::SocketAddr;
@@ -72,7 +72,7 @@ async fn osc_device() -> (SocketAddr, Arc<AtomicUsize>) {
 
 fn doc(nodes: Vec<Value>, chain: &[&str]) -> Value {
     let edges: Vec<Value> = chain.windows(2).map(|pair| json!({ "from": pair[0], "to": pair[1], "port": "next" })).collect();
-    json!({ "version": 5, "name": "Repeat", "params": [], "profiles": [], "profile": null, "seed": 7, "nodes": nodes, "edges": edges })
+    json!({ "version": 6, "name": "Repeat", "params": [], "profiles": [], "profile": null, "seed": 7, "nodes": nodes, "edges": edges })
 }
 
 fn ends() -> [Value; 2] {
@@ -145,7 +145,7 @@ async fn a_send_repeated_for_a_time_stops_when_the_time_is_up_and_reports_its_pr
     let elapsed = started.elapsed();
     tokio::time::sleep(Duration::from_millis(100)).await;
     let sent = received.lock().unwrap().len();
-    // Sends at 0, 100 вЂ¦ 1200 ms: 13 on time, fewer when the timer runs late вЂ” never one past the end.
+    // Sends at 0, 100 … 1200 ms: 13 on time, fewer when the timer runs late — never one past the end.
     assert!((10..=13).contains(&sent), "{sent} sends in 1.3 s");
     assert!(elapsed < Duration::from_millis(1300 + 500), "no send after the time is up ({elapsed:?})");
     let progress = of(&steps, "beat", "repeating");
@@ -167,7 +167,7 @@ async fn stop_ends_a_repeat_in_its_pause_and_nothing_is_sent_after() {
     tokio::time::sleep(Duration::from_millis(300)).await;
     let after = received.lock().unwrap().len();
     assert!((2..1000).contains(&stopped_at), "it was sending ({stopped_at})");
-    assert!(after <= stopped_at + 1, "nothing more after Stop ({stopped_at} в†’ {after})");
+    assert!(after <= stopped_at + 1, "nothing more after Stop ({stopped_at} → {after})");
     assert!(recorder.payloads("experiment://step").iter().all(|step| step["state"] != "failed"));
 }
 
@@ -212,7 +212,7 @@ async fn a_repeat_where_one_does_not_belong_is_refused_before_the_run() {
             Some(field) => refused["code"] == "node.range" && refused["field"]["key"] == field,
             None => refused["code"] == expected,
         };
-        assert!(got, "{repeat} в†’ {refused}");
+        assert!(got, "{repeat} → {refused}");
     }
 }
 
@@ -239,7 +239,7 @@ async fn status_device(busy: usize) -> (SocketAddr, Arc<AtomicUsize>) {
 
 fn graph(nodes: Vec<Value>, edges: &[(&str, &str, &str)]) -> Value {
     let edges: Vec<Value> = edges.iter().map(|(from, port, to)| json!({ "from": from, "to": to, "port": port })).collect();
-    json!({ "version": 5, "name": "Loop", "params": [], "profiles": [], "profile": null, "seed": 7, "nodes": nodes, "edges": edges })
+    json!({ "version": 6, "name": "Loop", "params": [], "profiles": [], "profile": null, "seed": 7, "nodes": nodes, "edges": edges })
 }
 
 /// Start → Loop (≤ max, until `{{status.args[0]}} = ready`) → body: poll the device → back;

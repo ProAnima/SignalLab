@@ -26,6 +26,8 @@ signallab validate tests/*.json                    # the editor's check, nothing
 signallab send osc 127.0.0.1:9000 /cue/go f:0.75 s:main
 signallab send http GET http://127.0.0.1:8080/health --expect-status 200
 signallab fire "Fader value" --library signals.json
+signallab emulate tests/orders-api.json --for 120  # play a dependency for two minutes
+signallab emulators                                # the app's emulator library
 signallab templates
 signallab nodes                                    # what an experiment is made of (JSON)
 signallab doctor                                   # what stands between Signal Lab and the gear
@@ -117,6 +119,46 @@ byte-identical to one fired in the app.
 paths (`/cue/go` becomes `C:/Program Files/Git/cue/go`). Write `//cue/go`, or
 run with `MSYS_NO_PATHCONV=1`; PowerShell and `cmd` are not affected.
 
+### `emulate` and `emulators`
+
+`signallab emulate <FILE|NAME>…` plays the other side — an HTTP API, an OSC, UDP or
+TCP device — until Ctrl+C or `--for SECONDS`. A file holds one emulator (as a node's
+`emulator` field and `signallab nodes` describe it), a list of them, or a library as
+the app writes it; a name is the id or the name of one in the app's library
+(`Documents/SignalLab/emulators.json`, or `--library PATH`).
+
+| Option | |
+| --- | --- |
+| `--param NAME=VALUE` | a value its templates read as `{{NAME}}`, repeatable |
+| `--bind IP:PORT` | listen there instead, when one emulator is given |
+| `--for SECONDS` | stop after this long |
+| `--seed N` | the seed of its random choices (a random order, jitter, generators) |
+| `--check` | check the emulators and exit, without opening a port |
+| `--server URL`, `--token-file PATH` | start them on a lab server, follow them through its API, stop them at the end |
+
+Every request is printed as it is answered — `+   1.204 s Orders API  #2  GET
+/orders/42 → 503 Service Unavailable · 0 B  0 ms  ← 127.0.0.1:53114` — and each
+emulator ends with its counts: requests, how many no rule took, how many failed, and
+the hits per rule. `--json` prints `started`, every `exchange` (with what arrived:
+method, path, headers, body, JSON; address and arguments; text) and a `summary` per
+emulator. A port that is taken is exit code 3, an emulator that would not start 2.
+
+In a pipeline, the dependency runs in the background while the system under test is
+tested against it:
+
+```bash
+signallab emulate tests/payments-mock.json --for 300 --json > mock.ndjson &
+npm test                                   # the app, configured for http://127.0.0.1:18080
+wait                                       # the emulator's counts are the last lines of mock.ndjson
+```
+
+Inside an experiment the *Emulator* node does the same for one run, and *Wait for
+HTTP request* checks what arrived; `signallab run` prints each emulator's counts
+after the run, and the report and `--json` carry them (`emulators`).
+
+`signallab emulators` lists the library: id, name, protocol, address and rules
+(`--json` for the whole documents).
+
 ### `doctor` and `firewall allow`
 
 `signallab doctor [--server URL --token-file PATH]` says what could stand
@@ -149,6 +191,9 @@ talk to gear directly:
 | `send_osc`, `send_udp`, `send_http`, `send_mqtt` | one message, as the app sends it |
 | `listen` | what arrives on a UDP port for a while — OSC decoded, other datagrams as text and hex |
 | `list_signals`, `fire_signal` | the user's signal library |
+| `list_emulators` | the user's emulator library |
+| `start_emulator` | an emulator (a document, or a library entry by id or name, `bind` to move it) answers until `stop_job` |
+| `emulator_exchanges` | what a running emulator received and answered, rule by rule, with what each request carried (`after` for only the new ones) |
 | `list_jobs`, `stop_job` | what is running |
 
 Results are text for the model and the same as structured data; failures are
@@ -170,7 +215,8 @@ With `--server http://lab-pc:1430` (and `SIGNALLAB_TOKEN` in the client's
 environment) the runs and sends happen on the lab server, through its API —
 the gear only the lab can reach; `listen` stays on this machine. From the image:
 `docker run -i --rm --network host --entrypoint signallab ghcr.io/proanima/signallab mcp`.
-`--library PATH` names a signal library other than the app's. Runs keep their
+`--library PATH` names a signal library other than the app's, `--emulators PATH`
+an emulator library. Runs keep their
 reports in the app's data folder (`Documents/SignalLab/runs`, or `--data-dir`),
 so they stay after the session and are where the app keeps its own.
 
@@ -311,3 +357,7 @@ and branch on its exit code; `--json` for a machine to read.
 | `signallab mcp` as a client drives it: every tool, progress, a cancelled run that stops, protocol errors, `--server`, `--print-config` | `cli/tests/mcp.rs` |
 | The node catalogue the assistant reads: every kind the engine has, each example accepted with its outputs | `cli/src/catalog.rs` (unit tests) |
 | `signallab doctor` with a server whose token is right and one whose token is not | `cli/tests/doctor.rs` |
+| Emulators: routes, sequences, a seeded mix, faults, OSC/UDP/TCP rules, the library | `engine/src/emulator*.rs` (unit tests) |
+| An Emulator node retried against until it answers, a webhook a wait reads, a port shared with waits, ports checked before the first step, the commands | `engine/tests/emulators.rs` |
+| `signallab emulate` in the background, here and on a server; `--check`, a taken port, library names | `cli/tests/emulate.rs` |
+| `start_emulator`, `emulator_exchanges`, `list_emulators` as a client calls them | `cli/tests/mcp.rs` |

@@ -7,8 +7,8 @@
 *An open-source tool by [ProAnimaStudio](https://github.com/ProAnima).*
 
 A lightweight, cross-platform simulator and toolbox for **OSC signals, HTTP,
-MQTT, network impairment, broadcast/discovery, traffic storms, and port
-scanning** —
+MQTT, emulated APIs and devices, network impairment, broadcast/discovery,
+traffic storms, and port scanning** —
 with live signal display, a cross-protocol packet inspector, and a library of
 named signals you can fire again. Built with
 **Tauri 2 + React/TypeScript** on a native **Rust** networking engine, so it
@@ -31,6 +31,7 @@ choice. See [Interface & localization](#interface--localization).
 | Module | What it does |
 | --- | --- |
 | **Experiments** | A node canvas for mixed HTTP, OSC, UDP, TCP and MQTT tests. Add a node after the selected one with `A`, drag a wire out of a port to create or connect the next step, send any single action node on its own, branch on a status or a value, and run work in parallel — several wires out of one output (Start included) run their nodes at the same time, and a Join waits for all of them. Focus and native fullscreen modes give the graph more room. Runs highlight each step and save a JSON report under `Documents/SignalLab/runs/`. Event listeners, loops and retries are planned in [ROADMAP.md](ROADMAP.md). |
+| **Emulators** | Signal Lab as the other side: the API, device or service your system talks to. An **HTTP API** answers by routes (method, a path with `:name` segments, conditions on headers, query, body or JSON) with responses in sequence — 500, 500, then 200 for retries — in turn, or a seeded mix by weight, with delays, jitter and faults (no answer, a closed connection). An **OSC, UDP or TCP device** answers by rules: on this address, payload or line, reply that — to the sender or elsewhere, after a delay; a TCP device greets and can hang up. Replies are templates read with what arrived (`{{request.params.id}}`, `{{request.args[0]}}`). Each exchange is counted per rule, listed live and sent to the Inspector. **Mock this** on the HTTP screen turns a response into a route. The library is `Documents/SignalLab/emulators.json`, starting with a demo API and a demo OSC, UDP and TCP device on loopback. |
 | **Signals** | The library: a named, editable packet you can fire again — OSC, raw UDP, an HTTP request or an MQTT publish — in nested folders that open and close, searchable, and fired from anywhere with `Ctrl+K`. *Save…* on the HTTP, OSC and MQTT screens files what you just sent into a folder and keeps the screen tied to it: *Save* (`Ctrl+S`) updates it, *Save as…* copies it, and a chip says where it lives and whether it changed. Folders are made, renamed (`F2`), dragged and removed (their contents move up); *Open in…* loads a signal back into its screen. Ships with the recipes for the gear it was written against, saves itself as hand-editable JSON in `Documents/SignalLab/signals.json`, and turns any frame the Inspector caught into a byte-exact replay. |
 | **OSC** | Send OSC 1.0 messages with typed arguments, monitor an incoming port with live decoding, and drive continuous waveforms (sine / triangle / saw / square / ramp / random) into any endpoint with an on-screen oscilloscope. |
 | **MQTT** | Connect to a broker, subscribe to `#` and watch every topic it holds build up as a live tree — last value, retain flag, QoS, message count. Publish at QoS 0/1/2, announce a last will, and **clear a retained value** (the empty-payload trick), which is the one thing a stuck broker needs and no other tool makes easy. MQTT 3.1.1, hand-written, plain TCP. |
@@ -49,7 +50,8 @@ events and can be stopped individually or all at once from the console strip.
 The **Experiments** button beside the document name opens the templates:
 empty, HTTP status check, HTTP → OSC with a status branch, parallel flows,
 *OSC ping → reply* (send `/ping` with the run id, wait for `/pong` carrying it),
-and *Poll until ready* (ask a device for `/status` until it answers `ready`).
+*Poll until ready* (ask a device for `/status` until it answers `ready`), and
+*Retry a flaky API* (an emulated API that fails twice, and a loop that asks until it answers).
 The same dialog imports JSON files of any earlier version (up to 4 MiB; they are
 migrated on open) and exports the current document to
 `Documents/SignalLab/exports/`. Import checks the file before showing a preview;
@@ -106,6 +108,14 @@ graph) names the problem and jumps to the node. **Send now** (`Ctrl+Enter`) on a
 HTTP, OSC, UDP or MQTT node sends just that step through the same path as the
 direct instruments and shows the result — for HTTP, the formatted response —
 without running the experiment.
+
+An **Emulator** node plays a dependency for the whole run: it opens before the first
+step, answers until the run ends, and the run report counts what it received (*Edit…*
+opens its rules; it can be taken from, or kept in, the emulator library). **Wait for
+HTTP request** then checks what the system under test sent it — method, path and
+conditions — and later steps read `{{request.json.…}}`; on an address without an
+emulator, the run's own listener answers 204. An OSC or UDP emulator shares its port
+with the run's waits.
 
 The OSC and HTTP screens have **Add to experiment**, which appends the message or
 request you just tried as the next step. Their fields are kept across screens and
@@ -419,6 +429,7 @@ job or a deploy script — and exits with a code a pipeline understands:
 signallab run tests/smoke.json --param api=http://127.0.0.1:8080 --junit junit.xml
 signallab run tests/stage.json --server http://lab-pc:1430 --token-file token.txt
 signallab send osc 127.0.0.1:9000 /cue/go f:0.75
+signallab emulate tests/payments-mock.json --for 120 &   # the dependency, while the app is tested
 ```
 
 `0` all passed, `1` one failed, `2` invalid input, `3` could not run. Steps print as
@@ -436,9 +447,9 @@ between it and the gear, the firewall included. A GitHub Action wraps it:
 
 **For an assistant:** `signallab mcp` is a Model Context Protocol server, so an
 LLM in Claude Code, Claude Desktop, Cursor or VS Code can read what an experiment
-is made of, write one, validate and run it, send single messages and listen on a
-port — here, or on a lab server with `--server`. `signallab mcp --print-config
-claude-code` prints the line to add it.
+is made of, write one, validate and run it, send single messages, listen on a
+port, and start an emulator and read what it received — here, or on a lab server
+with `--server`. `signallab mcp --print-config claude-code` prints the line to add it.
 
 The server's API does the same over HTTP: `POST /api/run` waits for a run and
 answers with its result, or streams its steps as NDJSON; `/api/invoke/<command>`
@@ -524,10 +535,11 @@ Issues and pull requests are welcome. A few things worth knowing:
 ### Experiment node catalogue
 
 The editor supports Start/End, HTTP requests, OSC messages, UDP datagrams, TCP,
-MQTT publishing, Log, Delay, **Wait for OSC**, **Wait for UDP** and **Wait for MQTT**,
-Extract, value checks and branches, status branching, parallel branch/join, **Loop**,
-and HTTP status/body/header/latency checks. The palette groups actions, waits (*Observe*),
-data, checks and flow; search supports Russian/English labels and protocol names,
+MQTT publishing, Log, Delay, **Wait for OSC**, **Wait for UDP**, **Wait for MQTT** and
+**Wait for HTTP request**, the **Emulator**, Extract, value checks and branches, status
+branching, parallel branch/join, **Loop**, and HTTP status/body/header/latency checks.
+The palette groups actions, waits (*Observe*), *Emulate*, data, checks and flow; search
+supports Russian/English labels and protocol names,
 with arrow-key selection and Enter to insert. HTTP node forms include request
 headers, and OSC forms include typed arguments.
 

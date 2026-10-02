@@ -60,7 +60,7 @@ fn free_udp_port() -> u16 {
 
 fn doc(nodes: Vec<Value>, chain: &[&str]) -> Value {
     let edges: Vec<Value> = chain.windows(2).map(|pair| json!({ "from": pair[0], "to": pair[1], "port": "next" })).collect();
-    json!({ "version": 5, "name": "Reply and retry", "params": [], "profiles": [], "profile": null, "seed": null, "nodes": nodes, "edges": edges })
+    json!({ "version": 6, "name": "Reply and retry", "params": [], "profiles": [], "profile": null, "seed": null, "nodes": nodes, "edges": edges })
 }
 
 fn ends() -> [Value; 2] {

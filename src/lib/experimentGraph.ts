@@ -1,4 +1,5 @@
 import type { ArgRule, Experiment, ExperimentNode, ExperimentPort, HttpRequest, OscArg } from "./api";
+import { blankEmulator } from "./emulators.ts";
 
 export type NodeType = ExperimentNode["type"];
 export type Port = ExperimentPort;
@@ -41,6 +42,9 @@ export function createNode(type: NodeType, x: number, y: number): ExperimentNode
     case "wait_osc": return { ...base, type, bind: "127.0.0.1:9001", address: "/pong", args: [], timeout_ms: 2000, variable: "reply" };
     case "wait_udp": return { ...base, type, bind: "127.0.0.1:9001", mode: "contains", pattern: "pong", timeout_ms: 2000, variable: "reply" };
     case "wait_mqtt": return { ...base, type, host: "127.0.0.1", port: 1883, topic: "lab/#", mode: "any", pattern: "", timeout_ms: 2000, variable: "reply" };
+    // A new emulator and a new HTTP wait share an address, so the wait sees what the emulator answers.
+    case "emulator": return { ...base, type, emulator: blankEmulator("http", "API", "127.0.0.1:18080") };
+    case "wait_http": return { ...base, type, bind: "127.0.0.1:18080", method: "ANY", path: "/*", when: [], timeout_ms: 5000, variable: "request" };
   }
 }
 
@@ -73,7 +77,7 @@ export function validPortsFor(type: NodeType): Port[] {
   switch (type) {
     case "branch_status": case "branch_value": return ["yes", "no"];
     case "fork": return ["branch1", "branch2"];
-    case "wait_osc": case "wait_udp": case "wait_mqtt": return ["matched", "timeout"];
+    case "wait_osc": case "wait_udp": case "wait_mqtt": case "wait_http": return ["matched", "timeout"];
     case "loop": return ["body", "done", "limit"];
     case "end": return [];
     default: return ["next"];

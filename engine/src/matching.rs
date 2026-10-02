@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use super::error::{EngineError, EngineResult, Field};
-use super::osc_codec::{decode_packet, OscArg};
+use super::osc_codec::{decode_packet, OscArg, OscMessage};
 
 /// Longest address pattern accepted; addresses are short in practice.
 pub const MAX_PATTERN: usize = 512;
@@ -31,6 +31,10 @@ pub struct Datagram {
     pub topic: Option<String>,
     /// Its frame in the Inspector, when capture was armed as it arrived.
     pub frame: Option<u64>,
+    /// An HTTP request an emulator received, as its templates read it
+    /// (`method`, `path`, `query`, `headers`, `body`, `json`, `from`); `bytes`
+    /// is its body. `None` for a datagram.
+    pub request: Option<Value>,
 }
 
 /// Decides whether a datagram is the awaited reply. On a match it returns the
@@ -400,18 +404,28 @@ impl OscMatcher {
     }
 }
 
+impl OscMatcher {
+    /// Whether one decoded message is the one awaited.
+    pub fn accepts(&self, message: &OscMessage) -> bool {
+        self.pattern.matches(&message.address) && self.rules.iter().all(|rule| rule.holds(&message.args))
+    }
+}
+
+/// A message as a wait's reply and an emulator's `request` read it.
+pub fn osc_value(message: &OscMessage, from: SocketAddr) -> Value {
+    json!({
+        "address": message.address,
+        "args": message.args.iter().map(arg_value).collect::<Vec<_>>(),
+        "from": from.to_string(),
+    })
+}
+
 impl Matcher for OscMatcher {
     /// A bundle matches when one of its messages does; that message is the reply.
     fn matches(&self, datagram: &Datagram) -> Option<Value> {
         let messages = decode_packet(&datagram.bytes).ok()?;
-        let message = messages
-            .iter()
-            .find(|message| self.pattern.matches(&message.address) && self.rules.iter().all(|rule| rule.holds(&message.args)))?;
-        Some(json!({
-            "address": message.address,
-            "args": message.args.iter().map(arg_value).collect::<Vec<_>>(),
-            "from": datagram.from.to_string(),
-        }))
+        let message = messages.iter().find(|message| self.accepts(message))?;
+        Some(osc_value(message, datagram.from))
     }
 }
 
@@ -514,7 +528,7 @@ mod tests {
     use crate::osc_codec::encode_message;
 
     fn datagram(bytes: Vec<u8>) -> Datagram {
-        Datagram { bytes, from: "127.0.0.1:9000".parse().unwrap(), at: Instant::now(), topic: None, frame: None }
+        Datagram { bytes, from: "127.0.0.1:9000".parse().unwrap(), at: Instant::now(), topic: None, frame: None, request: None }
     }
 
     #[test]

@@ -3517,6 +3517,10 @@ dependencies = [
 name = "signal-lab-engine"
 version = "0.3.1"
 dependencies = [
+ "bytes",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
  "keyring",
  "rand 0.8.8",
  "regex",

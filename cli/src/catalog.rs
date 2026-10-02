@@ -93,7 +93,74 @@ const KINDS: &[Kind] = &[
         fields: &[("max", "iterations at most"), ("until", "optional exit condition {value, op, expected}, read after each iteration")],
         example: || json!({ "max": 10, "until": { "value": "{{status.args[0]}}", "op": "eq", "expected": "ready" } }),
     },
+    Kind {
+        kind: "emulator",
+        fields: &[("emulator", "an emulator document (see \"emulators\"): it opens before the first step and answers until the run ends; the flow passes at once")],
+        // Every field written out, as the engine keeps it, so a reader sees them all.
+        example: || {
+            let emulator: signal_lab_engine::emulator::Emulator = serde_json::from_value(json!({ "name": "Orders API", "bind": "127.0.0.1:18080", "protocol": "http", "routes": [
+                { "method": "GET", "path": "/orders/:id", "order": "sequence", "responses": [{ "status": 503 }, { "status": 200, "body": "{\"id\":\"{{request.params.id}}\"}" }] }
+            ] }))
+            .expect("the example is an emulator");
+            json!({ "emulator": emulator })
+        },
+    },
+    Kind {
+        kind: "wait_http",
+        fields: &[
+            ("bind", "IP:port: the run's HTTP emulator there, or a listener of the run's own that answers 204"),
+            ("method", "a method or ANY"),
+            ("path", "/hooks/:name, a final /* takes the rest; templated"),
+            ("when", "[{on: header|query|body|json, name, op, value}], every one must hold; templated"),
+            ("timeout_ms", "milliseconds"),
+            ("variable", "the request as {{request.method}}, .path, .query, .headers, .body, .json, .params, .from, .ms"),
+        ],
+        example: || json!({ "bind": "127.0.0.1:18081", "method": "POST", "path": "/hooks/:name", "when": [{ "on": "json", "name": "$.event", "op": "eq", "value": "deploy" }], "timeout_ms": 5000, "variable": "request" }),
+    },
 ];
+
+/// What an emulator document holds, for a node's `emulator` and for `signallab emulate`.
+fn emulators() -> Value {
+    json!({
+        "shape": "{ name, bind: \"IP:port\", protocol: http|osc|udp|tcp, ...the protocol's fields }",
+        "rules": [
+            "The first route or rule that matches answers; what none takes is counted (HTTP: 404, or fallback).",
+            "Replies are templates read with what arrived as {{request…}}, and parameters; matching patterns may use parameters only.",
+            "Bind 127.0.0.1 to answer this computer only, 0.0.0.0 to answer the network as well.",
+            "Every exchange is counted per rule; a run's report has the counts of each Emulator node.",
+        ],
+        "protocols": {
+            "http": {
+                "fields": {
+                    "routes": "[{method: ANY|GET|…, path: \"/users/:id\" (a final /* takes the rest), when: [{on: header|query|body|json, name, op, value}], order: sequence|cycle|random, responses: [...]}]",
+                    "responses": "[{status, headers: [[name, value]], body, delay_ms, jitter_ms, fault: none|timeout|reset, weight}]: sequence answers them in turn and then the last (500, 500, 200 for retries); cycle starts over; random draws by weight from the seed",
+                    "fallback": "a response for requests no route takes, or null for 404",
+                },
+                "request": "{{request.method}}, .path, .query.NAME, .headers.NAME (lower case), .body, .json.PATH, .params.NAME, .from",
+            },
+            "osc": {
+                "fields": {
+                    "rules": "[{address: pattern, args: [{index, op, value}], reply: {address, args: [{type: int|float|str|long|double|bool|blob|nil, value: template}]} or null, to: \"\" (the sender) or IP:port, delay_ms, jitter_ms}]",
+                },
+                "request": "{{request.address}}, {{request.args[0]}}, {{request.from}}",
+            },
+            "udp": {
+                "fields": { "rules": "[{mode: any|contains|regex|hex, pattern, reply: {kind: text, text} | {kind: hex, hex} or null, to, delay_ms, jitter_ms}]" },
+                "request": "{{request.text}}, {{request.match}} (a regex's first group), {{request.hex}}, {{request.bytes}}, {{request.from}}",
+            },
+            "tcp": {
+                "fields": {
+                    "delimiter": "lf | crlf | cr | none: splits what arrives into messages and ends every reply",
+                    "greeting": "text sent as a client connects",
+                    "rules": "[{mode, pattern, reply, close: true to hang up after the reply, delay_ms, jitter_ms}]",
+                },
+                "request": "as udp",
+            },
+        },
+        "templates": "{{counter}} is the rule's hit number; {{uuid}}, {{now}}, {{now.iso}}, {{random_int(a, b)}} as in experiments",
+        "example": (KINDS.iter().find(|kind| kind.kind == "emulator").map(|kind| (kind.example)()).unwrap_or_default())["emulator"].clone(),
+    })
+}
 
 /// Every kind of node the catalogue describes (a test keeps it equal to the engine's).
 #[cfg(test)]
@@ -142,9 +209,10 @@ pub fn describe(texts: &Texts) -> Value {
             })
         })
         .collect();
+    let version = signal_lab_engine::experiment::VERSION;
     json!({
         "document": {
-            "shape": "{ version: 5, name, params: [{name, value}], profiles: [{name, values: {param: value}}], nodes: [...], edges: [{from, to, port}] }",
+            "shape": format!("{{ version: {version}, name, params: [{{name, value}}], profiles: [{{name, values: {{param: value}}}}], nodes: [...], edges: [{{from, to, port}}] }}"),
             "rules": [
                 "Exactly one start and at least one end; every required output of a node is wired; ids are unique.",
                 "A node is {id, type, x, y, ...its fields}; x and y place it on the canvas (any numbers).",
@@ -152,6 +220,7 @@ pub fn describe(texts: &Texts) -> Value {
                 "Several edges out of one output run in parallel; a join waits for every edge into it.",
                 "A loop's body (from its body output) must lead back to the loop; the loop continues by done, or limit when the iterations ran out.",
                 "Waits listen from the start of the run, so a fast answer is not missed; an action followed by a wait is how a reply is checked.",
+                "An emulator node plays a dependency for the whole run; wait_http then checks what the system under test sent it.",
                 "retry: {attempts, delay_ms, backoff: fixed|exponential} on an action or wait tries it again; repeat: {until: count|duration, count, duration_ms, interval_ms, jitter_ms} on an action sends it again.",
             ],
         },
@@ -166,6 +235,7 @@ pub fn describe(texts: &Texts) -> Value {
             ],
         },
         "nodes": nodes,
+        "emulators": emulators(),
     })
 }
 
@@ -192,6 +262,9 @@ mod tests {
         let wait = catalogue["nodes"].as_array().unwrap().iter().find(|node| node["type"] == "wait_osc").unwrap();
         assert_eq!((wait["outputs"].clone(), wait["optional_outputs"].clone()), (json!(["matched"]), json!(["timeout"])));
         assert_eq!(wait["label"], "Wait for OSC");
+        // The emulator a node's example carries is one the engine would start.
+        let example: signal_lab_engine::emulator::Emulator = serde_json::from_value(catalogue["emulators"]["example"].clone()).unwrap();
+        signal_lab_engine::emulator::check(&example, &Default::default()).unwrap();
     }
 
     #[test]

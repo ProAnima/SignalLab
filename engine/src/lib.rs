@@ -5,6 +5,10 @@
 //! to deliver events to their interface.
 
 pub mod broadcast;
+pub mod emulator;
+pub mod emulator_files;
+pub mod emulator_http;
+pub mod emulator_net;
 pub mod error;
 pub mod experiment;
 pub mod experiment_actions;

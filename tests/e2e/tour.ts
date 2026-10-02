@@ -269,11 +269,11 @@ function key(target: EventTarget, init: KeyboardEventInit) {
 }
 
 const NAV: Record<string, Key> = {
-  experiment: "nav.experiment", signals: "nav.signals", osc: "nav.osc", mqtt: "nav.mqtt", broadcast: "nav.broadcast",
+  experiment: "nav.experiment", signals: "nav.signals", emulators: "nav.emulators", osc: "nav.osc", mqtt: "nav.mqtt", broadcast: "nav.broadcast",
   http: "nav.http", netsim: "nav.netsim", storm: "nav.storm", scan: "nav.scan",
 };
 const TITLES: Record<string, Key> = {
-  signals: "sig.title", osc: "osc.title", mqtt: "mq.title", broadcast: "bc.title",
+  signals: "sig.title", emulators: "emu.title", osc: "osc.title", mqtt: "mq.title", broadcast: "bc.title",
   http: "http.title", netsim: "ns.title", storm: "st.title", scan: "sc.title",
 };
 
@@ -1057,6 +1057,96 @@ async function layout(expect: Expect) {
   expect("the editor still names every control", nameless.length === 0, nameless.join(" | "));
 }
 
+/**
+ * An HTTP emulator made on its screen: it answers the HTTP screen, Mock this
+ * turns that answer into a route of its own, the exchange is listed with its
+ * rule, a restart takes the new route, and it is stopped and deleted again.
+ */
+async function emulators(expect: Expect, args: StepArgs) {
+  const shown = await go("emulators");
+  const library = panel(shown, T("emu.library"));
+  expect("the starter set is in the library", library.querySelectorAll(".emu-item").length >= 4, textOf(library));
+  await click(button(library, `＋ ${T("emu.new.http")}`));
+  const editor = await until("the new emulator", () => textOf(shown.querySelector(".emu-item.active")).includes(T("emu.newName.http")) && shown.querySelector<HTMLElement>(".emu-editor"));
+  const local = `127.0.0.1:${args.port}`;
+  await type(control(editor, T("emu.bind")), local);
+  await type(control(editor, T("emu.path")), "/e2e/:id");
+  await type(control(editor, T("emu.body")), '{"id":"{{request.params.id}}","via":"emulator"}');
+  await sleep(600);
+  expect("it checks itself while being written: nothing in the way", !shown.querySelector(".emu-problem"), textOf(shown.querySelector(".emu-problem")));
+  await click(button(shown, T("emu.start")));
+  await until("it to answer", () => textOf(shown.querySelector(".emu-state")) === T("emu.runningOn", { local }));
+  expect("the console lists its job", textOf(document.querySelector(".jobs-strip")).includes(T("job.emulator", { name: T("emu.newName.http"), local })), textOf(document.querySelector(".jobs-strip")));
+  const nameless = unnamed(shown);
+  expect("emulators: every field and button has a name", nameless.length === 0, nameless.join(" | "));
+
+  // The HTTP screen talks to it.
+  const http = await go("http");
+  const request = panel(http, T("http.request"));
+  await type(request.querySelector("select")!, "GET");
+  await type(control(request, "URL"), `http://${local}/e2e/7`);
+  await click(button(request, T("common.send")));
+  const verdict = await until("the emulator's answer", () => result(request)?.classList.contains("ok") && result(request));
+  expect("the emulator answers 200", textOf(verdict).startsWith("200"), textOf(verdict));
+  const response = panel(http, T("http.response"));
+  const body = response.querySelector<HTMLTextAreaElement>("textarea")!;
+  expect("with the id from its path", body.value.includes('"id": "7"') && body.value.includes('"via": "emulator"'), body.value.slice(0, 120));
+
+  // Mock this: that answer becomes a route of the same emulator, first in its list.
+  await click(buttonWith(response, T("http.mockThis")));
+  const dialog = await until("the Mock this dialog", () => document.querySelector<HTMLDialogElement>("dialog[open]"));
+  const into = control(dialog, T("http.mockInto")) as HTMLSelectElement;
+  const option = [...into.options].find((item) => item.text.startsWith(T("emu.newName.http")));
+  if (!option) throw new Error(`no ${T("emu.newName.http")} to mock into: ${[...into.options].map((item) => item.text).join(", ")}`);
+  await type(into, option.value);
+  await click(button(dialog, T("http.mockAdd")));
+  const back = await until("the route on the Emulators screen", () => {
+    const now = screen();
+    return textOf(now.querySelector(".emu-rule .emu-rule-summary")) === "GET /e2e/7 → 200" && now;
+  });
+  expect("Mock this adds the route first", true);
+  expect("the running emulator offers a restart for it", !!hasButton(back, T("emu.restart")));
+
+  // What it received, as it arrived.
+  const live = panel(back, T("emu.live"));
+  const row = await until("the exchange", () => [...live.querySelectorAll("tbody tr")].map(textOf).find((text) => text.includes("GET /e2e/7")));
+  expect("the request is listed with its rule and answer", row.includes("#1") && row.includes("200 OK"), row);
+  expect("and counted", metric(live, T("emu.total")) === "1", metric(live, T("emu.total")));
+  await click(button(back, T("emu.restart")));
+  await until("the restart", () => !hasButton(back, T("emu.restart")) && textOf(back.querySelector(".emu-state")) === T("emu.runningOn", { local }));
+  expect("a restart takes the rules as they are now", true);
+
+  await click(button(back, T("emu.stop")));
+  await until("it to stop", () => textOf(back.querySelector(".emu-state")) === T("emu.notRunning"));
+  await click(button(back, T("emu.delete")));
+  await click(button(back, T("emu.confirmDelete")));
+  await until("it gone from the library", () => ![...back.querySelectorAll(".emu-item")].some((element) => textOf(element).includes(T("emu.newName.http"))));
+  expect("stopped and deleted", true);
+}
+
+/** The bundled flaky API: an Emulator node edited in its dialog, and a run that retries until it answers. */
+async function experimentEmulator(expect: Expect, args: StepArgs) {
+  const editor = await openTemplate("exp.templateFlaky");
+  const local = `127.0.0.1:${args.port}`;
+  await click(button(editor, T("exp.params")));
+  const params = await until("the parameters", () => document.querySelector<HTMLElement>(".experiment-params"));
+  await type(control(params, T("exp.paramValue")), `http://${local}`);
+  await click(button(params, T("exp.close")));
+  const properties = await selectNode(editor, "exp.node.emulator", 0, expect);
+  await click(button(properties, T("emu.edit")));
+  const dialog = await until("the emulator dialog", () => document.querySelector<HTMLDialogElement>("dialog.emu-dialog[open]"));
+  const nameless = unnamed(dialog);
+  expect("the emulator dialog names every control", nameless.length === 0, nameless.join(" | "));
+  await type(control(dialog, T("emu.bind")), local);
+  await click(button(dialog, T("emu.done")));
+  await until("the dialog to close", () => !document.querySelector("dialog.emu-dialog[open]"));
+  expect("the node shows its address", textOf(properties).includes(local), textOf(properties));
+  const { outcome, rows } = await runAndWait(editor, 20000);
+  expect("the flaky API run passes", outcome === T("exp.passed"), `${outcome} · ${rows.join(" | ")}`);
+  expect("the emulator served the run", rows.some((row) => row.includes(T("exp.step.emulating", { name: "Flaky API", local }))), rows.join(" | "));
+  expect("answered on the third attempt", rows.some((row) => row.includes(`http://${local} answered on attempt 3`)), rows.join(" | "));
+}
+
 async function cleanup(expect: Expect) {
   closeOverlays();
   const stopAll = button(document.querySelector(".header")!, T("app.stopAll"));
@@ -1075,7 +1165,8 @@ async function cleanup(expect: Expect) {
 
 const STEPS: Record<string, (expect: Expect, args: StepArgs) => Promise<Record<string, unknown> | void>> = {
   shell, inspectArm, osc, signals, oscStop, mqtt, broadcast, netsimStart, netsimCheck, storm, scan, http,
-  library, experimentHttp, experimentOsc, experimentRepeat, experimentLoop, experimentParallel, experimentExport, layout, inspectCheck, russian, cleanup,
+  library, emulators, experimentHttp, experimentOsc, experimentRepeat, experimentLoop, experimentParallel, experimentEmulator, experimentExport, layout,
+  inspectCheck, russian, cleanup,
 };
 
 // ---- the runner's side --------------------------------------------------------------

@@ -51,6 +51,7 @@
   --node-data: var(--blue);
   /* Waits: they listen rather than send, so they get their own marker. */
   --node-observe: #8fe3b4;
+  --node-emulate: #f08bd0;
   --radius: 12px;
   --radius-sm: 8px;
   --radius-xs: 6px;
@@ -1419,6 +1420,7 @@ kbd {
 [data-group="flow"] { --node-color: var(--node-flow); }
 [data-group="data"] { --node-color: var(--node-data); }
 [data-group="observe"] { --node-color: var(--node-observe); }
+[data-group="emulate"] { --node-color: var(--node-emulate); }
 .experiment-node-type { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 .experiment-node-type::before { content: ""; display: inline-block; width: 5px; height: 12px; margin-right: var(--space-2); border-radius: var(--radius-xs); background: var(--node-color); vertical-align: -1px; }
 .experiment-add-menu .experiment-kind { flex: 0 0 26px; height: 26px; border-radius: var(--radius-xs); color: var(--node-color); background: var(--surface-3); font-size: 14px; }
@@ -1678,3 +1680,60 @@ button.experiment-validation:hover { color: var(--amber); border-color: var(--am
 .download-link { color: var(--accent); font-size: 12px; text-decoration: none; white-space: nowrap; }
 .download-link:hover { text-decoration: underline; }
 .download-link:focus-visible { outline: none; box-shadow: var(--ring); border-radius: var(--radius-xs); }
+
+/* ---------- emulators ---------- */
+
+.emu-new { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.emu-item .sig-item-name { display: flex; align-items: center; gap: 7px; }
+.emu-pulse { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 7px var(--accent); flex-shrink: 0; }
+.emu-item-total { margin-left: auto; color: var(--accent); }
+.emu-main { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.emu-controls { margin-top: 0; margin-bottom: 14px; flex-wrap: wrap; align-items: center; }
+.emu-state { font: 11px var(--mono); color: var(--text-faint); }
+.emu-state.on { color: var(--accent); }
+.emu-problem { margin-bottom: 12px; }
+.emu-editor .row > .emu-protocol { flex: 0 0 auto; align-self: center; margin-top: 10px; }
+.emu-rules-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 6px 0 8px; }
+.emu-rules-head .section-label { margin: 0; }
+.emu-rule { margin-bottom: 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: rgba(255, 255, 255, 0.015); }
+.emu-rule.open { border-color: var(--border-strong); }
+.emu-rule-head { display: flex; align-items: center; gap: 4px; padding: 4px 6px 4px 4px; }
+.emu-rule-toggle {
+  display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0;
+  padding: 5px 6px; border: 0; background: transparent; color: var(--text-dim);
+  font: inherit; font-size: 12px; text-align: left; cursor: pointer;
+}
+.emu-rule-toggle:hover { color: var(--text); background: transparent; }
+.emu-rule-toggle:active { transform: none; }
+.emu-rule-twist { width: 10px; color: var(--text-faint); font-family: var(--mono); }
+.emu-rule-n { font: 600 11px var(--mono); color: var(--accent); }
+.emu-rule-summary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: 11.5px; }
+.emu-hits { padding: 1px 7px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font: 10px var(--mono); }
+.emu-rule-body { padding: 4px 12px 12px; border-top: 1px solid var(--border); }
+.emu-subhead { margin: 10px 0 6px; font-size: 9.5px; font-weight: 700; letter-spacing: 1.3px; text-transform: uppercase; color: var(--text-faint); }
+.emu-conditions, .emu-headers, .emu-args { margin-bottom: 12px; }
+.emu-condition { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+.emu-condition > select { flex: 0 0 auto; }
+.emu-condition > input { flex: 1 1 120px; min-width: 0; }
+.emu-response { margin: 0 0 10px; padding: 10px; border: 1px solid var(--border); border-radius: var(--radius-xs); background: rgba(0, 0, 0, 0.12); }
+.emu-response-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.emu-response-n { font: 600 10.5px var(--mono); color: var(--text-dim); }
+.emu-headers .row { margin-bottom: 6px; }
+.emu-body { min-height: 70px; font: 11.5px/1.45 var(--mono); }
+.emu-preset { max-width: 260px; }
+.emu-check { margin: 4px 0 12px; }
+.emu-fallback { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+.emu-exchanges { max-height: 360px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.emu-exchanges .emu-request { color: var(--cyan); word-break: break-all; }
+.emu-exchanges tr.emu-unmatched td { color: var(--amber); }
+.emu-exchanges tr.emu-failed td { color: var(--red); }
+.emu-dropped { margin: 8px 0 0; font: 11px var(--mono); color: var(--amber); }
+.emu-mock-route { margin: 0 0 14px; font: 12px var(--mono); color: var(--text-dim); overflow-wrap: anywhere; }
+.emu-dialog { width: min(900px, calc(100vw - 32px)); max-height: calc(100vh - 48px); }
+.emu-dialog-body { padding: 20px; }
+.emu-dialog-body h2 { margin: 0 0 14px; font-size: 16px; }
+.emu-dialog-body footer { margin-top: 14px; }
+.experiment-emulator { display: grid; gap: 8px; }
+.experiment-emulator-summary { display: grid; gap: 2px; margin: 0; font: 11px var(--mono); color: var(--text-dim); overflow-wrap: anywhere; }
+.experiment-emulator-summary b { color: var(--text); font-family: var(--sans); font-size: 12.5px; }
+.btn-row.tight { margin-top: 0; gap: 6px; flex-wrap: wrap; }

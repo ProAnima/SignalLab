@@ -8,6 +8,7 @@ import { useT } from "../lib/i18n";
 import { useFieldIds, useJobStream, usePersistentState, useSeries } from "../lib/hooks";
 import { fmtBytes, fmtNum, fmtTime, prettyJson, statusClass } from "../lib/format";
 import { Scope } from "../components/Scope";
+import { MockThis } from "../components/MockThis";
 
 const METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
 
@@ -24,10 +25,12 @@ function requestName(method: string, url: string): string {
  * makes the same one opened twice a new request. `onShowSignal` opens the
  * one this request is saved as.
  */
-export function HttpView({ onToExperiment, load, onShowSignal }: {
+export function HttpView({ onToExperiment, load, onShowSignal, onShowEmulator }: {
   onToExperiment?: (body: SignalBody) => void;
   load?: { signal: Signal; at: number } | null;
   onShowSignal?: (id: string) => void;
+  /** Open the emulator Mock this put a route into. */
+  onShowEmulator?: (id: string) => void;
 }) {
   const { pushLog, pushError, refreshJobs, stopJob, jobGone } = useStore();
   const t = useT();
@@ -247,6 +250,7 @@ export function HttpView({ onToExperiment, load, onShowSignal }: {
                   {raw ? t("http.formatJson") : t("http.rawBody")}
                 </button>
               )}
+              {!resp.error && <span style={{ marginLeft: 6 }}><MockThis method={method} url={sentUrl} response={resp} onShow={onShowEmulator} /></span>}
               <textarea
                 readOnly
                 aria-label={t("http.response")}

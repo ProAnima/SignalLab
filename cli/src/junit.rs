@@ -259,6 +259,7 @@ mod tests {
             ended_ms: 1_790_000_000_250,
             error: Some(error.clone()),
             steps: vec![step(1_790_000_000_000, start, "running", None), step(1_790_000_000_001, start, "passed", None), step(1_790_000_000_010, failing, "running", None), step(1_790_000_000_200, failing, "failed", Some(error))],
+            emulators: Vec::new(),
             report_path: None,
             report_error: None,
         };

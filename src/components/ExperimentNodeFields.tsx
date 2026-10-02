@@ -2,7 +2,11 @@ import type { ArgRule, CompareOp, ExperimentNode, ExtractFrom, UdpMode } from ".
 import { ExperimentOscFields } from "./ExperimentOscFields";
 import { ReplyFields } from "./ExperimentNodeOptions";
 import { TemplateField } from "./TemplateField";
+import { ConditionsEditor } from "./EmulatorEditor";
+import { ExperimentEmulatorFields } from "./ExperimentEmulatorFields";
 import { useT, type TKey } from "../lib/i18n";
+
+const HTTP_METHODS = ["ANY", "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
 
 const SOURCES: ExtractFrom[] = ["json", "header", "status", "body", "regex"];
 const OPERATORS: CompareOp[] = ["eq", "ne", "lt", "le", "gt", "ge", "contains", "matches", "empty", "not_empty"];
@@ -87,7 +91,16 @@ export function ExperimentNodeFields({ node, patch }: { node: ExperimentNode; pa
       <label>{t("exp.waitMode")}<select value={node.mode} onChange={event => patch({ mode: event.target.value as UdpMode })}>{UDP_MODES.map(mode => <option key={mode} value={mode}>{t(`exp.mode.${mode}` as TKey)}</option>)}</select></label>
       {node.mode !== "any" && <label>{t("field.pattern")}<TemplateField primary value={node.pattern} placeholder={MODE_PLACEHOLDER[node.mode]} onChange={pattern => patch({ pattern })} /></label>}
     </>}
-    {(node.type === "wait_osc" || node.type === "wait_udp" || node.type === "wait_mqtt") && <>
+    {node.type === "wait_http" && <>
+      <label data-tip={t("exp.waitHttpHint", { name: node.variable || "request" })}>{t("exp.listenOn")}
+        <input value={node.bind} spellCheck={false} placeholder="127.0.0.1:18080" onChange={event => patch({ bind: event.target.value.trim() })} /></label>
+      <label>{t("exp.method")}<select value={node.method.toUpperCase()} onChange={event => patch({ method: event.target.value })}>
+        {HTTP_METHODS.map(method => <option key={method} value={method}>{method === "ANY" ? t("emu.methodAny") : method}</option>)}</select></label>
+      <label data-tip={t("emu.pathHint")}>{t("exp.path")}<TemplateField primary value={node.path} onChange={path => patch({ path })} /></label>
+      <ConditionsEditor conditions={node.when} onChange={when => patch({ when })} idPrefix={`${node.id}-`} />
+    </>}
+    {node.type === "emulator" && <ExperimentEmulatorFields emulator={node.emulator} onChange={emulator => patch({ emulator })} />}
+    {(node.type === "wait_osc" || node.type === "wait_udp" || node.type === "wait_mqtt" || node.type === "wait_http") && <>
       <label>{t("exp.waitTimeout")}<input type="number" min="1" max="120000" value={node.timeout_ms} onChange={event => patch({ timeout_ms: Number(event.target.value) })} /></label>
       <label>{t("exp.replyVariable")}<input value={node.variable} spellCheck={false} onChange={event => patch({ variable: event.target.value.replace(/\s+/g, "_") })} /></label>
     </>}

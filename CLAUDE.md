@@ -81,6 +81,9 @@ src/                      React UI
   lib/errors.ts           describeError: one renderer for engine errors and legacy text
   components/ErrorMessage.tsx  where · what — why, technical detail folded
   views/*.tsx             one screen per module; ExperimentView is the node editor
+  lib/emulators.ts        new emulators, presets, Mock this, the starter set's texts (pure)
+  lib/emulatorStore.tsx   the emulator library, which ones run, what they received
+  components/EmulatorEditor.tsx  an emulator's rules: the Emulators screen and the node's dialog
 engine/src/               signal-lab-engine — no Tauri, no window
   service.rs              THE command table: Service::invoke(name, json) for both front doors
   host.rs                 Host = EventSink + capture bus; Recorder for tests
@@ -110,8 +113,13 @@ engine/src/               signal-lab-engine — no Tauri, no window
   mqtt.rs                 one broker connection as a job; MqttHub routes commands
   signals.rs              signal library: file + starter set (storage only)
   jobs.rs                 job registry: start / list / stop
+  emulator.rs             emulators: the document, its checks, the shared runtime, a job, a run's emulators
+  emulator_http.rs        the HTTP emulator (hyper): routes, sequences, faults; a run's HTTP listeners
+  emulator_net.rs         OSC/UDP responders (also a run listener's Tap) and the TCP device
+  emulator_files.rs       the emulator library (emulators.json) and its starter set
   firewall.rs             Windows Firewall per program: status (COM, any language), allow (UAC)
-engine/tests/ping_reply.rs  an experiment run end to end over loopback (repeat_loop.rs: Repeat and Loop)
+engine/tests/ping_reply.rs  an experiment run end to end over loopback (repeat_loop.rs: Repeat and Loop;
+                          emulators.rs: Emulator nodes, Wait for HTTP request, the flaky-API template)
 tests/e2e/tour.ts         the end-to-end tour, run inside the page: every screen, by its visible labels
 scripts/e2e.mjs           its runner: builds, starts the app / server + a browser, steps, screenshots
 scripts/e2e/fixtures.mjs  loopback stand-ins the tour talks to: HTTP API, UDP/TCP sinks, OSC device, MQTT broker
@@ -130,11 +138,13 @@ cli/                      `signallab`, the command line for scripts and CI (docs
   src/i18n.rs             the interface's dictionaries (build.rs embeds them) and translate.ts in Rust
   src/junit.rs            the JUnit report; src/fail.rs the exit codes 0/1/2/3
   src/mcp.rs              `signallab mcp`: the Model Context Protocol on stdio, for an LLM
+  src/emulate.rs          `emulate` / `emulators`: emulators from files or the library, followed until Ctrl+C
   src/catalog.rs          every kind of node with fields, outputs, an example (describe_nodes, `nodes`)
   src/doctor.rs           `doctor` and `firewall allow`
 cli/tests/cli.rs          the binary as a pipeline runs it, against loopback and a server started there
 cli/tests/nodes.rs        every kind of node in one experiment, here and on a server, against loopback gear (common/)
 cli/tests/mcp.rs          `signallab mcp` driven like an LLM client: every tool, progress, cancel, --server
+cli/tests/emulate.rs      `signallab emulate` in the background, here and on a server
 action.yml                the GitHub Action: signallab from the image, a JUnit report
 Dockerfile, deploy/compose.yaml, scripts/image.mjs   the server image and its smoke test
 deploy/install.sh         the server on a Linux host in one command (Docker, host network, token)
@@ -185,6 +195,19 @@ src/components/FirewallBanner.tsx  the desktop app's firewall notice, with Allow
   (private, domain; `/NOFIREWALL` skips it) and its uninstaller removes them;
   a server never changes its host's firewall (`firewall.server`). Reading the
   rules goes through the firewall's COM interface, never netsh's localized text.
+- **An emulator is one document everywhere.** The Emulators screen, the
+  *Emulator* node (`NodeKind::Emulator { emulator }`), `signallab emulate`, MCP
+  and the API all hand an `emulator::Emulator` to `emulator::compile`, which
+  checks it (problems carry `rule`/`response` params, shown by `describeError`
+  as *Rule n · Response n*) and the protocol modules serve it. Its matching
+  patterns take parameters only (`emulator.params_only`); replies are templates
+  read with `request` and parameters, never secrets. A run opens its emulators
+  in `emulator::arm_run` before the first step, like waits: an HTTP emulator's
+  server is also what *Wait for HTTP request* reads (`HttpListener` inbox; a bind
+  with only waits answers 204), and an OSC/UDP emulator answers through the run's
+  `Listener` on its port (`listen::Tap`), so waits there see the same datagrams.
+  Two emulators of one transport cannot share a port (`check_run_binds`). Starter
+  emulators stay on loopback; `EMULATOR_SEED_IDS` must equal `seed()` (a test).
 - **Long-running work is a job.** Register it with `JobRegistry` so the console
   strip can list and stop it, and call `finish(id)` when it ends on its own.
 - **Modules never call the Inspector directly** — publish a normalized `Frame`

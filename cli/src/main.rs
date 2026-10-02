@@ -7,6 +7,7 @@
 
 mod catalog;
 mod doctor;
+mod emulate;
 // build.rs reads the dictionaries with it; here only its tests run.
 #[cfg(test)]
 mod extract;
@@ -61,6 +62,11 @@ enum Command {
     Send(SendCommand),
     /// Fire a signal from a signal library by its id or name.
     Fire(FireArgs),
+    /// Play the other side — an HTTP API, an OSC, UDP or TCP device — until Ctrl+C or --for,
+    /// printing every request and what it got.
+    Emulate(EmulateArgs),
+    /// List the emulators of the app's library (`signallab emulate <id>` starts one).
+    Emulators(EmulatorsArgs),
     /// List the bundled templates (`signallab run <name>` runs one).
     Templates,
     /// What an experiment is made of: every kind of node with its fields, outputs and an example (JSON).
@@ -250,9 +256,55 @@ pub struct McpArgs {
     #[arg(long, value_name = "PATH")]
     library: Option<PathBuf>,
 
+    /// The emulator library for list_emulators and start_emulator [default: the app's emulators.json]
+    #[arg(long, value_name = "PATH")]
+    emulators: Option<PathBuf>,
+
     /// Print what a client needs to start this server, and exit.
     #[arg(long, value_name = "CLIENT", value_parser = ["claude-code", "claude-desktop", "cursor", "vscode"])]
     print_config: Option<String>,
+}
+
+#[derive(Args, Debug)]
+pub struct EmulateArgs {
+    /// Emulator files (one emulator, a list, or a library as the app writes it), or the id or
+    /// name of one in the app's library.
+    #[arg(required = true, value_name = "FILE|NAME")]
+    emulators: Vec<String>,
+
+    /// A parameter its templates read, NAME=VALUE; repeat for more.
+    #[arg(long = "param", short = 'p', value_name = "NAME=VALUE")]
+    params: Vec<String>,
+
+    /// Listen here instead (IP:port), when one emulator is given.
+    #[arg(long, value_name = "IP:PORT")]
+    bind: Option<String>,
+
+    /// Stop after this many seconds [default: at Ctrl+C].
+    #[arg(long = "for", value_name = "SECONDS")]
+    duration: Option<u64>,
+
+    /// Seed for its random choices: a random order, jitter, generators.
+    #[arg(long)]
+    seed: Option<u64>,
+
+    /// Check the emulators and exit, without opening a port.
+    #[arg(long)]
+    check: bool,
+
+    /// The library names are looked up in [default: emulators.json in the app's data folder]
+    #[arg(long, value_name = "PATH")]
+    library: Option<PathBuf>,
+
+    #[command(flatten)]
+    place: Place,
+}
+
+#[derive(Args, Debug)]
+pub struct EmulatorsArgs {
+    /// The library [default: emulators.json in the app's data folder]
+    #[arg(long, value_name = "PATH")]
+    library: Option<PathBuf>,
 }
 
 #[derive(Args, Debug)]
@@ -289,6 +341,8 @@ async fn main() -> ExitCode {
         Command::Validate(args) => run::validate(&ctx, args).await,
         Command::Send(command) => send::send(&ctx, command).await,
         Command::Fire(args) => send::fire(&ctx, args).await,
+        Command::Emulate(args) => emulate::emulate(&ctx, args).await,
+        Command::Emulators(args) => emulate::emulators(&ctx, args),
         Command::Templates => run::templates(&ctx),
         Command::Nodes => {
             println!("{}", serde_json::to_string_pretty(&catalog::describe(&ctx.texts)).unwrap_or_default());

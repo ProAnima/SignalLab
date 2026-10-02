@@ -1,0 +1,46 @@
+{
+  "version": 6,
+  "name": "Retry a flaky API",
+  "params": [
+    { "name": "api", "value": "http://127.0.0.1:18080" }
+  ],
+  "profiles": [],
+  "profile": null,
+  "seed": null,
+  "nodes": [
+    { "id": "start", "type": "start", "x": 40, "y": 110 },
+    { "id": "mock", "type": "emulator", "x": 260, "y": 110,
+      "emulator": {
+        "name": "Flaky API", "bind": "127.0.0.1:18080", "protocol": "http",
+        "routes": [
+          { "method": "GET", "path": "/orders/:id", "when": [], "order": "sequence", "responses": [
+            { "status": 503, "headers": [["Retry-After", "1"]], "body": "", "delay_ms": 0, "jitter_ms": 0, "fault": "none", "weight": 1 },
+            { "status": 503, "headers": [["Retry-After", "1"]], "body": "", "delay_ms": 0, "jitter_ms": 0, "fault": "none", "weight": 1 },
+            { "status": 200, "headers": [], "body": "{\"order\":\"{{request.params.id}}\",\"attempt\":{{counter}}}", "delay_ms": 0, "jitter_ms": 0, "fault": "none", "weight": 1 }
+          ] }
+        ],
+        "fallback": null
+      } },
+    { "id": "retry", "type": "loop", "x": 490, "y": 110, "max": 5,
+      "until": { "value": "{{status}}", "op": "eq", "expected": "200" } },
+    { "id": "get", "type": "http", "x": 720, "y": 110,
+      "request": { "method": "GET", "url": "{{api}}/orders/42", "headers": [], "body": null, "timeout_ms": 3000 } },
+    { "id": "status", "type": "extract", "x": 950, "y": 110, "variable": "status", "from": "status", "expr": "" },
+    { "id": "attempt", "type": "extract", "x": 720, "y": 240, "variable": "attempt", "from": "json", "expr": "$.attempt" },
+    { "id": "answered", "type": "log", "x": 950, "y": 240, "message": "{{api}} answered on attempt {{attempt}}" },
+    { "id": "gave_up", "type": "log", "x": 720, "y": 370, "message": "{{api}} still failed after 5 attempts" },
+    { "id": "end", "type": "end", "x": 1180, "y": 300 }
+  ],
+  "edges": [
+    { "from": "start", "to": "mock", "port": "next" },
+    { "from": "mock", "to": "retry", "port": "next" },
+    { "from": "retry", "to": "get", "port": "body" },
+    { "from": "get", "to": "status", "port": "next" },
+    { "from": "status", "to": "retry", "port": "next" },
+    { "from": "retry", "to": "attempt", "port": "done" },
+    { "from": "attempt", "to": "answered", "port": "next" },
+    { "from": "answered", "to": "end", "port": "next" },
+    { "from": "retry", "to": "gave_up", "port": "limit" },
+    { "from": "gave_up", "to": "end", "port": "next" }
+  ]
+}

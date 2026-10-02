@@ -16,6 +16,8 @@ import { HttpView } from "./views/HttpView";
 import { NetsimView } from "./views/NetsimView";
 import { StormView } from "./views/StormView";
 import { ScanView } from "./views/ScanView";
+import { EmulatorsView } from "./views/EmulatorsView";
+import { EmulatorProvider } from "./lib/emulatorStore";
 import { fmtNum, fmtTime } from "./lib/format";
 import { usePersistentState } from "./lib/hooks";
 import { isDesktop, serverNeedsSignIn, signOut } from "./lib/platform";
@@ -23,7 +25,7 @@ import { api, on, EV, type CaptureStats, type ExperimentNode, type InspectBatch,
 import { en } from "./lib/locales/en";
 
 type ViewKey =
-  | "experiment" | "signals" | "osc" | "mqtt" | "broadcast" | "http" | "netsim" | "storm" | "scan";
+  | "experiment" | "signals" | "emulators" | "osc" | "mqtt" | "broadcast" | "http" | "netsim" | "storm" | "scan";
 /** The bottom panel shows one of these; the Inspector watches every screen, so it lives here, not in the sidebar. */
 type DockTab = "console" | "inspector";
 
@@ -31,6 +33,7 @@ type DockTab = "console" | "inspector";
 const NAV: { key: ViewKey; glyph: string; label: TKey; short?: TKey; kinds: string[] }[] = [
   { key: "experiment", glyph: "◇", label: "nav.experiment", short: "nav.short.experiment", kinds: ["experiment"] },
   { key: "signals", glyph: "❖", label: "nav.signals", kinds: [] },
+  { key: "emulators", glyph: "⧉", label: "nav.emulators", short: "nav.short.emulators", kinds: ["emulator"] },
   { key: "osc", glyph: "∿", label: "nav.osc", kinds: ["osc-monitor", "osc-gen"] },
   { key: "mqtt", glyph: "◈", label: "nav.mqtt", kinds: ["mqtt"] },
   { key: "broadcast", glyph: "⊛", label: "nav.broadcast", short: "nav.short.broadcast", kinds: ["beacon", "discovery"] },
@@ -150,6 +153,12 @@ function Shell() {
     setRevealSignal({ id, at: Date.now() });
     go("signals");
   };
+  // An emulator Mock this made or changed, shown on its screen.
+  const [revealEmulator, setRevealEmulator] = useState<{ id: string; at: number } | null>(null);
+  const showEmulator = (id: string) => {
+    setRevealEmulator({ id, at: Date.now() });
+    go("emulators");
+  };
   const lastLine = log[log.length - 1];
   const logEndRef = useRef<HTMLDivElement>(null);
   const [autoscroll, setAutoscroll] = useState(true);
@@ -242,10 +251,11 @@ function Shell() {
           <ExperimentView ref={experiment} active={view === "experiment"} focusMode={focusMode} setFocusMode={setFocusMode} onShowFrame={showFrame} />
         </div>
         {page("signals", <SignalsView onOpen={openSignal} reveal={revealSignal} />)}
+        {page("emulators", <EmulatorsView reveal={revealEmulator} onShowFrame={showFrame} />)}
         {page("osc", <OscView onToExperiment={toExperiment} onWaitFor={waitInExperiment} load={openedFor("osc")} onShowSignal={showSignal} />)}
         {page("mqtt", <MqttView onWaitFor={waitInExperiment} load={openedFor("mqtt")} onShowSignal={showSignal} />)}
         {page("broadcast", <BroadcastView />)}
-        {page("http", <HttpView onToExperiment={toExperiment} load={openedFor("http")} onShowSignal={showSignal} />)}
+        {page("http", <HttpView onToExperiment={toExperiment} load={openedFor("http")} onShowSignal={showSignal} onShowEmulator={showEmulator} />)}
         {page("netsim", <NetsimView />)}
         {page("storm", <StormView />)}
         {page("scan", <ScanView />)}
@@ -337,7 +347,9 @@ export default function App() {
   return (
     <I18nProvider>
       <StoreProvider>
-        <Shell />
+        <EmulatorProvider>
+          <Shell />
+        </EmulatorProvider>
       </StoreProvider>
     </I18nProvider>
   );

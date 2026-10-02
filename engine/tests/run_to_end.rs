@@ -39,7 +39,7 @@ fn document(name: &str, middle: Value, port: &str) -> Experiment {
     middle["x"] = 200.into();
     middle["y"] = 80.into();
     serde_json::from_value(json!({
-        "version": 5,
+        "version": 6,
         "name": name,
         "params": [{ "name": "greeting", "value": "hello" }],
         "nodes": [

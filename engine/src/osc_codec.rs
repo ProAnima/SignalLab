@@ -8,7 +8,7 @@
 use serde::{Deserialize, Serialize};
 
 /// A single OSC argument, tagged for clean JSON round-tripping with the UI.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "value", rename_all = "lowercase")]
 pub enum OscArg {
     Int(i32),

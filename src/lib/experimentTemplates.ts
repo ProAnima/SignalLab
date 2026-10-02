@@ -4,6 +4,7 @@ import branch from "../../experiments/templates/status-branch.json";
 import parallel from "../../experiments/templates/parallel-flows.json";
 import pingReply from "../../experiments/templates/osc-ping-reply.json";
 import pollUntilReady from "../../experiments/templates/poll-until-ready.json";
+import flakyApi from "../../experiments/templates/flaky-api.json";
 import type { Experiment } from "./api";
 import type { TKey } from "./i18n";
 
@@ -14,4 +15,5 @@ export const experimentTemplates: { id: string; title: TKey; description: TKey; 
   { id: "parallel", title: "exp.templateParallel", description: "exp.templateParallelHint", document: parallel as Experiment },
   { id: "ping-reply", title: "exp.templatePingReply", description: "exp.templatePingReplyHint", document: pingReply as Experiment },
   { id: "poll", title: "exp.templatePoll", description: "exp.templatePollHint", document: pollUntilReady as Experiment },
+  { id: "flaky-api", title: "exp.templateFlaky", description: "exp.templateFlakyHint", document: flakyApi as Experiment },
 ];

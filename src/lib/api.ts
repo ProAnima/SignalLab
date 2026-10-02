@@ -114,7 +114,68 @@ export type ExperimentNode = {
   | { type: "wait_udp"; bind: string; mode: UdpMode; pattern: string; timeout_ms: number; variable: string }
   /** `topic` is a subscription filter (`+`, `#`); broker and topic may use parameters only. */
   | { type: "wait_mqtt"; host: string; port: number; topic: string; mode: UdpMode; pattern: string; timeout_ms: number; variable: string }
+  /** Serves for the whole run: opened before the first step, closed with the run. */
+  | { type: "emulator"; emulator: Emulator }
+  /** A request to the run's HTTP emulator on `bind`, or to a listener of the run's own that answers 204. */
+  | { type: "wait_http"; bind: string; method: string; path: string; when: Condition[]; timeout_ms: number; variable: string }
 );
+
+// ---- emulators (engine/src/emulator.rs) ----
+
+/** `<on> <name> <op> <value>` about an HTTP request; the value may use parameters. */
+export interface Condition { on: "header" | "query" | "body" | "json"; name: string; op: CompareOp; value: string }
+export type Fault = "none" | "timeout" | "reset";
+export type ResponseOrder = "sequence" | "cycle" | "random";
+export interface EmulatorResponse {
+  status: number;
+  headers: [string, string][];
+  /** A template read with what arrived: `{{request.params.id}}`. */
+  body: string;
+  delay_ms: number;
+  jitter_ms: number;
+  fault: Fault;
+  /** Its share when the route answers at random. */
+  weight: number;
+}
+export interface Route { method: string; path: string; when: Condition[]; order: ResponseOrder; responses: EmulatorResponse[] }
+export type ArgType = "int" | "float" | "str" | "long" | "double" | "bool" | "blob" | "nil";
+/** A reply argument: its type, and a template for its value. */
+export interface ArgOut { type: ArgType; value: string }
+export interface OscOut { address: string; args: ArgOut[] }
+export interface OscRule { address: string; args: ArgRule[]; reply: OscOut | null; to: string; delay_ms: number; jitter_ms: number }
+export interface UdpRule { mode: UdpMode; pattern: string; reply: RawPayload | null; to: string; delay_ms: number; jitter_ms: number }
+export interface TcpRule { mode: UdpMode; pattern: string; reply: RawPayload | null; close: boolean; delay_ms: number; jitter_ms: number }
+export type Delimiter = "lf" | "crlf" | "cr" | "none";
+export type EmulatorProtocol = "http" | "osc" | "udp" | "tcp";
+export type Emulator = { name: string; bind: string } & (
+  | { protocol: "http"; routes: Route[]; fallback: EmulatorResponse | null }
+  | { protocol: "osc"; rules: OscRule[] }
+  | { protocol: "udp"; rules: UdpRule[] }
+  | { protocol: "tcp"; delimiter: Delimiter; greeting: string; rules: TcpRule[] }
+);
+export interface StoredEmulator { id: string; note: string; emulator: Emulator }
+export interface EmulatorLibrary { version: number; emulators: StoredEmulator[] }
+export interface EmulatorLibraryFile { path: string; library: EmulatorLibrary; seeded: boolean }
+export interface EmulatorCounts { total: number; unmatched: number; failed: number; hits: number[] }
+/** One request (message, line) an emulator received, and what became of it. */
+export interface Exchange {
+  seq: number;
+  ts: number;
+  from: string;
+  request: string;
+  /** 1-based; absent when no rule took it. */
+  rule?: number;
+  reply: string;
+  status?: number;
+  fault?: Fault;
+  ms: number;
+  error?: EngineError;
+  frame?: number;
+  /** What arrived, as templates read it (`emulator_exchanges` only). */
+  data?: unknown;
+}
+export interface EmulatorSnapshot { job_id: number; name: string; protocol: EmulatorProtocol; local: string; counts: EmulatorCounts; exchanges: Exchange[] }
+export interface EmulatorActivity { job_id: number; ts: number; counts: EmulatorCounts; exchanges: Exchange[]; dropped: number }
 
 /** `args[index] <op> value` on a received OSC message; the value is a template. */
 export interface ArgRule { index: number; op: CompareOp; value: string }
@@ -553,6 +614,15 @@ export const api = {
 
   signalsLoad: () => invoke<LibraryFile>("signals_load"),
   signalsSave: (library: Library) => invoke<string>("signals_save", { library }),
+
+  emulatorsLoad: () => invoke<EmulatorLibraryFile>("emulators_load"),
+  emulatorsSave: (library: EmulatorLibrary) => invoke<string>("emulators_save", { library }),
+  /** Throws what Start would be refused for; `params` are the values its templates may read. */
+  emulatorCheck: (emulator: Emulator, params?: Record<string, string>) => invoke<void>("emulator_check", { emulator, params: params ?? null }),
+  /** `source`: the library entry it comes from, kept on the job (`params.source`). */
+  emulatorStart: (emulator: Emulator, source: string | null, params?: Record<string, string>) =>
+    invoke<JobInfo>("emulator_start", { emulator, params: params ?? null, seed: null, source }),
+  emulatorExchanges: (jobId: number, after = 0) => invoke<EmulatorSnapshot>("emulator_exchanges", { jobId, after, limit: null }),
 };
 
 // Typed event subscription helper.
@@ -577,6 +647,7 @@ export const EV = {
   mqttMessages: "mqtt://messages",
   mqttState: "mqtt://state",
   mqttAck: "mqtt://ack",
+  emulatorActivity: "emulator://activity",
   /** Server only: events this page missed because it fell behind. */
   serverLagged: "server://lagged",
 } as const;

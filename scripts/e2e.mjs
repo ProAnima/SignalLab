@@ -325,10 +325,13 @@ function plan(ports, fixtures, mode, dataDir) {
       expect("the library file is version 2 and the test signal is gone", saved.version === 2 && !saved.signals.some((signal) => signal.name === "E2E check"), JSON.stringify(saved.folders));
       expect("…and keeps the folder that is now empty", (saved.folders ?? []).includes("API/Old"), JSON.stringify(saved.folders));
     } },
+    { name: "emulators", args: { port: ports.emulator } },
     { name: "experimentHttp", args: { port: ports.http } },
     { name: "experimentOsc", args: { device: ports.device, pong: ports.pong }, before: mark, after: (expect) => expect("the device was pinged", counts.pings - at.pings >= 1) },
     { name: "experimentRepeat", args: { device: ports.device, pong: ports.pong }, before: mark, after: (expect) => expect("the device got three pings", counts.pings - at.pings === 3, `${counts.pings - at.pings} pings`) },
     { name: "experimentLoop", args: { device: ports.device }, before: mark, after: (expect) => expect("the device was polled three times", counts.statusPolls - at.polls === 3, `${counts.statusPolls - at.polls} polls`) },
+    { name: "experimentEmulator", args: { port: ports.emulatorRun } },
+    // The layout step works on the parallel flows this one leaves open.
     { name: "experimentParallel", args: { port: ports.http } },
     { name: "experimentExport", args: { mode, dataDir } },
     { name: "layout" },
@@ -350,7 +353,11 @@ async function tour(target, opts, source) {
 
   const pong = await freePort("udp");
   const fixtures = await startFixtures({ pongPort: pong });
-  const ports = { ...fixtures.ports, osc: await freePort("udp"), discovery: await freePort("udp"), relay: await freePort("udp") };
+  const ports = {
+    ...fixtures.ports, osc: await freePort("udp"), discovery: await freePort("udp"), relay: await freePort("udp"),
+    // The emulators the tour makes listen on TCP ports of their own.
+    emulator: await freePort(), emulatorRun: await freePort(),
+  };
   const started = Date.now();
   console.log(`\n▶ ${label}`);
   let app;

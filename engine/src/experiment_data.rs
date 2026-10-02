@@ -225,6 +225,15 @@ fn texts_mut(kind: &mut NodeKind) -> Vec<(Field, &mut String)> {
                 fields.push((Field::new("pattern"), pattern));
             }
         }
+        // As in Wait for OSC: the path pattern and the conditions, resolved when the wait runs.
+        NodeKind::WaitHttp { path, when, .. } => {
+            fields.push((Field::new("path"), path));
+            for (index, condition) in when.iter_mut().enumerate() {
+                fields.push((Field::nth("condition", index + 1), &mut condition.name));
+                fields.push((Field::nth("condition", index + 1), &mut condition.value));
+            }
+        }
+        // An emulator renders its replies itself, with what arrived (`emulator.rs`).
         _ => {}
     }
     fields
@@ -249,7 +258,7 @@ pub fn written_var(kind: &NodeKind) -> Option<(&str, &'static str)> {
     match kind {
         NodeKind::Extract { variable, .. } => Some((variable, "next")),
         // A timeout has no reply, so the variable exists on Matched only.
-        NodeKind::WaitOsc { variable, .. } | NodeKind::WaitUdp { variable, .. } | NodeKind::WaitMqtt { variable, .. } => Some((variable, "matched")),
+        NodeKind::WaitOsc { variable, .. } | NodeKind::WaitUdp { variable, .. } | NodeKind::WaitMqtt { variable, .. } | NodeKind::WaitHttp { variable, .. } => Some((variable, "matched")),
         // A send that expects a reply passes only with one.
         NodeKind::Osc { reply: Some(reply), .. } => Some((&reply.variable, "next")),
         NodeKind::Udp { reply: Some(reply), .. } => Some((&reply.variable, "next")),
@@ -345,6 +354,17 @@ fn check_literals(node: &Node, params: &BTreeMap<String, String>) -> EngineResul
         NodeKind::Osc { reply: Some(reply), .. } => check_osc_reply(&reply.address, &reply.args, Field::new("reply_address"), params),
         NodeKind::WaitUdp { mode, pattern, .. } | NodeKind::WaitMqtt { mode, pattern, .. } => check_udp_pattern(*mode, pattern, Field::new("pattern"), params),
         NodeKind::Udp { reply: Some(reply), .. } => check_udp_pattern(reply.mode, &reply.pattern, Field::new("reply_pattern"), params),
+        // What is literal already is checked as the wait will read it.
+        NodeKind::WaitHttp { method, path, when, .. } => {
+            use crate::emulator::{Check, Condition, RequestMatcher};
+            RequestMatcher::new(method, &static_text(path, params).unwrap_or_else(|| "/".into()), &[])?;
+            for (index, condition) in when.iter().enumerate() {
+                if let (Some(name), Some(value)) = (static_text(&condition.name, params), static_text(&condition.value, params)) {
+                    Check::new(&Condition { name, value, ..condition.clone() }, Field::nth("condition", index + 1))?;
+                }
+            }
+            Ok(())
+        }
         _ => Ok(()),
     }
 }
@@ -671,7 +691,7 @@ mod tests {
 
     fn doc_with(params: &[(&str, &str)], profiles: serde_json::Value, profile: Option<&str>) -> Experiment {
         serde_json::from_value(json!({
-            "version": 5, "name": "p",
+            "version": 6, "name": "p",
             "params": params.iter().map(|(name, value)| json!({ "name": name, "value": value })).collect::<Vec<_>>(),
             "profiles": profiles, "profile": profile, "seed": null,
             "nodes": [{ "id": "start", "type": "start", "x": 0, "y": 0 }, { "id": "end", "type": "end", "x": 0, "y": 0 }],
@@ -727,7 +747,7 @@ mod tests {
     #[test]
     fn secrets_must_be_stored_before_a_run_and_never_leave_in_responses() {
         let doc: Experiment = serde_json::from_value(json!({
-            "version": 5, "name": "s", "params": [], "profiles": [], "profile": null, "seed": null,
+            "version": 6, "name": "s", "params": [], "profiles": [], "profile": null, "seed": null,
             "nodes": [
                 { "id": "start", "type": "start", "x": 0, "y": 0 },
                 { "id": "login", "type": "http", "x": 0, "y": 0, "request": { "method": "GET", "url": "http://127.0.0.1/",

@@ -54,7 +54,7 @@ fn experiment(dir: &Path, name: &str, middle: Value, port: &str) -> String {
     middle["x"] = 200.into();
     middle["y"] = 80.into();
     let document = json!({
-        "version": 5,
+        "version": 6,
         "name": name,
         "params": [{ "name": "who", "value": "world" }],
         "nodes": [{ "id": "start", "type": "start", "x": 0, "y": 80 }, middle, { "id": "end", "type": "end", "x": 400, "y": 80 }],
@@ -77,7 +77,7 @@ fn version_and_the_bundled_templates() {
     assert_eq!((code(&version), out(&version).trim()), (0, format!("signallab {}", env!("CARGO_PKG_VERSION")).as_str()));
     let templates = signallab(&["templates"]);
     assert_eq!(code(&templates), 0);
-    for name in ["empty", "http-check", "osc-ping-reply", "poll-until-ready"] {
+    for name in ["empty", "http-check", "osc-ping-reply", "poll-until-ready", "flaky-api"] {
         assert!(out(&templates).contains(name), "{}", out(&templates));
     }
     assert_eq!(code(&signallab(&["run", "empty"])), 0, "a template runs by its name");

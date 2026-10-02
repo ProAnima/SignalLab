@@ -39,12 +39,14 @@ type NodeTest = { ok: boolean; text: string; ts: number; error?: Failure; missin
 type Preview = { nodeId: string; lines: string[]; missing: string[]; error?: Failure };
 type Outcome = { kind: "passed" | "failed" | "stopped"; error?: Failure } | null;
 
-const GROUP_GLYPH: Record<NodeGroup, string> = { action: "↗", observe: "⇠", data: "{}", check: "✓", flow: "◇" };
+const GROUP_GLYPH: Record<NodeGroup, string> = { action: "↗", observe: "⇠", emulate: "⧉", data: "{}", check: "✓", flow: "◇" };
 /** `:9001` from `127.0.0.1:9001`: the port is what tells waits apart on the canvas. */
 const bindPort = (bind: string) => { const at = bind.lastIndexOf(":"); return at >= 0 ? bind.slice(at) : bind; };
-const isWait = (node: ExperimentNode) => node.type === "wait_osc" || node.type === "wait_udp" || node.type === "wait_mqtt";
+const isWait = (node: ExperimentNode) => node.type === "wait_osc" || node.type === "wait_udp" || node.type === "wait_mqtt" || node.type === "wait_http";
+const anyMethod = (method: string) => method.toUpperCase() === "ANY" ? "*" : method.toUpperCase();
 /** A node heading's tooltip: what the node does; for the parallel nodes, how they are wired. */
-const nodeHelp = (type: NodeType) => type === "fork" ? "exp.forkHint" as const : type === "join" ? "exp.joinHint" as const : type === "loop" ? "exp.loopHint" as const : NODE_CATALOG[type].description;
+const nodeHelp = (type: NodeType) => type === "fork" ? "exp.forkHint" as const : type === "join" ? "exp.joinHint" as const : type === "loop" ? "exp.loopHint" as const
+  : type === "emulator" ? "exp.emulatorHint" as const : NODE_CATALOG[type].description;
 const OP_TEXT: Record<string, string> = { eq: "=", ne: "≠", lt: "<", le: "≤", gt: ">", ge: "≥", contains: "⊃", matches: "~", empty: "= ∅", not_empty: "≠ ∅" };
 
 /** What a node will put on the wire, one line per part, for the resolved preview. */
@@ -64,6 +66,7 @@ function previewLines(node: ExperimentNode): string[] {
     case "wait_osc": return [`${node.address} ⇠ ${node.bind}`, ...node.args.map((rule) => `args[${rule.index}] ${OP_TEXT[rule.op]} ${rule.op === "empty" || rule.op === "not_empty" ? "" : rule.value}`.trim())];
     case "wait_udp": return [`${node.mode === "any" ? "*" : node.pattern} ⇠ ${node.bind}`];
     case "wait_mqtt": return [`${node.topic} ⇠ ${node.host}:${node.port}`, ...(node.mode === "any" ? [] : [node.pattern])];
+    case "wait_http": return [`${anyMethod(node.method)} ${node.path} ⇠ ${node.bind}`, ...node.when.map((condition) => `${condition.on}${condition.name ? ` ${condition.name}` : ""} ${OP_TEXT[condition.op]} ${condition.op === "empty" || condition.op === "not_empty" ? "" : condition.value}`.trim())];
     default: return [];
   }
 }
@@ -93,6 +96,8 @@ function summary(node: ExperimentNode, t: (key: any, params?: Record<string, str
     case "wait_osc": return `${node.address} ⇠ ${bindPort(node.bind)} · ${node.timeout_ms} ms`;
     case "wait_udp": return `${node.mode === "any" ? "*" : node.pattern || "∅"} ⇠ ${bindPort(node.bind)} · ${node.timeout_ms} ms`;
     case "wait_mqtt": return `${node.topic} ⇠ ${node.host}:${node.port} · ${node.timeout_ms} ms`;
+    case "wait_http": return `${anyMethod(node.method)} ${node.path} ⇠ ${bindPort(node.bind)} · ${node.timeout_ms} ms`;
+    case "emulator": return `${node.emulator.protocol.toUpperCase()} ${bindPort(node.emulator.bind)} · ${node.emulator.name}`;
     default: return "";
   }
 }
@@ -262,9 +267,12 @@ export function ExperimentView({ active, focusMode, setFocusMode, onShowFrame, r
     const id = focusFieldOf.current;
     if (!id || selected !== id || !propertiesOpen || !active) return;
     focusFieldOf.current = null;
-    const field = propertiesRef.current?.querySelector<HTMLInputElement | HTMLTextAreaElement>("[data-primary]");
-    if (field) { field.focus(); field.select(); }
-    else focusNode(id);
+    // A text field is selected to be typed over; a node whose main control is a button (Emulator: Edit…) just focuses it.
+    const field = propertiesRef.current?.querySelector<HTMLElement>("[data-primary]");
+    if (field) {
+      field.focus();
+      if (field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement) field.select();
+    } else focusNode(id);
   });
 
   // A new node is scrolled into view once it is on the canvas — for one added from
