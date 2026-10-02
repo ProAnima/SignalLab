@@ -1,7 +1,7 @@
 //! Job registry: tracks every long-running task (OSC monitor/generator, network
 //! impairment proxy, storm generator, port scan) so the UI can list and stop them.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -87,8 +87,18 @@ impl Drop for TaskGuard {
 /// Cheaply-cloneable handle to the shared registry (managed in Tauri state).
 #[derive(Clone, Default)]
 pub struct JobRegistry {
-    inner: Arc<Mutex<HashMap<u64, JobEntry>>>,
+    inner: Arc<Mutex<Jobs>>,
     counter: Arc<AtomicU64>,
+}
+
+#[derive(Default)]
+struct Jobs {
+    running: HashMap<u64, JobEntry>,
+    /// Finished before they were inserted: a job is spawned before its handle
+    /// can be registered, and a short one (a burst of one against a refused
+    /// port) may already be over. Inserting one of these is a no-op, so no
+    /// job stays listed after it has ended.
+    ended_early: HashSet<u64>,
 }
 
 impl JobRegistry {
@@ -101,15 +111,15 @@ impl JobRegistry {
     }
 
     pub fn insert(&self, info: JobInfo, handle: JoinHandle<()>) {
-        self.inner
-            .lock()
-            .unwrap()
-            .insert(info.id, JobEntry { info, handle });
+        let mut jobs = self.inner.lock().unwrap();
+        if !jobs.ended_early.remove(&info.id) {
+            jobs.running.insert(info.id, JobEntry { info, handle });
+        }
     }
 
     /// Abort a running job. Returns true if a job with that id existed.
     pub fn stop(&self, id: u64) -> bool {
-        if let Some(entry) = self.inner.lock().unwrap().remove(&id) {
+        if let Some(entry) = self.inner.lock().unwrap().running.remove(&id) {
             entry.handle.abort();
             true
         } else {
@@ -119,7 +129,11 @@ impl JobRegistry {
 
     /// Remove a job that finished on its own (without abort).
     pub fn finish(&self, id: u64) {
-        self.inner.lock().unwrap().remove(&id);
+        let mut jobs = self.inner.lock().unwrap();
+        // Only a job given out by `next_id` and not stopped can be inserted later.
+        if jobs.running.remove(&id).is_none() && id <= self.counter.load(Ordering::Relaxed) {
+            jobs.ended_early.insert(id);
+        }
     }
 
     pub fn list(&self) -> Vec<JobInfo> {
@@ -127,6 +141,7 @@ impl JobRegistry {
             .inner
             .lock()
             .unwrap()
+            .running
             .values()
             .map(|e| e.info.clone())
             .collect();
@@ -136,7 +151,7 @@ impl JobRegistry {
 
     pub fn stop_all(&self) {
         let mut guard = self.inner.lock().unwrap();
-        for (_, entry) in guard.drain() {
+        for (_, entry) in guard.running.drain() {
             entry.handle.abort();
         }
     }
@@ -145,6 +160,21 @@ impl JobRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_job_that_ends_before_it_is_registered_is_not_listed() {
+        let jobs = JobRegistry::new();
+        let id = jobs.next_id();
+        let handle = tokio::spawn(async {});
+        jobs.finish(id);
+        jobs.insert(JobInfo::new(id, "storm", "x"), handle);
+        assert!(jobs.list().is_empty(), "over before it was inserted");
+        let id = jobs.next_id();
+        jobs.insert(JobInfo::new(id, "storm", "y"), tokio::spawn(std::future::pending()));
+        assert_eq!(jobs.list().len(), 1);
+        jobs.finish(id);
+        assert!(jobs.list().is_empty() && jobs.inner.lock().unwrap().ended_early.is_empty(), "the usual order leaves nothing behind");
+    }
 
     #[test]
     fn a_job_carries_the_values_of_its_label() {

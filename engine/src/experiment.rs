@@ -6,20 +6,23 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use super::emulator::{Condition, Emulator};
+use super::emulator::{Condition, DownFault, Emulator};
 use super::experiment_data::{CompareOp, ExtractFrom, Param, Profile};
 use super::http::HttpRequest;
 use super::matching::{ArgRule, UdpMode};
+use super::netsim::ImpairProfile;
 use super::osc_codec::OscArg;
 use super::template::Rng;
 
-pub const VERSION: u32 = 6;
+pub const VERSION: u32 = 8;
 /// Read and migrated on load (see `experiment_files::parse`): 1 had no
 /// parameters, 2 had no profiles, 3 had no retries or expected replies, 4 had
-/// no repeats or loops, 5 had no emulators or HTTP waits; serde defaults
+/// no repeats or loops, 5 had no emulators or HTTP waits, 6 no impairments
+/// or emulator switches, 7 no WebSocket nodes, HTTP authentication or a
+/// cookie jar (off for them, so they run as before); serde defaults
 /// supply what is missing. Each new version exists so that an older Signal
 /// Lab refuses a newer file instead of silently dropping those settings.
-pub const LEGACY_VERSIONS: &[u32] = &[1, 2, 3, 4, 5];
+pub const LEGACY_VERSIONS: &[u32] = &[1, 2, 3, 4, 5, 6, 7];
 /// A run that takes longer than this is stopped.
 pub const RUN_LIMIT: Duration = Duration::from_secs(300);
 pub const MAX_NODES: usize = 64;
@@ -43,6 +46,11 @@ pub struct Experiment {
     /// `None`: a fresh seed for every run, recorded in its report.
     #[serde(default)]
     pub seed: Option<u64>,
+    /// Keep what servers set with Set-Cookie and send it back with later
+    /// requests of the run, as a browser does. Files from before version 8
+    /// open with it off, so they run as they did.
+    #[serde(default = "default_cookies")]
+    pub cookies: bool,
     pub nodes: Vec<Node>,
     pub edges: Vec<Edge>,
 }
@@ -335,6 +343,71 @@ pub enum NodeKind {
         #[serde(default = "default_request_variable")]
         variable: String,
     },
+    /// A UDP impairment relay for the whole run — clients send to `listen`,
+    /// it forwards to `target` and back — opened before the first step and
+    /// impairing with `profile` until a *Change impairment* switches it.
+    Impairment {
+        listen: String,
+        target: String,
+        #[serde(default)]
+        profile: ImpairProfile,
+    },
+    /// The run's Impairment `relay` (its node id) impairs with `profile` from now on.
+    ImpairmentChange {
+        relay: String,
+        #[serde(default)]
+        profile: ImpairProfile,
+    },
+    /// The run's Emulator `emulator` (its node id) goes down — HTTP meets
+    /// `fault` meanwhile — or comes back up.
+    EmulatorState {
+        emulator: String,
+        #[serde(default)]
+        down: bool,
+        #[serde(default)]
+        fault: DownFault,
+    },
+    /// Open a WebSocket for the rest of the run, or until a *WebSocket close*:
+    /// what arrives from then on is kept for the waits on it. Run again (in a
+    /// Loop), it replaces its connection.
+    WsConnect {
+        url: String,
+        #[serde(default)]
+        headers: Vec<(String, String)>,
+        /// Subprotocols to offer, in order of preference.
+        #[serde(default)]
+        protocols: Vec<String>,
+        #[serde(default = "default_ws_timeout")]
+        timeout_ms: u64,
+    },
+    /// Send a message on the run's connection `connection` (a *WebSocket connect*'s id).
+    WsSend {
+        connection: String,
+        text: String,
+        /// `text` is bytes written as hex: a binary message.
+        #[serde(default)]
+        binary: bool,
+    },
+    /// Wait for a message on `connection` whose payload matches.
+    WaitWs {
+        connection: String,
+        #[serde(default)]
+        mode: UdpMode,
+        #[serde(default)]
+        pattern: String,
+        #[serde(default = "default_wait_timeout")]
+        timeout_ms: u64,
+        #[serde(default = "default_reply_variable")]
+        variable: String,
+    },
+    /// Close `connection` with a close handshake.
+    WsClose {
+        connection: String,
+        #[serde(default = "default_close_code")]
+        code: u16,
+        #[serde(default)]
+        reason: String,
+    },
 }
 
 /// A Loop's exit condition: the comparison of *Check value*.
@@ -375,11 +448,27 @@ impl NodeKind {
 
     /// Sends traffic; *Send now* applies, and a later wait counts replies from here.
     pub fn is_action(&self) -> bool {
-        matches!(self, NodeKind::Tcp { .. } | NodeKind::Http { .. } | NodeKind::Mqtt { .. } | NodeKind::Osc { .. } | NodeKind::Udp { .. })
+        matches!(
+            self,
+            NodeKind::Tcp { .. } | NodeKind::Http { .. } | NodeKind::Mqtt { .. } | NodeKind::Osc { .. } | NodeKind::Udp { .. } | NodeKind::WsConnect { .. } | NodeKind::WsSend { .. }
+        )
+    }
+
+    /// May send more than once (Repeat): an action, but not a connection opened again and again.
+    pub fn repeats(&self) -> bool {
+        self.is_action() && !matches!(self, NodeKind::WsConnect { .. })
     }
 
     pub fn is_wait(&self) -> bool {
-        matches!(self, NodeKind::WaitOsc { .. } | NodeKind::WaitUdp { .. } | NodeKind::WaitMqtt { .. } | NodeKind::WaitHttp { .. })
+        matches!(self, NodeKind::WaitOsc { .. } | NodeKind::WaitUdp { .. } | NodeKind::WaitMqtt { .. } | NodeKind::WaitHttp { .. } | NodeKind::WaitWs { .. })
+    }
+
+    /// The *WebSocket connect* (its id) whose connection this node uses.
+    pub fn connection(&self) -> Option<&str> {
+        match self {
+            NodeKind::WsSend { connection, .. } | NodeKind::WaitWs { connection, .. } | NodeKind::WsClose { connection, .. } => Some(connection),
+            _ => None,
+        }
     }
 
     /// The broker and topic filter a *Wait for MQTT* subscribes to.
@@ -455,6 +544,18 @@ fn default_request_variable() -> String {
 
 fn default_method() -> String {
     "ANY".into()
+}
+
+fn default_cookies() -> bool {
+    true
+}
+
+fn default_ws_timeout() -> u64 {
+    10_000
+}
+
+fn default_close_code() -> u16 {
+    1000
 }
 
 fn default_path() -> String {

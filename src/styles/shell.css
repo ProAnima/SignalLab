@@ -96,6 +96,9 @@
   flex-direction: column;
   padding: 16px 12px 12px;
   gap: 2px;
+  /* Twelve screens fit a 600 px window; a shorter one scrolls the rail, never cuts it. */
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .brand {

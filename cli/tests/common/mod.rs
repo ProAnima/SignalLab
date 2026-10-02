@@ -1,6 +1,7 @@
 //! What the command-line tests share: the binary, folders, a server started in
 //! the test, and loopback stand-ins for the gear an experiment talks to — an
-//! HTTP API, a TCP sink, an OSC device, a UDP device and an MQTT broker.
+//! HTTP API, a TCP sink, an OSC device, a UDP device, an MQTT broker and a
+//! WebSocket service.
 
 #![allow(dead_code)]
 
@@ -107,6 +108,9 @@ pub struct Seen {
     pub osc: AtomicUsize,
     pub udp: AtomicUsize,
     pub mqtt: Mutex<Vec<String>>,
+    /// Messages the WebSocket service received, and the headers its upgrades carried.
+    pub ws: Mutex<Vec<String>>,
+    pub ws_headers: Mutex<Vec<String>>,
 }
 
 pub struct Gear {
@@ -117,6 +121,8 @@ pub struct Gear {
     /// Answers any datagram with `ack <payload>` to the sender, then tells `udp_notify` `hello udp`.
     pub udp: SocketAddr,
     pub mqtt: SocketAddr,
+    /// Greets with `welcome`, answers a text with `echo <text>`, takes the first subprotocol offered.
+    pub ws: SocketAddr,
     pub osc_notify: u16,
     pub udp_notify: u16,
     pub seen: Arc<Seen>,
@@ -222,7 +228,60 @@ pub async fn gear() -> Gear {
     });
 
     let mqtt = broker(seen.clone()).await;
-    Gear { http: http_address, tcp: tcp_address, osc: osc_address, udp: udp_address, mqtt, osc_notify, udp_notify, seen }
+    let ws = websocket(seen.clone()).await;
+    Gear { http: http_address, tcp: tcp_address, osc: osc_address, udp: udp_address, mqtt, ws, osc_notify, udp_notify, seen }
+}
+
+/// A WebSocket service: `welcome` on connecting, `echo <text>` for every text.
+async fn websocket(seen: Arc<Seen>) -> SocketAddr {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
+    use tokio_tungstenite::tungstenite::Message;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        while let Ok((stream, _)) = listener.accept().await {
+            let seen = seen.clone();
+            tokio::spawn(async move {
+                let headers = seen.clone();
+                #[allow(clippy::result_large_err)] // the library's callback type: its error is a whole response
+                let upgrade = move |request: &Request, mut response: Response| {
+                    let mut said = headers.ws_headers.lock().unwrap();
+                    for (name, value) in request.headers() {
+                        said.push(format!("{}: {}", name, value.to_str().unwrap_or_default()));
+                    }
+                    let offered = request.headers().get("sec-websocket-protocol").and_then(|value| value.to_str().ok()).and_then(|value| value.split(',').next());
+                    if let Some(first) = offered {
+                        response.headers_mut().insert("sec-websocket-protocol", first.trim().parse().unwrap());
+                    }
+                    Ok(response)
+                };
+                let Ok(mut socket) = tokio_tungstenite::accept_hdr_async(stream, upgrade).await else { return };
+                if socket.send(Message::text("welcome")).await.is_err() {
+                    return;
+                }
+                while let Some(Ok(message)) = socket.next().await {
+                    match message {
+                        Message::Text(text) => {
+                            seen.ws.lock().unwrap().push(text.to_string());
+                            if socket.send(Message::text(format!("echo {text}"))).await.is_err() {
+                                return;
+                            }
+                        }
+                        Message::Binary(bytes) => {
+                            seen.ws.lock().unwrap().push(format!("{} bytes", bytes.len()));
+                            if socket.send(Message::Binary(bytes)).await.is_err() {
+                                return;
+                            }
+                        }
+                        Message::Close(_) => break,
+                        _ => {}
+                    }
+                }
+            });
+        }
+    });
+    address
 }
 
 // ---- a small MQTT 3.1.1 broker: CONNECT, SUBSCRIBE, PUBLISH (QoS 0), PINGREQ ------

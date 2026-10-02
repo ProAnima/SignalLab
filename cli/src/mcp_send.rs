@@ -115,12 +115,18 @@ pub(crate) async fn send_http(state: &State, arguments: &Value) -> Answer {
         (Err(answer), _) | (_, Err(answer)) => return answer,
     };
     let headers: Vec<(String, String)> = arguments["headers"].as_object().into_iter().flatten().map(|(name, value)| (name.clone(), value.as_str().map(str::to_string).unwrap_or_else(|| value.to_string()))).collect();
-    let request = json!({ "method": method, "url": url, "headers": headers, "body": arguments["body"].as_str(), "timeout_ms": arguments["timeout_ms"].as_u64().unwrap_or(10_000) });
+    let mut request = json!({ "method": method, "url": url, "headers": headers, "body": arguments["body"].as_str(), "timeout_ms": arguments["timeout_ms"].as_u64().unwrap_or(10_000) });
+    if arguments["auth"].is_object() {
+        request["auth"] = arguments["auth"].clone();
+    }
     match http(state, request, url).await {
         Ok(response) => {
             let head: Vec<String> = response.headers.iter().map(|(name, value)| format!("{name}: {value}")).collect();
             let text = format!("HTTP {} {} · {} ms · {} bytes\n{}\n\n{}", response.status, response.status_text, response.latency_ms.round(), response.body_bytes, head.join("\n"), clip(&response.body));
-            let data = json!({ "status": response.status, "status_text": response.status_text, "latency_ms": response.latency_ms, "headers": response.headers, "body": clip(&response.body), "body_bytes": response.body_bytes });
+            let mut data = json!({ "status": response.status, "status_text": response.status_text, "latency_ms": response.latency_ms, "headers": response.headers, "body": clip(&response.body), "body_bytes": response.body_bytes });
+            if let Some(digest) = &response.digest {
+                data["digest"] = json!(digest);
+            }
             Answer::ok(text, data)
         }
         Err(failure) => Answer::failed(state, &failure),
@@ -142,6 +148,47 @@ pub(crate) async fn send_mqtt(state: &State, arguments: &Value) -> Answer {
     };
     match state.engine.invoke("mqtt_publish_once", args).await {
         Ok(summary) => Answer::ok(format!("Published {}", summary.as_str().unwrap_or_default()), json!({ "sent": true, "summary": summary })),
+        Err(failure) => Answer::failed(state, &failure),
+    }
+}
+
+pub(crate) async fn send_ws(state: &State, arguments: &Value) -> Answer {
+    let url = match text_arg(arguments, "url") {
+        Ok(url) => url,
+        Err(answer) => return answer,
+    };
+    let headers: Vec<(String, String)> = arguments["headers"].as_object().into_iter().flatten().map(|(name, value)| (name.clone(), value.as_str().map(str::to_string).unwrap_or_else(|| value.to_string()))).collect();
+    let protocols: Vec<&str> = arguments["protocols"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+    let message = match (arguments["text"].as_str(), arguments["hex"].as_str()) {
+        (Some(_), Some(_)) => return Answer::wrong("give text or hex, not both"),
+        (Some(text), None) => Some(json!({ "text": text })),
+        (None, Some(hex)) => Some(json!({ "hex": hex })),
+        (None, None) => None,
+    };
+    let timeout = arguments["timeout_ms"].as_u64().unwrap_or(2_000);
+    let expect = match (arguments["expect"].as_str(), arguments["expect_regex"].as_str(), arguments["wait"].as_bool().unwrap_or(false)) {
+        (Some(text), _, _) => Some(json!({ "mode": "contains", "pattern": text, "timeout_ms": timeout })),
+        (None, Some(regex), _) => Some(json!({ "mode": "regex", "pattern": regex, "timeout_ms": timeout })),
+        (None, None, true) => Some(json!({ "mode": "any", "pattern": "", "timeout_ms": timeout })),
+        _ => None,
+    };
+    let config = json!({ "url": url, "headers": headers, "protocols": protocols });
+    match state.engine.invoke("ws_exchange", json!({ "config": config, "message": message, "expect": expect })).await {
+        Ok(exchange) => {
+            let handshake = &exchange["handshake"];
+            let mut text = format!("Connected to {} in {} ms", handshake["url"].as_str().unwrap_or_default(), handshake["ms"]);
+            if let Some(protocol) = handshake["protocol"].as_str() {
+                text.push_str(&format!(", subprotocol {protocol}"));
+            }
+            if let Some(bytes) = exchange["sent"].as_u64() {
+                text.push_str(&format!(" · sent {bytes} bytes"));
+            }
+            if let Some(reply) = exchange.get("reply").filter(|reply| !reply.is_null()) {
+                let shown = if reply["kind"] == "binary" { reply["hex"].as_str() } else { reply["text"].as_str() };
+                text.push_str(&format!("\nAnswer after {} ms:\n{}", reply["ms"], clip(shown.unwrap_or_default())));
+            }
+            Answer::ok(text, exchange)
+        }
         Err(failure) => Answer::failed(state, &failure),
     }
 }

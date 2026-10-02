@@ -1,7 +1,7 @@
 //! Every kind of node in one experiment, run the ways a person, a script and a
 //! pipeline run it — in this process and on a server — against loopback gear:
 //! an HTTP API, a TCP sink, an OSC device that answers, a UDP device that
-//! answers and an MQTT broker. Each node must pass, and the gear must have
+//! answers, an MQTT broker and a WebSocket service. Each node must pass, and the gear must have
 //! seen the traffic.
 
 mod common;
@@ -13,10 +13,10 @@ use common::*;
 use serde_json::{json, Value};
 
 /// Every node type the engine has; the document below must use each one.
-const KINDS: [&str; 25] = [
+const KINDS: [&str; 32] = [
     "start", "end", "fork", "join", "log", "tcp", "delay", "http", "assert_status", "assert_body", "assert_header", "assert_latency",
     "mqtt", "branch_status", "osc", "udp", "extract", "assert_value", "branch_value", "wait_osc", "wait_mqtt", "loop", "wait_udp",
-    "emulator", "wait_http",
+    "emulator", "wait_http", "impairment", "impairment_change", "emulator_state", "ws_connect", "ws_send", "wait_ws", "ws_close",
 ];
 
 fn node(id: &str, x: i32, y: i32, body: Value) -> Value {
@@ -29,15 +29,19 @@ fn node(id: &str, x: i32, y: i32, body: Value) -> Value {
 
 /// Start → an emulator for the run → log → delay → HTTP and its checks →
 /// extract → check → branch on the value, then on the status → fork: OSC with
-/// its reply then a wait, UDP with its reply then a wait → join → TCP → MQTT →
+/// its reply then a wait, UDP with its reply then a wait → join → TCP → faults →
+/// a WebSocket: connect, its greeting, a message and its echo, close → MQTT →
 /// wait for it → a request to the emulator and a wait that sees it → a loop → End.
-fn everything(gear: &Gear, mock_port: u16) -> Value {
+fn everything(gear: &Gear, mock_port: u16, relay_port: u16) -> Value {
     let (mqtt_port, tcp_port) = (gear.mqtt.port(), gear.tcp.port());
     let mock = format!("127.0.0.1:{mock_port}");
+    let relay = format!("127.0.0.1:{relay_port}");
     let nodes = vec![
         node("start", 0, 200, json!({ "type": "start" })),
         node("mock", 0, 0, json!({ "type": "emulator", "emulator": { "name": "Hooks", "bind": mock, "protocol": "http",
             "routes": [{ "method": "POST", "path": "/hooks/:name", "responses": [{ "status": 202, "body": "{\"hook\":\"{{request.params.name}}\",\"for\":\"{{who}}\"}" }] }] } })),
+        // The UDP device is reached through an impairment relay of the run's own.
+        node("relay", 100, 0, json!({ "type": "impairment", "listen": relay, "target": gear.udp.to_string(), "profile": { "name": "lan" } })),
         node("log", 200, 200, json!({ "type": "log", "message": "hello {{who}}" })),
         node("pause", 400, 200, json!({ "type": "delay", "ms": 10 })),
         node("get", 600, 200, json!({ "type": "http", "request": { "method": "GET", "url": "{{api}}/status", "headers": [["Accept", "application/json"]], "timeout_ms": 3000 } })),
@@ -56,11 +60,19 @@ fn everything(gear: &Gear, mock_port: u16) -> Value {
             "reply": { "bind": "127.0.0.1:0", "address": "/pong", "args": [{ "index": 0, "op": "eq", "value": "1" }], "timeout_ms": 3000, "variable": "pong" } })),
         node("told", 2800, 100, json!({ "type": "wait_osc", "bind": format!("127.0.0.1:{}", gear.osc_notify), "address": "/status",
             "args": [{ "index": 0, "op": "eq", "value": "ready" }], "timeout_ms": 3000, "variable": "status" })),
-        node("hi", 2600, 300, json!({ "type": "udp", "target": gear.udp.to_string(), "text": "hi {{who}}",
+        node("hi", 2600, 300, json!({ "type": "udp", "target": relay, "text": "hi {{who}}",
             "reply": { "bind": "127.0.0.1:0", "mode": "contains", "pattern": "ack hi", "timeout_ms": 3000, "variable": "ack" } })),
         node("heard", 2800, 300, json!({ "type": "wait_udp", "bind": format!("127.0.0.1:{}", gear.udp_notify), "mode": "contains", "pattern": "hello", "timeout_ms": 3000 })),
         node("both", 3000, 200, json!({ "type": "join" })),
         node("line", 3200, 200, json!({ "type": "tcp", "host": "127.0.0.1", "port": tcp_port, "payload": "line {{who}}\n", "timeout_ms": 3000 })),
+        node("rougher", 3250, 300, json!({ "type": "impairment_change", "relay": "relay", "profile": { "name": "4g", "latency_ms": 5, "jitter_ms": 2 } })),
+        node("pull", 3300, 300, json!({ "type": "emulator_state", "emulator": "mock", "down": true, "fault": "unavailable" })),
+        node("plug", 3350, 300, json!({ "type": "emulator_state", "emulator": "mock", "down": false })),
+        node("socket", 3350, 500, json!({ "type": "ws_connect", "url": format!("ws://{}/chat", gear.ws), "headers": [["X-Who", "{{who}}"]], "protocols": ["lab.v1", "lab.v0"], "timeout_ms": 3000 })),
+        node("greeted", 3350, 600, json!({ "type": "wait_ws", "connection": "socket", "mode": "contains", "pattern": "welcome", "timeout_ms": 3000 })),
+        node("say", 3350, 700, json!({ "type": "ws_send", "connection": "socket", "text": "hi {{who}}" })),
+        node("said", 3350, 800, json!({ "type": "wait_ws", "connection": "socket", "mode": "regex", "pattern": "^echo (hi .+)$", "timeout_ms": 3000, "variable": "echo" })),
+        node("bye", 3350, 900, json!({ "type": "ws_close", "connection": "socket", "code": 1000, "reason": "done" })),
         node("publish", 3400, 200, json!({ "type": "mqtt", "host": "127.0.0.1", "port": mqtt_port, "topic": "lab/ping", "payload": "ping {{who}}", "qos": 0, "retain": false })),
         node("echoed", 3600, 200, json!({ "type": "wait_mqtt", "host": "127.0.0.1", "port": mqtt_port, "topic": "lab/+", "mode": "contains", "pattern": "ping", "timeout_ms": 3000 })),
         node("hook", 3800, 200, json!({ "type": "http", "request": { "method": "POST", "url": format!("http://{mock}/hooks/deploy"), "headers": [], "body": "{\"build\":7}", "timeout_ms": 3000 } })),
@@ -72,19 +84,20 @@ fn everything(gear: &Gear, mock_port: u16) -> Value {
     ];
     let wire = |from: &str, to: &str, port: &str| json!({ "from": from, "to": to, "port": port });
     let edges = vec![
-        wire("start", "mock", "next"), wire("mock", "log", "next"), wire("log", "pause", "next"), wire("pause", "get", "next"), wire("get", "status", "next"),
+        wire("start", "mock", "next"), wire("mock", "relay", "next"), wire("relay", "log", "next"), wire("log", "pause", "next"), wire("pause", "get", "next"), wire("get", "status", "next"),
         wire("status", "body", "next"), wire("body", "header", "next"), wire("header", "latency", "next"), wire("latency", "take", "next"),
         wire("take", "check", "next"), wire("check", "which", "next"),
         wire("which", "code", "yes"), wire("which", "odd_value", "no"), wire("odd_value", "end", "next"),
         wire("code", "split", "yes"), wire("code", "odd_status", "no"), wire("odd_status", "end", "next"),
         wire("split", "ping", "branch1"), wire("ping", "told", "next"), wire("told", "both", "matched"),
         wire("split", "hi", "branch2"), wire("hi", "heard", "next"), wire("heard", "both", "matched"),
-        wire("both", "line", "next"), wire("line", "publish", "next"), wire("publish", "echoed", "next"), wire("echoed", "hook", "matched"),
+        wire("both", "line", "next"), wire("line", "rougher", "next"), wire("rougher", "pull", "next"), wire("pull", "plug", "next"), wire("plug", "socket", "next"),
+        wire("socket", "greeted", "next"), wire("greeted", "say", "matched"), wire("say", "said", "next"), wire("said", "bye", "matched"), wire("bye", "publish", "next"), wire("publish", "echoed", "next"), wire("echoed", "hook", "matched"),
         wire("hook", "hooked", "next"), wire("hooked", "again", "matched"),
         wire("again", "beat", "body"), wire("beat", "again", "next"), wire("again", "end", "done"),
     ];
     json!({
-        "version": 6,
+        "version": 8,
         "name": "Every node",
         "params": [{ "name": "who", "value": "world" }, { "name": "api", "value": format!("http://{}", gear.http) }],
         "nodes": nodes,
@@ -118,7 +131,7 @@ fn verdict(result: &Value, document: &Value) -> (BTreeSet<String>, Vec<String>) 
 #[test]
 fn the_document_uses_every_kind_of_node() {
     let gear = tokio::runtime::Runtime::new().unwrap().block_on(gear());
-    let used: BTreeSet<String> = everything(&gear, 1)["nodes"].as_array().unwrap().iter().map(|node| node["type"].as_str().unwrap().to_string()).collect();
+    let used: BTreeSet<String> = everything(&gear, 1, 2)["nodes"].as_array().unwrap().iter().map(|node| node["type"].as_str().unwrap().to_string()).collect();
     let kinds: BTreeSet<String> = KINDS.iter().map(|kind| kind.to_string()).collect();
     assert_eq!(used, kinds);
     // And KINDS is the engine's list: the node catalogue of the interface names each one.
@@ -138,7 +151,8 @@ async fn every_node_passes_here_and_on_a_server() {
     let dir = folder("nodes");
     let gear = gear().await;
     let mock_port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
-    let document = everything(&gear, mock_port);
+    let relay_port = std::net::UdpSocket::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let document = everything(&gear, mock_port, relay_port);
     let file = dir.join("every-node.json");
     std::fs::write(&file, serde_json::to_string_pretty(&document).unwrap()).unwrap();
     let file = file.display().to_string();
@@ -156,6 +170,9 @@ async fn every_node_passes_here_and_on_a_server() {
     assert!(xml.contains("failures=\"0\" errors=\"0\" skipped=\"2\""), "only the two odd branches are not reached: {xml}");
     assert!(result["steps"].as_array().unwrap().iter().any(|step| step["node_id"] == "log" && step["detail"] == "hello lab"), "the parameter reached the template");
     assert_eq!(result["emulators"][0]["counts"]["hits"], json!([1]), "the run's emulator took the request: {}", result["emulators"]);
+    let phases: Vec<&str> = result["impairments"][0]["phases"].as_array().unwrap().iter().map(|phase| phase["profile"].as_str().unwrap()).collect();
+    assert_eq!(phases, ["lan", "4g"], "the relay's phases: {}", result["impairments"]);
+    assert!(result["impairments"][0]["counts"]["forwarded"].as_u64().unwrap() >= 2, "the datagram and its answer went through it");
     let hook = result["steps"].as_array().unwrap().iter().find(|step| step["node_id"] == "hook" && step["state"] == "passed").unwrap();
     assert!(hook["detail"].as_str().unwrap().starts_with("HTTP 202"), "its route answered: {hook}");
 
@@ -163,6 +180,12 @@ async fn every_node_passes_here_and_on_a_server() {
     let before = (seen.http.load(Ordering::SeqCst), seen.osc.load(Ordering::SeqCst), seen.udp.load(Ordering::SeqCst), seen.tcp_bytes.load(Ordering::SeqCst));
     assert!(before.0 >= 1 && before.1 >= 1 && before.2 >= 1 && before.3 > 0, "the gear saw the run: {before:?}");
     assert!(seen.mqtt.lock().unwrap().iter().any(|topic| topic == "lab/ping"));
+    assert!(seen.ws.lock().unwrap().iter().any(|text| text == "hi lab"), "the WebSocket service got the message: {:?}", seen.ws.lock().unwrap());
+    assert!(seen.ws_headers.lock().unwrap().iter().any(|header| header.eq_ignore_ascii_case("x-who: lab")), "and the upgrade's header");
+    let said = result["steps"].as_array().unwrap().iter().find(|step| step["node_id"] == "said" && step["state"] == "passed").unwrap();
+    assert_eq!(said["vars"]["echo"]["match"], "hi lab", "the regex group is the reply's match: {said}");
+    let socket = result["steps"].as_array().unwrap().iter().find(|step| step["node_id"] == "socket" && step["state"] == "passed").unwrap();
+    assert!(socket["detail"].as_str().unwrap().contains("(lab.v1)"), "the server chose the first subprotocol: {socket}");
 
     // On a server: the same document, sent over the API, the steps streamed back.
     let running = start_server(&dir.join("server")).await;

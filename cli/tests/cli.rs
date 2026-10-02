@@ -54,7 +54,7 @@ fn experiment(dir: &Path, name: &str, middle: Value, port: &str) -> String {
     middle["x"] = 200.into();
     middle["y"] = 80.into();
     let document = json!({
-        "version": 6,
+        "version": 8,
         "name": name,
         "params": [{ "name": "who", "value": "world" }],
         "nodes": [{ "id": "start", "type": "start", "x": 0, "y": 80 }, middle, { "id": "end", "type": "end", "x": 400, "y": 80 }],
@@ -77,7 +77,7 @@ fn version_and_the_bundled_templates() {
     assert_eq!((code(&version), out(&version).trim()), (0, format!("signallab {}", env!("CARGO_PKG_VERSION")).as_str()));
     let templates = signallab(&["templates"]);
     assert_eq!(code(&templates), 0);
-    for name in ["empty", "http-check", "osc-ping-reply", "poll-until-ready", "flaky-api"] {
+    for name in ["empty", "http-check", "osc-ping-reply", "poll-until-ready", "flaky-api", "fault-phases", "dependency-outage", "websocket-echo"] {
         assert!(out(&templates).contains(name), "{}", out(&templates));
     }
     assert_eq!(code(&signallab(&["run", "empty"])), 0, "a template runs by its name");
@@ -205,6 +205,95 @@ fn sends_arrive_as_the_app_would_send_them() {
     assert_eq!(code(&http), 1, "{}", err(&http));
 }
 
+/// A WebSocket service on a thread of its own: `welcome`, then `echo <text>`.
+fn websocket_service() -> SocketAddr {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+    let (ready, address) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        tokio::runtime::Runtime::new().unwrap().block_on(async move {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            ready.send(listener.local_addr().unwrap()).unwrap();
+            while let Ok((stream, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    let Ok(mut socket) = tokio_tungstenite::accept_async(stream).await else { return };
+                    let _ = socket.send(Message::text("welcome")).await;
+                    while let Some(Ok(Message::Text(text))) = socket.next().await {
+                        let _ = socket.send(Message::text(format!("echo {text}"))).await;
+                    }
+                });
+            }
+        });
+    });
+    address.recv().unwrap()
+}
+
+#[test]
+fn a_websocket_exchange_prints_the_answer_and_fails_without_it() {
+    let url = format!("ws://{}/chat", websocket_service());
+    let said = signallab(&["send", "ws", &url, "--text", "hi there", "--expect", "echo hi"]);
+    assert_eq!(code(&said), 0, "{}", err(&said));
+    assert_eq!(out(&said), "echo hi there\n", "the answer on stdout");
+    assert!(err(&said).contains(&format!("Connected to {url} in")) && err(&said).contains("Sent 8 bytes"), "{}", err(&said));
+
+    // Nothing sent: the first message is the greeting.
+    let greeted = signallab(&["--json", "send", "ws", &url, "--wait"]);
+    assert_eq!(code(&greeted), 0, "{}", err(&greeted));
+    let line: Value = serde_json::from_str(out(&greeted).trim()).unwrap();
+    assert_eq!((line["type"].as_str(), line["result"]["reply"]["text"].as_str(), line["result"]["closed"]["by"].as_str()), (Some("exchange"), Some("welcome"), Some("client")), "{line}");
+
+    let silent = signallab(&["send", "ws", &url, "--text", "x", "--expect-regex", "^never$", "--timeout", "200"]);
+    assert_eq!(code(&silent), 1, "an answer that does not come fails the send: {}", err(&silent));
+    let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    assert_eq!(code(&signallab(&["send", "ws", &format!("ws://127.0.0.1:{closed}/")])), 1, "nothing listens: the send fails");
+    assert_eq!(code(&signallab(&["send", "ws", "http://127.0.0.1/"])), 2, "not a WebSocket address: the invocation's fault");
+    assert_eq!(code(&signallab(&["send", "ws", &url, "-H", "no colon"])), 2);
+}
+
+/// An HTTP server that wants Basic `lab:secret` or the bearer `t0ken`, and offers only Basic.
+fn guarded_service() -> SocketAddr {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        for mut stream in listener.incoming().flatten() {
+            let mut request = Vec::new();
+            let mut buffer = [0u8; 2048];
+            while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                match stream.read(&mut buffer) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => request.extend_from_slice(&buffer[..n]),
+                }
+            }
+            let text = String::from_utf8_lossy(&request).to_ascii_lowercase();
+            // base64("lab:secret"), lowercased with the rest of the request.
+            let allowed = text.contains("authorization: basic bgfionnly3jlda==") || text.contains("authorization: bearer t0ken");
+            let answer = if allowed {
+                "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"
+            } else {
+                "HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm=\"lab\"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            };
+            let _ = stream.write_all(answer.as_bytes());
+        }
+    });
+    address
+}
+
+#[test]
+fn send_http_carries_basic_and_bearer_and_says_when_digest_was_not_offered() {
+    let url = format!("http://{}/", guarded_service());
+    let basic = signallab(&["send", "http", "GET", &url, "-u", "lab:secret", "--expect-status", "200"]);
+    assert_eq!((code(&basic), out(&basic).as_str()), (0, "ok\n"), "{}", err(&basic));
+    let bearer = signallab(&["send", "http", "GET", &url, "--bearer", "t0ken", "--expect-status", "200"]);
+    assert_eq!(code(&bearer), 0, "{}", err(&bearer));
+    let none = signallab(&["send", "http", "GET", &url, "--expect-status", "200"]);
+    assert_eq!(code(&none), 1, "no credentials: 401");
+    let digest = signallab(&["send", "http", "GET", &url, "-u", "lab:secret", "--digest"]);
+    assert_eq!(code(&digest), 1, "{}", err(&digest));
+    assert!(err(&digest).contains("without asking for Digest"), "{}", err(&digest));
+    assert_eq!(code(&signallab(&["send", "http", "GET", &url, "--digest"])), 2, "--digest needs --user");
+}
+
 #[test]
 fn a_library_signal_fires_by_its_name() {
     let dir = folder("fire");
@@ -248,6 +337,98 @@ async fn start_server(dir: &Path) -> Running {
         let _ = stopped.await;
     }));
     Running { url: format!("http://{address}"), stop: Some(stop), done }
+}
+
+/// An experiment that sends `{{word}} {{n}}` to `target` and passes unless `n` is 2.
+fn matrixed(dir: &Path, target: SocketAddr) -> String {
+    let document = json!({
+        "version": 8, "name": "Matrixed",
+        "params": [{ "name": "word", "value": "x" }, { "name": "n", "value": "0" }],
+        "nodes": [
+            { "id": "start", "type": "start", "x": 0, "y": 80 },
+            { "id": "say", "type": "udp", "x": 200, "y": 80, "target": target.to_string(), "text": "{{word}} {{n}}" },
+            { "id": "check", "type": "assert_value", "x": 400, "y": 80, "value": "{{n}}", "op": "ne", "expected": "2" },
+            { "id": "end", "type": "end", "x": 600, "y": 80 },
+        ],
+        "edges": [{ "from": "start", "to": "say" }, { "from": "say", "to": "check" }, { "from": "check", "to": "end" }],
+    });
+    let path = dir.join("matrixed.json");
+    std::fs::write(&path, serde_json::to_string_pretty(&document).unwrap()).unwrap();
+    path.display().to_string()
+}
+
+/// Every datagram that has arrived, as text, waiting a little for the last.
+fn arrived(socket: &UdpSocket) -> Vec<String> {
+    socket.set_read_timeout(Some(Duration::from_millis(300))).unwrap();
+    let mut got = Vec::new();
+    let mut buffer = [0u8; 512];
+    while let Ok((n, _)) = socket.recv_from(&mut buffer) {
+        got.push(String::from_utf8_lossy(&buffer[..n]).into_owned());
+    }
+    got
+}
+
+#[test]
+fn a_matrix_runs_every_combination_reports_each_and_stops_early_when_told() {
+    let dir = folder("matrix");
+    let (socket, target) = receiver();
+    let file = matrixed(&dir, target);
+    let junit = dir.join("junit.xml");
+    let reports = dir.join("reports");
+    let all = signallab(&["--json", "run", &file, "--matrix", "word=hi,yo", "-m", "n=1,3", "--junit", junit.to_str().unwrap(), "--report", reports.to_str().unwrap()]);
+    assert_eq!(code(&all), 0, "{}{}", out(&all), err(&all));
+    assert_eq!(arrived(&socket), ["hi 1", "hi 3", "yo 1", "yo 3"], "every combination, the first axis slowest");
+    let lines: Vec<Value> = out(&all).lines().filter_map(|line| serde_json::from_str(line).ok()).collect();
+    let ended: Vec<&Value> = lines.iter().filter(|line| line["type"] == "ended").collect();
+    assert_eq!(ended.len(), 4);
+    assert_eq!((ended[1]["matrix"]["word"].as_str(), ended[1]["matrix"]["n"].as_str()), (Some("hi"), Some("3")), "{}", ended[1]);
+    assert!(ended[1]["file"].as_str().unwrap().ends_with("matrixed.json [word=hi, n=3]"), "{}", ended[1]["file"]);
+    let summary = lines.iter().find(|line| line["type"] == "summary").unwrap();
+    assert_eq!((summary["total"].as_u64(), summary["passed"].as_u64(), summary["not_started"].as_u64()), (Some(4), Some(4), Some(0)));
+    let xml = std::fs::read_to_string(&junit).unwrap();
+    assert_eq!(xml.matches("<testsuite ").count(), 4);
+    assert!(xml.contains("name=\"Matrixed [word=yo, n=1]\"") && xml.contains("<property name=\"param.word\" value=\"yo\" />"), "{xml}");
+    assert_eq!(std::fs::read_dir(&reports).unwrap().count(), 4, "a report per run");
+
+    // n=2 fails its check: the run says which combination, and --fail-fast stops there.
+    let failing = signallab(&["run", &file, "--matrix", "n=1,2,3", "--fail-fast"]);
+    assert_eq!(code(&failing), 1, "{}", out(&failing));
+    assert_eq!(arrived(&socket), ["x 1", "x 2"], "the third is not started");
+    assert!(out(&failing).contains("✖ Matrixed [n=2]"), "{}", out(&failing));
+    assert!(err(&failing).contains("1 run not started"), "{}", err(&failing));
+    let through = signallab(&["run", &file, "--matrix", "n=1,2,3"]);
+    assert_eq!(code(&through), 1);
+    assert_eq!(arrived(&socket).len(), 3, "without --fail-fast every one runs");
+    assert!(out(&through).contains("3 experiments: 2 passed, 1 failed"), "{}", out(&through));
+
+    // Wrong before anything is sent: an unknown name, a name set twice, too many.
+    assert_eq!(code(&signallab(&["run", &file, "--matrix", "nobody=a,b"])), 2);
+    assert_eq!(code(&signallab(&["run", &file, "--matrix", "n=1", "--param", "n=2"])), 2);
+    let wide = format!("n={}", (0..300).map(|i| i.to_string()).collect::<Vec<_>>().join(","));
+    let too_many = signallab(&["validate", &file, "--matrix", &wide]);
+    assert_eq!(code(&too_many), 2);
+    assert!(err(&too_many).contains("300 combinations"), "{}", err(&too_many));
+    assert!(arrived(&socket).is_empty(), "nothing was sent by a refused matrix");
+    let file_matrix = dir.join("matrix.json");
+    std::fs::write(&file_matrix, r#"[{"word": "a", "n": 1}, {"word": "b", "n": 3}]"#).unwrap();
+    let listed = signallab(&["validate", &file, "--matrix-file", file_matrix.to_str().unwrap()]);
+    assert_eq!(code(&listed), 0, "{}", err(&listed));
+    assert_eq!(out(&listed).matches("✔").count(), 2, "each listed combination is checked: {}", out(&listed));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_matrix_runs_on_a_server_too() {
+    let dir = folder("matrix-server");
+    let running = start_server(&dir.join("server")).await;
+    let token = dir.join("token.txt");
+    std::fs::write(&token, format!("{TOKEN}\n")).unwrap();
+    let (socket, target) = receiver();
+    let file = matrixed(&dir, target);
+    let remote = signallab_async(vec!["run".into(), file, "--matrix".into(), "word=a,b".into(), "--server".into(), running.url.clone(), "--token-file".into(), token.display().to_string()]).await;
+    assert_eq!(code(&remote), 0, "{}{}", out(&remote), err(&remote));
+    assert_eq!(arrived(&socket), ["a 0", "b 0"]);
+    running.stop.unwrap().send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(10), running.done).await.unwrap().unwrap().unwrap();
 }
 
 /// The binary, without blocking the server this test runs.

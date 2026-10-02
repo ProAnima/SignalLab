@@ -29,3 +29,6 @@ serde_json.workspace = true
 [dev-dependencies]
 # `signallab run --server` is tested against a real server started in the test.
 signal-lab-server = { path = "../server" }
+# The WebSocket service of the test gear.
+tokio-tungstenite = "0.29"
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }

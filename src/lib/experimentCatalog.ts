@@ -11,12 +11,19 @@ export const NODE_CATALOG = {
   osc: { title: "exp.node.osc", description: "exp.description.osc", group: "action" },
   udp: { title: "exp.node.udp", description: "exp.description.udp", group: "action" },
   mqtt: { title: "exp.node.mqtt", description: "exp.description.mqtt", group: "action" },
+  ws_connect: { title: "exp.node.ws_connect", description: "exp.description.ws_connect", group: "action" },
+  ws_send: { title: "exp.node.ws_send", description: "exp.description.ws_send", group: "action" },
+  ws_close: { title: "exp.node.ws_close", description: "exp.description.ws_close", group: "action" },
   log: { title: "exp.node.log", description: "exp.description.log", group: "action" },
   wait_osc: { title: "exp.node.wait_osc", description: "exp.description.wait_osc", group: "observe" },
   wait_udp: { title: "exp.node.wait_udp", description: "exp.description.wait_udp", group: "observe" },
   wait_mqtt: { title: "exp.node.wait_mqtt", description: "exp.description.wait_mqtt", group: "observe" },
   wait_http: { title: "exp.node.wait_http", description: "exp.description.wait_http", group: "observe" },
+  wait_ws: { title: "exp.node.wait_ws", description: "exp.description.wait_ws", group: "observe" },
   emulator: { title: "exp.node.emulator", description: "exp.description.emulator", group: "emulate" },
+  impairment: { title: "exp.node.impairment", description: "exp.description.impairment", group: "fault" },
+  impairment_change: { title: "exp.node.impairment_change", description: "exp.description.impairment_change", group: "fault" },
+  emulator_state: { title: "exp.node.emulator_state", description: "exp.description.emulator_state", group: "fault" },
   assert_status: { title: "exp.node.assert_status", description: "exp.description.assert_status", group: "check" },
   assert_body: { title: "exp.node.assert_body", description: "exp.description.assert_body", group: "check" },
   assert_header: { title: "exp.node.assert_header", description: "exp.description.assert_header", group: "check" },
@@ -29,7 +36,7 @@ export const NODE_CATALOG = {
   loop: { title: "exp.node.loop", description: "exp.description.loop", group: "flow" },
 } satisfies Record<NodeType, { title: TKey; description: TKey; group: NodeGroup }>;
 
-export type NodeGroup = "action" | "observe" | "emulate" | "data" | "check" | "flow";
-/** Order of the add menu: send, then wait for the answer, play the other side, then work with it. */
-export const NODE_GROUPS: NodeGroup[] = ["action", "observe", "emulate", "data", "check", "flow"];
+export type NodeGroup = "action" | "observe" | "emulate" | "fault" | "data" | "check" | "flow";
+/** Order of the add menu: send, then wait for the answer, play the other side, break things on cue, then work with it. */
+export const NODE_GROUPS: NodeGroup[] = ["action", "observe", "emulate", "fault", "data", "check", "flow"];
 export const ADDABLE_NODES = (Object.keys(NODE_CATALOG) as NodeType[]).filter(type => type !== "start" && type !== "end");

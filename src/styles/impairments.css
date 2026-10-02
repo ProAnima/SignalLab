@@ -1,0 +1,5 @@
+/* ---------- impairment profiles (the Impairment screen and the fault nodes) ---------- */
+
+.impair-presets { margin-bottom: 10px; flex-wrap: wrap; }
+.impair-offline { margin: 0 0 10px; }
+.impair-now { margin: 0 0 12px; font: 12px var(--mono); color: var(--accent); }

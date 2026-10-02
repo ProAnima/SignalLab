@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use serde::Serialize;
 
-use super::error::{EngineError, EngineResult};
+use super::error::{EngineError, EngineResult, Field};
 use super::experiment::{Edge, Experiment, NodeKind, MAX_NODES, PORTS, VERSION};
 use super::experiment_data as data;
 use super::experiment_fields::{check_node, check_repeat, check_retry};
@@ -159,6 +159,28 @@ fn visit<'a>(
     Ok(())
 }
 
+/// A *Change impairment* names one of the document's Impairments, an
+/// *Emulator down/up* one of its Emulators.
+fn check_references(doc: &Experiment) -> EngineResult<()> {
+    let is = |id: &str, wanted: fn(&NodeKind) -> bool| doc.nodes.iter().any(|node| node.id == id && wanted(&node.kind));
+    for node in &doc.nodes {
+        let missing = match &node.kind {
+            NodeKind::ImpairmentChange { relay, .. } if !is(relay, |kind| matches!(kind, NodeKind::Impairment { .. })) => {
+                EngineError::new("impair.relay_unknown").with("id", relay).in_field(Field::new("relay"))
+            }
+            NodeKind::EmulatorState { emulator, .. } if !is(emulator, |kind| matches!(kind, NodeKind::Emulator { .. })) => {
+                EngineError::new("emulator.node_unknown").with("id", emulator).in_field(Field::new("emulator"))
+            }
+            kind if kind.connection().is_some_and(|connection| !is(connection, |kind| matches!(kind, NodeKind::WsConnect { .. }))) => {
+                EngineError::new("ws.connection_unknown").with("id", kind.connection().unwrap_or_default()).in_field(Field::new("connection"))
+            }
+            _ => continue,
+        };
+        return Err(missing.at(&node.id));
+    }
+    Ok(())
+}
+
 /// Validate with the active profile's values (the runner uses `validate_run`).
 #[cfg(test)]
 pub fn validate(doc: &Experiment) -> EngineResult<Vec<String>> {
@@ -206,6 +228,8 @@ pub fn validate_with(doc: &Experiment, params: &BTreeMap<String, String>) -> Eng
         }
     }
     crate::emulator_run::check_run_binds(&doc.nodes)?;
+    crate::netsim_run::check_run_binds(&doc.nodes, params)?;
+    check_references(doc)?;
     // validate_document guarantees exactly one Start.
     let start = doc.nodes.iter().find(|node| matches!(node.kind, NodeKind::Start)).map(|node| node.id.clone()).unwrap_or_default();
     let by_id: HashMap<_, _> = doc.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
@@ -290,7 +314,6 @@ pub fn validate_run(doc: &Experiment, overrides: &BTreeMap<String, String>) -> E
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::Field;
     use crate::experiment::{starter, Node};
     use serde_json::json;
 

@@ -30,6 +30,8 @@ pub fn parse(text: &str) -> EngineResult<Experiment> {
     })?;
     // Older versions lack parameters, seed or profiles; serde defaults supply them.
     if LEGACY_VERSIONS.contains(&document.version) {
+        // Before version 8 no request carried cookies from an earlier one.
+        document.cookies = false;
         document.version = VERSION;
     }
     // Enforce the canonical size too, so an accepted import can be saved again.
@@ -128,6 +130,9 @@ mod tests {
             include_str!("../../experiments/templates/osc-ping-reply.json"),
             include_str!("../../experiments/templates/poll-until-ready.json"),
             include_str!("../../experiments/templates/flaky-api.json"),
+            include_str!("../../experiments/templates/fault-phases.json"),
+            include_str!("../../experiments/templates/dependency-outage.json"),
+            include_str!("../../experiments/templates/websocket-echo.json"),
         ] {
             let document = parse(text).unwrap();
             validate(&document).unwrap();

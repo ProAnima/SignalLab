@@ -55,6 +55,9 @@ pub const TEMPLATES: &[(&str, &str)] = &[
     ("osc-ping-reply", include_str!("../../experiments/templates/osc-ping-reply.json")),
     ("poll-until-ready", include_str!("../../experiments/templates/poll-until-ready.json")),
     ("flaky-api", include_str!("../../experiments/templates/flaky-api.json")),
+    ("fault-phases", include_str!("../../experiments/templates/fault-phases.json")),
+    ("dependency-outage", include_str!("../../experiments/templates/dependency-outage.json")),
+    ("websocket-echo", include_str!("../../experiments/templates/websocket-echo.json")),
 ];
 
 /// How often a quiet response says it is still there.

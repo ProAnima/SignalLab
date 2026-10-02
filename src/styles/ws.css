@@ -1,0 +1,43 @@
+/* ---------- websocket messages ---------- */
+
+/* Newest last, like a chat: the list follows the end while it is scrolled there. */
+.ws-list { flex: 1; min-height: 0; max-height: 520px; margin: 0 -6px; padding: 0 6px; }
+/* A row is a button: a message is picked with the keyboard as with the mouse. */
+.ws-row {
+  display: grid;
+  grid-template-columns: 86px 14px minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  padding: 4px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-family: var(--mono);
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+.ws-row:active { transform: none; }
+.ws-row:hover { background: rgba(255, 255, 255, 0.035); color: var(--text); }
+.ws-row.active { background: var(--accent-soft); border-color: rgba(62, 230, 176, 0.2); color: var(--text); }
+.ws-time { color: var(--text-faint); }
+.ws-row.rx .ws-dir { color: var(--accent); }
+.ws-row.tx .ws-dir { color: var(--blue); }
+.ws-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ws-size { color: var(--text-faint); white-space: nowrap; }
+.ws-detail {
+  max-height: 320px;
+  overflow: auto;
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+}

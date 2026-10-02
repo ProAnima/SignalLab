@@ -1,6 +1,6 @@
 //! `signallab send …` and `signallab fire`: one message, through the same
 //! commands the app's screens use (`osc_send`, `broadcast_send`,
-//! `http_request`, `mqtt_publish_once`) — a fired signal is the same bytes as a
+//! `http_request`, `mqtt_publish_once`, `ws_exchange`) — a fired signal is the same bytes as a
 //! hand-typed one, as in the app (`src/lib/signals.ts`, `fireSignal`).
 
 use std::path::PathBuf;
@@ -104,6 +104,17 @@ pub(crate) fn response_failure(response: &HttpResponse, url: &str) -> Option<Eng
     })
 }
 
+/// `Name: value` headers from the command line.
+fn header_pairs(headers: &[String]) -> Result<Vec<(String, String)>, Failure> {
+    headers
+        .iter()
+        .map(|header| match header.split_once(':') {
+            Some((name, value)) if !name.trim().is_empty() => Ok((name.trim().to_string(), value.trim().to_string())),
+            _ => Err(Failure::invalid(EngineError::new("cli.header_invalid").with("value", header))),
+        })
+        .collect()
+}
+
 /// Print a send's result: JSON on stdout with --json, else one line.
 fn done(ctx: &Ctx, value: &Value, line: String) -> Exit {
     if ctx.json {
@@ -145,14 +156,16 @@ async fn send_inner(ctx: &Ctx, command: SendCommand) -> Result<Exit, Failure> {
             let line = texts.t("cli.sentUdp", &params! { "target" => target.as_str(), "bytes" => result["bytes"].as_u64().unwrap_or_default() });
             Ok(done(ctx, &result, line))
         }
-        SendCommand::Http { method, url, headers, body, expect_status, timeout } => {
-            let headers: Vec<(String, String)> = headers
-                .iter()
-                .map(|header| match header.split_once(':') {
-                    Some((name, value)) if !name.trim().is_empty() => Ok((name.trim().to_string(), value.trim().to_string())),
-                    _ => Err(Failure::invalid(EngineError::new("cli.header_invalid").with("value", header))),
-                })
-                .collect::<Result<_, _>>()?;
+        SendCommand::Http { method, url, headers, body, expect_status, timeout, user, digest, bearer } => {
+            let headers = header_pairs(&headers)?;
+            let auth = match (user, bearer) {
+                (Some(user), _) => {
+                    let (username, password) = user.split_once(':').unwrap_or((user.as_str(), ""));
+                    json!({ "scheme": if digest { "digest" } else { "basic" }, "username": username, "password": password })
+                }
+                (None, Some(token)) => json!({ "scheme": "bearer", "token": token }),
+                (None, None) => json!({ "scheme": "none" }),
+            };
             let body = match body {
                 Some(body) => match body.strip_prefix('@') {
                     Some(file) => Some(std::fs::read_to_string(file).map_err(|error| Failure::invalid(EngineError::new("file.io").with("path", file).because(error)))?),
@@ -160,13 +173,15 @@ async fn send_inner(ctx: &Ctx, command: SendCommand) -> Result<Exit, Failure> {
                 },
                 None => None,
             };
-            let request = json!({ "method": method.to_ascii_uppercase(), "url": url, "headers": headers, "body": body, "timeout_ms": timeout });
+            let request = json!({ "method": method.to_ascii_uppercase(), "url": url, "headers": headers, "body": body, "timeout_ms": timeout, "auth": auth });
             let value = invoke(&service, "http_request", json!({ "request": request })).await?;
             let response: HttpResponse = serde_json::from_value(value.clone())
                 .map_err(|error| Failure::sending(EngineError::new("command.reply_invalid").because(error)))?;
             if let Some(error) = response_failure(&response, &url) {
                 return Err(Failure { error, exit: Exit::Failed, remote: false });
             }
+            // A Digest the server's 401 could not be answered with: why, after the response.
+            let unanswered = response.digest.as_ref().and_then(|digest| digest.error.clone());
             let ms = (response.latency_ms.round()) as u64;
             if ctx.json {
                 println!("{}", json!({ "type": "response", "response": value }));
@@ -181,13 +196,53 @@ async fn send_inner(ctx: &Ctx, command: SendCommand) -> Result<Exit, Failure> {
                     eprintln!("{}", texts.plain("cli.httpTruncated"));
                 }
             }
-            match expect_status {
-                Some(expected) if expected != response.status => {
+            match (expect_status, unanswered) {
+                (_, Some(error)) => Ok(Failure { error, exit: Exit::Failed, remote: false }.report(ctx, "✖ ")),
+                (Some(expected), None) if expected != response.status => {
                     let error = EngineError::new("cli.status_unexpected").with("expected", expected).with("actual", response.status);
                     Ok(Failure { error, exit: Exit::Failed, remote: false }.report(ctx, "✖ "))
                 }
                 _ => Ok(Exit::Passed),
             }
+        }
+        SendCommand::Ws { url, text, hex, headers, protocols, expect, expect_regex, wait, timeout } => {
+            let headers = header_pairs(&headers)?;
+            let message = match (text, hex) {
+                (Some(text), _) => Some(json!({ "text": text })),
+                (None, Some(hex)) => Some(json!({ "hex": hex })),
+                (None, None) => None,
+            };
+            let expect = match (expect, expect_regex, wait) {
+                (Some(text), _, _) => Some(json!({ "mode": "contains", "pattern": text, "timeout_ms": timeout })),
+                (None, Some(regex), _) => Some(json!({ "mode": "regex", "pattern": regex, "timeout_ms": timeout })),
+                (None, None, true) => Some(json!({ "mode": "any", "pattern": "", "timeout_ms": timeout })),
+                _ => None,
+            };
+            let config = json!({ "url": url, "headers": headers, "protocols": protocols });
+            let exchange = match invoke(&service, "ws_exchange", json!({ "config": config, "message": message, "expect": expect })).await {
+                // An answer that does not come is the exchange failing, not the invocation.
+                Err(failure) if failure.error.code == "wait.timeout" => return Err(Failure { exit: Exit::Failed, ..failure }),
+                other => other?,
+            };
+            if ctx.json {
+                println!("{}", json!({ "type": "exchange", "result": exchange }));
+                return Ok(Exit::Passed);
+            }
+            let handshake = &exchange["handshake"];
+            let (address, ms) = (handshake["url"].as_str().unwrap_or_default(), handshake["ms"].as_u64().unwrap_or_default());
+            let connected = match handshake["protocol"].as_str() {
+                Some(protocol) => texts.t("exp.step.wsConnectedAs", &params! { "url" => address, "ms" => ms, "protocol" => protocol }),
+                None => texts.t("exp.step.wsConnected", &params! { "url" => address, "ms" => ms }),
+            };
+            eprintln!("{connected}");
+            if let Some(bytes) = exchange["sent"].as_u64() {
+                eprintln!("{}", texts.t("exp.step.wsSent", &params! { "bytes" => bytes }));
+            }
+            if let Some(reply) = exchange.get("reply").filter(|reply| !reply.is_null()) {
+                let shown = if reply["kind"] == "binary" { reply["hex"].as_str() } else { reply["text"].as_str() };
+                println!("{}", shown.unwrap_or_default());
+            }
+            Ok(Exit::Passed)
         }
         SendCommand::Mqtt { broker, topic, payload, qos, retain } => {
             let args = mqtt_publish(&broker, &topic, &payload, qos, retain)?;

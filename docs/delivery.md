@@ -443,7 +443,8 @@ OSC (monitor, sender, arguments, Enter, generator, *Wait for this*), Signals
 (new, fire, palette, delete), MQTT (connect, subscriptions, retained values,
 *Wait for this*, clear), Broadcast and discovery (a probe and its answer, a
 beacon), the impairment relay (20 datagrams through it), Storm (UDP and TCP,
-counted at the sink), the scanner, HTTP (GET, POST, headers, raw, a burst of 40),
+counted at the sink), the scanner, HTTP (GET, POST, headers, raw, a burst of 40
+with its percentiles, 20 more at a rate),
 the library (*Save…* from HTTP into a new folder, `Ctrl+S` after a change, the
 chip that opens it in Signals, a new folder renamed at once, a signal dragged
 into it, `F2`, closing and opening a folder, *Open in HTTP*, a folder removed with

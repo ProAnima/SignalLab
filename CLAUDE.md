@@ -83,7 +83,7 @@ src/                      React UI
   lib/useExperiment*.ts   the editor's hooks: Run (run, stop, timeline), NodeTests (Send now,
                           preview), Canvas (drag, pan, wires), Shortcuts, Fullscreen
   components/Experiment*.tsx  the editor's parts: Toolbar, Canvas(+Node, Tools), Properties,
-                          NodeTest, Timeline, AddMenu; NodeFields and EmulatorFields the forms
+                          NodeTest, Timeline, AddMenu; NodeFields, EmulatorFields, FaultFields the forms
   lib/errors.ts           describeError: one renderer for engine errors and legacy text
   components/ErrorMessage.tsx  where · what — why, technical detail folded
   views/*.tsx             one screen per module; ExperimentView composes the node editor
@@ -91,6 +91,12 @@ src/                      React UI
   lib/emulators.ts        new emulators, presets, Mock this, the starter set's texts (pure)
   lib/emulatorStore.tsx   the emulator library, which ones run, what they received
   components/EmulatorEditor.tsx  an emulator's rules: the Emulators screen and the node's dialog
+  lib/impairments.ts      impairment presets, which preset a profile is, its notation (pure)
+  lib/httpAuth.ts         switching an auth scheme (pure); components/HttpAuthFields.tsx the fields,
+                          plain on the HTTP screen, templated in the HTTP node
+  lib/websocket.ts        subprotocol lists, JSON of a message (pure); views/WsView.tsx the screen,
+                          components/ExperimentWsFields.tsx the four nodes' fields
+  components/ImpairProfileFields.tsx  a profile's preset chips and values: the Impairment screen and the fault nodes
 engine/src/               signal-lab-engine — no Tauri, no window
   service.rs              THE command table: Service::invoke(name, json) for both front doors
   host.rs                 Host = EventSink + capture bus; Recorder for tests
@@ -100,8 +106,10 @@ engine/src/               signal-lab-engine — no Tauri, no window
   broadcast.rs            broadcast / multicast / CIDR sweep emitter
   discovery.rs            the discovery listener: peers, multicast joins, auto-reply
   inspect.rs              the capture bus: bounded ring + batch pump to the UI
-  http.rs                 request runner + concurrent burst
-  netsim.rs               UDP impairment relay (latency/jitter/loss/dup/corrupt)
+  http.rs                 request runner + concurrent burst (closed, or at a rate; missed counted)
+  latency.rs              LatencyHistogram: p50…p99 within 0.5 %, atomics, constant memory
+  netsim.rs               UDP impairment relay: profiles, seeded per-leg decisions, live changes, phases
+  netsim_run.rs           a run's relays (Impairment nodes), opened before the first step
   storm.rs                UDP/TCP load generator
   error.rs                EngineError {code, params, node, field, detail}
   transport.rs            network failure causes (refused, timeout, dns, …)
@@ -122,6 +130,10 @@ engine/src/               signal-lab-engine — no Tauri, no window
   scan.rs                 TCP connect scanner
   mqtt_codec.rs           hand-written MQTT 3.1.1 codec (no external crate)
   mqtt.rs                 one broker connection as a job; MqttHub routes commands
+  http_auth.rs            Basic, Bearer, Digest (RFC 7616): challenges parsed, answers, a burst's memory
+  cookies.rs              CookieJar: reqwest's cookie store, held so a jar can be listed and cleared
+  ws.rs                   WebSocket client: one owner task per socket (Connection), the screen's job
+                          and WsHub, a run's connections (RunSocket, an Inbox), one exchange
   mqtt_dial.rs            CONNECT/CONNACK, failures as causes, the one-shot publish
   signals.rs              signal library: file + starter set (storage only)
   jobs.rs                 job registry: start / list / stop
@@ -136,6 +148,9 @@ engine/src/               signal-lab-engine — no Tauri, no window
   emulator_run.rs         a run's emulators and HTTP listeners, opened before the first step
   emulator_files.rs       the emulator library (emulators.json) and its starter set
   firewall.rs             Windows Firewall per program: status (COM, any language), allow (UAC)
+engine/tests/burst.rs     the HTTP burst against loopback: closed, paced, missed, stopped
+engine/tests/websocket.rs the screen's job, a run's connect/send/wait/close, server closes, failed upgrades
+engine/tests/http_auth.rs Basic/Bearer/Digest checked by the server's own hashing, a burst's one challenge, jars
 engine/tests/ping_reply.rs  an experiment run end to end over loopback (repeat_loop.rs: Repeat and Loop;
                           emulators.rs: Emulator nodes, Wait for HTTP request, the flaky-API template)
 tests/e2e/tour.ts         the end-to-end tour, run inside the page: every screen, by its visible labels
@@ -156,6 +171,7 @@ cli/                      `signallab`, the command line for scripts and CI (docs
   src/send.rs             send osc|udp|http|mqtt, fire a library signal — the app's own commands
   src/i18n.rs             the interface's dictionaries (build.rs embeds them) and translate.ts in Rust
   src/junit.rs            the JUnit report; src/fail.rs the exit codes 0/1/2/3
+  src/matrix.rs           --matrix / --matrix-file: combinations, each a run of its own (prepare in run.rs)
   src/mcp.rs              `signallab mcp`: the Model Context Protocol on stdio, for an LLM
   src/mcp_tools.rs        its tools' schemas and the experiment tools; mcp_send.rs, mcp_library.rs the rest
   src/emulate.rs          `emulate` / `emulators`: emulators from files or the library, followed until Ctrl+C
@@ -233,6 +249,40 @@ src/components/FirewallBanner.tsx  the desktop app's firewall notice, with Allow
   client's rules — 3.1.1, plain TCP, clean sessions, QoS 0/1/2 — and an MQTT
   wait subscribes to it like to any broker. Starter emulators stay on
   loopback; `EMULATOR_SEED_IDS` must equal `seed()` (a test).
+- **Faults are nodes, opened like waits, closed with the run.** An *Impairment*
+  node's relay is opened in `netsim_run::arm_run` before the first step (its
+  listen and target take parameters only) and closed when the run ends in any
+  way; *Change impairment* calls `Relay::set`, which closes the phase so far
+  (`Phase`, counted in the report) without rebinding; *Emulator down/up* sets
+  `Emulation::force`, which `Context::down` reads before any outage schedule.
+  Both name another node by id (`impair.relay_unknown`, `emulator.node_unknown`).
+  Every relay decision draws from the run's seed per direction (`Leg`), so the
+  same seed and traffic drop the same packets — keep it that way: no
+  `thread_rng` in the relay.
+- **Credentials go only into the request.** `HttpRequest::auth` (Basic,
+  Bearer, Digest) becomes an `Authorization` header in `http::builder` as the
+  request is sent; frames, steps and reports carry the response, never that
+  header, and a node's credentials are templated fields (`{{secret.NAME}}`,
+  masked). Digest answers a 401's challenge and sends again
+  (`http::execute`); a burst shares one `DigestMemory`, so one challenge serves
+  all its requests. The RFC 2617/7616 examples are unit tests, and the e2e
+  fixture checks answers with hashing of its own.
+- **Cookies are a jar a person can see.** `cookies::CookieJar` is reqwest's
+  cookie store (RFC 6265 rules) held by us: the HTTP screen's (in `Service`,
+  used while *Keep cookies* is on, listed by `http_cookies`) and one per run
+  (`Experiment::cookies`, default on; files before version 8 open with it off
+  so they run as before). *Send now* uses none.
+- **A WebSocket is one socket, one owner.** `ws::Connection::spawn` hands the
+  stream to a task that alone reads and writes; sends and closes reach it by
+  channel, what arrives goes to a `ws::Sink` (the screen's batch, every 100 ms;
+  a run's `Inbox`, read by *Wait for WebSocket* like any wait) and to the
+  Inspector under a per-second `inspect::Budget`, so a reply a millisecond after
+  its request is never dropped. Dropping the last handle sends a close frame — a
+  run that ends or is stopped says goodbye (`RunSockets` cleared in
+  `CancelBranches`). A run's connections open when *WebSocket connect* runs (its
+  URL and headers are templates, unlike waits' binds); the other three name it by
+  id (`ws.connection_unknown`, `ws.not_connected`). wss:// uses reqwest's TLS
+  stack (native-tls), so it trusts what https:// does.
 - **Long-running work is a job.** Register it with `JobRegistry` so the console
   strip can list and stop it, and call `finish(id)` when it ends on its own.
 - **Modules never call the Inspector directly** — publish a normalized `Frame`

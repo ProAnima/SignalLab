@@ -16,7 +16,7 @@ use serde_json::Value;
 
 use crate::broadcast::{self, EmitConfig};
 use crate::discovery::{self, DiscoveryConfig};
-use crate::emulator::{self, Emulator};
+use crate::emulator::{self, DownFault, Emulator};
 use crate::emulator_job::{self, EmulatorHub, StartOptions};
 use crate::emulator_state::RECENT;
 use crate::emulator_files::{self, EmulatorLibrary};
@@ -28,13 +28,14 @@ use crate::experiment_run::{self, RunHandle, RunOptions};
 use crate::experiment_validate;
 use crate::firewall;
 use crate::host::Host;
+use crate::cookies::CookieJar;
 use crate::http::{self, BurstConfig, HttpRequest};
 use crate::inspect::{self, Capture};
 use crate::jobs::JobRegistry;
 use crate::mqtt::{self, Cmd, MqttConfig, MqttHub, Sub};
 use crate::mqtt_dial;
 use crate::net;
-use crate::netsim::{self, ProxyConfig};
+use crate::netsim::{self, ImpairProfile, ProxyConfig, RelayHub};
 use crate::osc::{self, GenConfig};
 use crate::osc_codec::OscArg;
 use crate::paths;
@@ -42,6 +43,7 @@ use crate::scan::{self, ScanConfig};
 use crate::secrets::{self, SecretStore};
 use crate::signals::{self, Library};
 use crate::storm::{self, StormConfig};
+use crate::ws::{self, WsConfig, WsExpect, WsHub, WsPayload};
 
 /// How a command failed: always an engine error, a code the interface words
 /// in the reader's language. Serialized as the error itself.
@@ -83,7 +85,11 @@ pub struct Service {
     host: Host,
     jobs: JobRegistry,
     mqtt: MqttHub,
+    websockets: WsHub,
+    /// The HTTP screen's cookie jar: its requests and burst, while it says to keep cookies.
+    cookies: Arc<CookieJar>,
     emulators: EmulatorHub,
+    relays: RelayHub,
     secrets: Arc<dyn SecretStore>,
     mode: Mode,
     pump: tokio::task::JoinHandle<()>,
@@ -137,14 +143,14 @@ macro_rules! args {
 /// Commands that start a long-running job; a server logs who started them.
 pub const JOB_COMMANDS: &[&str] = &[
     "experiment_start", "osc_monitor_start", "osc_generator_start", "http_burst_start", "netsim_start",
-    "storm_start", "scan_start", "broadcast_beacon_start", "discovery_start", "mqtt_connect", "emulator_start",
+    "storm_start", "scan_start", "broadcast_beacon_start", "discovery_start", "mqtt_connect", "ws_connect", "emulator_start",
 ];
 
 impl Service {
     /// Must be called inside a Tokio runtime: it starts the Inspector's pump.
     pub fn new(host: Host, mode: Mode, secrets: Arc<dyn SecretStore>) -> Self {
         let pump = inspect::spawn_pump(host.clone());
-        Service { host, jobs: JobRegistry::new(), mqtt: MqttHub::new(), emulators: EmulatorHub::new(), secrets, mode, pump }
+        Service { host, jobs: JobRegistry::new(), mqtt: MqttHub::new(), websockets: WsHub::new(), cookies: CookieJar::new(), emulators: EmulatorHub::new(), relays: RelayHub::new(), secrets, mode, pump }
     }
 
     pub fn jobs(&self) -> &JobRegistry {
@@ -283,19 +289,32 @@ impl Service {
             }
 
             // ---- HTTP
+            // `cookies`: send the screen's jar and keep what the answer sets.
             "http_request" => {
-                let a = args!(command, value, { request: HttpRequest });
-                reply(http::request_once(host(), a.request).await?)
+                let a = args!(command, value, { request: HttpRequest, cookies: Option<bool> });
+                let jar = a.cookies.unwrap_or(false).then(|| self.cookies.clone());
+                reply(http::request_once(host(), a.request, jar).await?)
             }
             "http_burst_start" => {
                 let a = args!(command, value, { config: BurstConfig });
-                reply(http::start_burst(host(), jobs(), a.config).await?)
+                reply(http::start_burst(host(), jobs(), a.config, Some(self.cookies.clone())).await?)
+            }
+            "http_cookies" => reply(self.cookies.list()),
+            "http_cookies_clear" => {
+                self.cookies.clear();
+                reply(())
             }
 
             // ---- impairment, load, scan
             "netsim_start" => {
                 let a = args!(command, value, { config: ProxyConfig });
-                reply(netsim::start_proxy(host(), jobs(), a.config).await?)
+                reply(netsim::start_proxy(host(), jobs(), self.relays.clone(), a.config).await?)
+            }
+            // A running relay impairs with another profile from now on, without rebinding.
+            "netsim_set_profile" => {
+                let a = args!(command, value, { job_id: u64, profile: ImpairProfile });
+                self.relays.set(a.job_id, a.profile)?;
+                reply(())
             }
             "storm_start" => {
                 let a = args!(command, value, { config: StormConfig });
@@ -373,6 +392,25 @@ impl Service {
                 reply(mqtt_dial::publish_once(host(), a.config, a.topic, a.payload, a.qos, a.retain).await?)
             }
 
+            // ---- WebSocket: one live connection per job, plus a one-shot exchange
+            "ws_connect" => {
+                let a = args!(command, value, { config: WsConfig });
+                reply(ws::start_client(host(), jobs(), self.websockets.clone(), a.config).await?)
+            }
+            "ws_send" => {
+                let a = args!(command, value, { job_id: u64, message: WsPayload });
+                reply(self.websockets.send(a.job_id, &a.message).await?)
+            }
+            // A close handshake; the job ends when the server has answered.
+            "ws_close" => {
+                let a = args!(command, value, { job_id: u64, code: Option<u16>, reason: Option<String> });
+                reply(self.websockets.close(a.job_id, a.code, a.reason).await?)
+            }
+            "ws_exchange" => {
+                let a = args!(command, value, { config: WsConfig, message: Option<WsPayload>, expect: Option<WsExpect> });
+                reply(ws::exchange(&self.host, &a.config, a.message.as_ref(), a.expect.as_ref()).await?)
+            }
+
             // ---- signal library: storage only; firing goes through the commands above
             "signals_load" => reply(signals::load()?),
             "signals_save" => {
@@ -402,6 +440,12 @@ impl Service {
             "emulator_exchanges" => {
                 let a = args!(command, value, { job_id: u64, after: Option<u64>, limit: Option<usize> });
                 reply(self.emulators.snapshot(a.job_id, a.after.unwrap_or(0), a.limit.unwrap_or(RECENT))?)
+            }
+            // Pull the plug, or put it back: down until brought up, whatever its outage says.
+            "emulator_down" => {
+                let a = args!(command, value, { job_id: u64, down: bool, fault: Option<DownFault> });
+                self.emulators.force(a.job_id, a.down.then(|| a.fault.unwrap_or_default()))?;
+                reply(())
             }
 
             _ => Err(EngineError::new("command.unknown").with("name", command).into()),

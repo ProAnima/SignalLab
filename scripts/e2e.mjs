@@ -313,7 +313,17 @@ function plan(ports, fixtures, mode, dataDir) {
       expect("the TCP sink received bytes", counts.tcpBytes - at.tcp > 0, `${counts.tcpBytes - at.tcp} B`);
     } },
     { name: "scan", args: { port: ports.http } },
-    { name: "http", args: { port: ports.http }, before: mark, after: (expect) => expect("the API answered every request (GET, POST, 40 in the burst)", counts.http - at.http >= 42, `${counts.http - at.http} requests`) },
+    { name: "http", args: { port: ports.http }, before: mark, after: (expect) => {
+      expect("the API answered every request (GET, POST, 40 in the burst, 20 at a rate)", counts.http - at.http >= 62, `${counts.http - at.http} requests`);
+      expect("the fixture's own check accepted the Digest answer after one challenge", counts.digestAnswered >= 1 && counts.digestChallenges >= 1, `${counts.digestChallenges} challenges, ${counts.digestAnswered} answered`);
+      expect("/me saw the cookie, then not", counts.me.join(",") === "200,401", counts.me.join(","));
+    } },
+    { name: "websocket", args: { port: ports.ws }, after: (expect) => {
+      const upgrade = counts.wsUpgrades.find((each) => each.path === "/tour");
+      expect("the echo service got the upgrade with its header and subprotocols", upgrade?.headers["x-tour"] === "e2e" && upgrade?.protocols.join(",") === "tour.v1,tour.v0", JSON.stringify(upgrade?.protocols));
+      expect("…the text and the bytes", counts.wsMessages.includes('{"hello":"tour"}') && counts.wsMessages.includes("binary cafe"), counts.wsMessages.join(" | "));
+      expect("…and a close frame with 1000", counts.wsCloses.includes(1000), counts.wsCloses.join(","));
+    } },
     { name: "library", args: { port: ports.http }, after: async (expect) => {
       // On this machine the library file is right here: the folders it ended with, and no test signal left.
       const file = join(dataDir, "signals.json");
@@ -332,6 +342,9 @@ function plan(ports, fixtures, mode, dataDir) {
     { name: "experimentRepeat", args: { device: ports.device, pong: ports.pong }, before: mark, after: (expect) => expect("the device got three pings", counts.pings - at.pings === 3, `${counts.pings - at.pings} pings`) },
     { name: "experimentLoop", args: { device: ports.device }, before: mark, after: (expect) => expect("the device was polled three times", counts.statusPolls - at.polls === 3, `${counts.statusPolls - at.polls} polls`) },
     { name: "experimentEmulator", args: { port: ports.emulatorRun } },
+    { name: "experimentFaults" },
+    { name: "experimentAuth", args: { port: ports.http }, before: mark, after: (expect) => expect("the run's Digest request was answered and checked", counts.digestAnswered >= 2, `${counts.digestAnswered} answered`) },
+    { name: "experimentWs", args: { port: ports.ws }, after: (expect) => expect("the echo service saw the run's ping", counts.wsMessages.some((text) => text.startsWith('{"type":"ping"')), counts.wsMessages.join(" | ")) },
     // The layout step works on the parallel flows this one leaves open.
     { name: "experimentParallel", args: { port: ports.http } },
     { name: "experimentExport", args: { mode, dataDir } },

@@ -82,7 +82,7 @@ impl Responder {
     }
 
     fn answer(&self, socket: &Arc<UdpSocket>, datagram: &Datagram) -> Option<u64> {
-        if self.context.down_for().is_some() {
+        if self.context.down().is_some() {
             return self.down(datagram);
         }
         match &self.context.compiled.rules {
@@ -298,7 +298,7 @@ pub(crate) async fn serve_tcp(listener: TcpListener, context: Arc<Context>) -> E
             continue;
         }
         // Down: the connection is closed as it arrives, before the greeting.
-        if context.down_for().is_some() {
+        if context.down().is_some() {
             drop(stream);
             context.emulation.record(Exchange { from: peer.to_string(), request: "connect".into(), down: true, ..Default::default() });
             continue;
@@ -332,8 +332,7 @@ async fn connection(mut stream: TcpStream, peer: SocketAddr, context: &Context) 
     }
     let mut buffer = Vec::new();
     let mut chunk = vec![0u8; 8192];
-    // An outage drops connections that are quiet too, not only the next to speak.
-    let outage = context.compiled.outage.is_some();
+    // Going down drops connections that are quiet too, not only the next to speak.
     let mut tick = tokio::time::interval(Duration::from_millis(100));
     loop {
         let size = tokio::select! {
@@ -341,8 +340,8 @@ async fn connection(mut stream: TcpStream, peer: SocketAddr, context: &Context) 
                 Ok(0) | Err(_) => return,
                 Ok(size) => size,
             },
-            _ = tick.tick(), if outage => {
-                if context.down_for().is_some() {
+            _ = tick.tick() => {
+                if context.down().is_some() {
                     let _ = stream.shutdown().await;
                     return;
                 }
@@ -370,7 +369,7 @@ async fn reply_line(stream: &mut TcpStream, peer: SocketAddr, message: &[u8], co
     let capture = context.capturing();
     let line = ascii_preview(message, SHOWN);
     // Down: nothing is answered, and the connection drops.
-    if context.down_for().is_some() {
+    if context.down().is_some() {
         let frame = capture.then(|| context.publish(Frame::rx("tcp", "emulator").remote(peer).payload(message).summary(&line).verdict("down"))).flatten();
         context.emulation.record(Exchange { from: peer.to_string(), request: line, frame, down: true, ..Default::default() });
         let _ = stream.shutdown().await;

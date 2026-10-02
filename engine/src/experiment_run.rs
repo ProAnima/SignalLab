@@ -20,17 +20,20 @@ use crate::host::Host;
 
 use super::emulator_run;
 use super::emulator_state::{Emulation, EmulatorSummary};
-use super::error::{EngineError, EngineResult};
-use super::experiment::{Experiment, RUN_LIMIT};
+use super::error::{EngineError, EngineResult, Field};
+use super::experiment::{Experiment, NodeKind, RUN_LIMIT};
 use super::experiment_data as data;
 use super::experiment_flow::{self as flow, arm_listeners, arm_subscriptions, Followers, Prepared};
 use super::experiment_report::{save_report, RunSettings};
-use super::experiment_steps::{self as steps, BranchContext, StepEnv};
+use super::experiment_steps::{self as steps, BranchContext, RunSockets, StepEnv};
 use super::experiment_validate::validate_run;
+use super::netsim::{ImpairmentSummary, Relay};
+use super::netsim_run;
 use super::http::HttpResponse;
 use super::jobs::{now_ms, JobInfo, JobRegistry};
 use super::secrets::{self, SecretStore};
 use super::template::{Renderer, Scope};
+use super::ws::{self, WsConfig};
 
 #[derive(Clone, Debug, Serialize)]
 pub struct RunEvent {
@@ -130,6 +133,9 @@ pub struct RunResult {
     /// What each Emulator node received and answered, rule by rule.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub emulators: Vec<EmulatorSummary>,
+    /// What each Impairment node's relay did, phase by phase.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub impairments: Vec<ImpairmentSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub report_path: Option<String>,
     /// The report could not be written.
@@ -158,8 +164,9 @@ pub struct RunHandle {
     /// What a stopped run reports — it is aborted, so it hands over nothing itself.
     events: Arc<Mutex<Vec<RunEvent>>>,
     params: BTreeMap<String, String>,
-    /// The emulators' counters, which a stopped run reports too.
+    /// The emulators' and relays' counters, which a stopped run reports too.
     emulators: Vec<(String, Arc<Emulation>)>,
+    relays: Vec<(String, Arc<Relay>)>,
 }
 
 impl RunHandle {
@@ -216,6 +223,7 @@ impl RunHandle {
             error: None,
             steps: self.events.lock().map(|events| events.clone()).unwrap_or_default(),
             emulators: summaries(&self.emulators),
+            impairments: netsim_run::summaries(&self.relays),
             report_path: None,
             report_error: None,
         }
@@ -265,11 +273,15 @@ pub async fn start_followed(host: Host, jobs: JobRegistry, doc: Experiment, opti
     let id = jobs.next_id();
     let seed = seed.or(doc.seed).unwrap_or_else(|| rand::random::<u64>() & data::MAX_SEED);
     let mut emulators = emulator_run::arm_run(&host, &doc.nodes, &params, seed, id).await?;
+    let mut relays = netsim_run::arm_run(&host, &doc.nodes, &params, seed, id).await?;
     let listeners = arm_listeners(&doc.nodes, Arc::new(host.clone()), &emulators.taps).await?;
     let subscriptions = arm_subscriptions(&host, &doc.nodes, &params).await?;
     let serving = emulators.take_serving();
+    let relay_serving = relays.take_serving();
     let reports = std::mem::take(&mut emulators.reports);
     let http = std::mem::take(&mut emulators.http);
+    let relay_list = std::mem::take(&mut relays.relays);
+    let handle_relays = relay_list.clone();
     let info = JobInfo::new(id, "experiment", doc.name.clone()).with("name", &doc.name);
     let host_cl = host.clone();
     let jobs_cl = jobs.clone();
@@ -295,12 +307,25 @@ pub async fn start_followed(host: Host, jobs: JobRegistry, doc: Experiment, opti
             return;
         }
         let events = followers.events.clone();
-        let prepared = Prepared { seed, params: settings.params.clone(), secrets: secret_values, listeners, subscriptions, http, serving, limit };
+        let prepared = Prepared {
+            seed,
+            params: settings.params.clone(),
+            secrets: secret_values,
+            listeners,
+            subscriptions,
+            http,
+            serving,
+            relays: relay_list.iter().map(|(node, relay)| (node.clone(), relay.clone())).collect(),
+            relay_serving,
+            emulations: reports.iter().map(|(node, emulation)| (node.clone(), emulation.clone())).collect(),
+            limit,
+        };
         let error = flow::run(&host_cl, followers, id, &doc, prepared).await.err();
         let steps = events.lock().map(|list| list.clone()).unwrap_or_default();
         let ended_ms = now_ms();
         let emulators = summaries(&reports);
-        let (report_path, report_error) = match save_report(id, &settings, started_ms, ended_ms, &doc, &steps, &emulators, &error) {
+        let impairments = netsim_run::summaries(&relay_list);
+        let (report_path, report_error) = match save_report(id, &settings, started_ms, ended_ms, &doc, &steps, &emulators, &impairments, &error) {
             Ok(path) => (Some(path), None),
             Err(error) => (None, Some(error)),
         };
@@ -331,13 +356,14 @@ pub async fn start_followed(host: Host, jobs: JobRegistry, doc: Experiment, opti
             error,
             steps,
             emulators,
+            impairments,
             report_path,
             report_error,
         });
     });
     jobs.insert(info.clone(), task);
     let _ = ready_tx.send(());
-    Ok(RunHandle { started, info, steps: steps_rx, end: end_rx, ended: None, done: false, events, params: handle_params, emulators: handle_reports })
+    Ok(RunHandle { started, info, steps: steps_rx, end: end_rx, ended: None, done: false, events, params: handle_params, emulators: handle_reports, relays: handle_relays })
 }
 
 /// What *Send now* reports. Secret values are masked and the resolved request
@@ -365,8 +391,16 @@ pub async fn send_node(
     if !node.kind.is_action() && !node.kind.is_wait() {
         return Err(EngineError::new("run.not_an_action").at(node_id));
     }
+    // A WebSocket send or wait needs its connection: the *WebSocket connect* it names opens one for it.
+    let opener = match node.kind.connection() {
+        Some(connection) => match doc.nodes.iter().find(|candidate| candidate.id == connection) {
+            Some(opener) if matches!(opener.kind, NodeKind::WsConnect { .. }) => Some(opener),
+            _ => return Err(EngineError::new("ws.connection_unknown").with("id", connection).in_field(Field::new("connection")).at(node_id)),
+        },
+        None => None,
+    };
     let params = data::effective_params(doc, doc.profile.as_deref(), &BTreeMap::new());
-    let secret_values = data::load_secrets(std::iter::once(node), store)?;
+    let secret_values = data::load_secrets(std::iter::once(node).chain(opener), store)?;
     let masked: Vec<String> = secret_values.values().cloned().collect();
     let _redaction = secrets::redact(masked.clone());
     let seed = doc.seed.unwrap_or_else(|| rand::random::<u64>() & data::MAX_SEED);
@@ -379,6 +413,16 @@ pub async fn send_node(
     let _serving = emulators.take_serving();
     let listeners = arm_listeners(nodes, Arc::new(host.clone()), &emulators.taps).await.map_err(failed)?;
     let subscriptions = arm_subscriptions(host, nodes, &params).await.map_err(failed)?;
+    let websockets = RunSockets::default();
+    if let Some(opener) = opener {
+        let scope = Scope { params: &params, vars, secrets: &secret_values, run_id: 0, seed, node_id: &opener.id, count: 1, now_ms: now_ms() };
+        let opened = |error: EngineError| error.at(&opener.id).masked(&masked);
+        if let NodeKind::WsConnect { url, headers, protocols, timeout_ms } = data::render_kind(&opener.kind, &mut Renderer::new(scope)).map_err(opened)? {
+            let config = WsConfig { url, headers, protocols, timeout_ms };
+            let socket = ws::open(host, &config, "experiment", None).await.map_err(opened)?;
+            websockets.lock().unwrap().insert(opener.id.clone(), Arc::new(socket));
+        }
+    }
     let env = StepEnv {
         host,
         node_id,
@@ -388,6 +432,12 @@ pub async fn send_node(
         listeners,
         subscriptions,
         http: std::mem::take(&mut emulators.http),
+        // Send now never takes a relay or an emulator down: those are a run's.
+        relays: Default::default(),
+        emulators: Default::default(),
+        websockets,
+        // One request: nothing set before it to send back.
+        cookies: None,
         has_timeout: false,
         has_limit: false,
         inputs: 1,

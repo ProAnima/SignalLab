@@ -40,6 +40,9 @@ pub fn environmental(code: &str) -> bool {
         || matches!(
             code,
             "wait.bind_failed"
+                | "ws.handshake_status"
+                | "ws.handshake_failed"
+                | "ws.closed"
                 | "socket.option_failed"
                 | "http.client_failed"
                 | "secret.store"

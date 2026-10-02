@@ -50,6 +50,7 @@
   /* Waits: they listen rather than send, so they get their own marker. */
   --node-observe: #8fe3b4;
   --node-emulate: #f08bd0;
+  --node-fault: #ff9f5a;
   --radius: 12px;
   --radius-sm: 8px;
   --radius-xs: 6px;

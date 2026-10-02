@@ -24,6 +24,8 @@
 @import "./styles/inspector.css";
 @import "./styles/library.css";
 @import "./styles/mqtt.css";
+@import "./styles/ws.css";
+@import "./styles/http.css";
 @import "./styles/palette.css";
 @import "./styles/scrollbars.css";
 @import "./styles/experiment-graph.css";
@@ -33,3 +35,4 @@
 @import "./styles/errors.css";
 @import "./styles/banners.css";
 @import "./styles/emulators.css";
+@import "./styles/impairments.css";

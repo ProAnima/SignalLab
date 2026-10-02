@@ -28,7 +28,7 @@ export const hasTemplate = (text: string) => /(^|[^\\])\{\{/.test(text);
 /** The variable a node writes and the output it is set on: a wait has no reply on Timeout. */
 export function writtenVariable(node: ExperimentNode): { name: string; port: string } | null {
   if (node.type === "extract") return node.variable ? { name: node.variable, port: "next" } : null;
-  if (node.type === "wait_osc" || node.type === "wait_udp" || node.type === "wait_mqtt" || node.type === "wait_http") return node.variable ? { name: node.variable, port: "matched" } : null;
+  if (node.type === "wait_osc" || node.type === "wait_udp" || node.type === "wait_mqtt" || node.type === "wait_http" || node.type === "wait_ws") return node.variable ? { name: node.variable, port: "matched" } : null;
   // A send that waits for its reply passes only with one, so the reply exists on Next.
   if ((node.type === "osc" || node.type === "udp") && node.reply) return node.reply.variable ? { name: node.reply.variable, port: "next" } : null;
   return null;
@@ -74,6 +74,8 @@ export function replyFields(node: ExperimentNode): string[] {
   if (node.type === "wait_mqtt") return ["topic", ...udp(node.mode)];
   if (node.type === "udp" && node.reply) return udp(node.reply.mode);
   if (node.type === "wait_http") return ["method", "path", "query", "headers", "body", "json", "params", "from", "ms"];
+  // A WebSocket message adds `json`: its text parsed, when it is JSON.
+  if (node.type === "wait_ws") return ["json", ...udp(node.mode)];
   return [];
 }
 
@@ -92,14 +94,14 @@ export const DEFAULT_RETRY: Retry = { attempts: 3, delay_ms: 500, backoff: "fixe
 /** Repeat as the node first gets it: ten sends, a second apart. */
 export const DEFAULT_REPEAT: Repeat = { until: "count", count: 10, duration_ms: 10_000, interval_ms: 1000, jitter_ms: 0 };
 
-/** Sends, so it can send again and again (the engine's `NodeKind::is_action`). */
+/** Sends, so it can send again and again (the engine's `NodeKind::repeats`): not a connect. */
 export function canRepeat(node: ExperimentNode): boolean {
-  return ["http", "tcp", "mqtt", "osc", "udp"].includes(node.type);
+  return ["http", "tcp", "mqtt", "osc", "udp", "ws_send"].includes(node.type);
 }
 
 /** Sends or listens, so a second attempt may succeed (the engine's `NodeKind::retries`). */
 export function canRetry(node: ExperimentNode): boolean {
-  return ["http", "tcp", "mqtt", "osc", "udp", "wait_osc", "wait_udp", "wait_mqtt", "wait_http"].includes(node.type);
+  return ["http", "tcp", "mqtt", "osc", "udp", "ws_connect", "ws_send", "wait_osc", "wait_udp", "wait_mqtt", "wait_http", "wait_ws"].includes(node.type);
 }
 
 /** `$.items[0]["first name"]` from the steps into a JSON value. */

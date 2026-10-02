@@ -27,12 +27,31 @@ export interface OscMessage {
   args: OscArg[];
 }
 
+/** Credentials a request carries (engine/src/http_auth.rs); its Authorization header is never reported. */
+export type HttpAuth =
+  | { scheme: "none" }
+  | { scheme: "basic" | "digest"; username: string; password: string }
+  | { scheme: "bearer"; token: string };
+
 export interface HttpRequest {
   method: string;
   url: string;
   headers: [string, string][];
   body: string | null;
   timeout_ms: number;
+  /** Absent: none. Digest answers the server's 401 challenge (MD5, SHA-256). */
+  auth?: HttpAuth;
+}
+
+/** One cookie of a jar (engine/src/cookies.rs). */
+export interface CookieInfo {
+  name: string; value: string; domain: string;
+  /** No Domain attribute: only the host that set it gets it back. */
+  host_only: boolean;
+  path: string;
+  /** Unix seconds; null: a session cookie. */
+  expires: number | null;
+  secure: boolean; http_only: boolean; same_site: string | null;
 }
 
 export interface HttpResponse {
@@ -48,6 +67,8 @@ export interface HttpResponse {
   error: string | null;
   /** What kind of failure `error` is; the screen shows `err.transport.<cause>`. */
   cause?: TransportCause | null;
+  /** A Digest request: its 401 challenge answered (`challenged`), or why it could not be. */
+  digest?: { challenged: boolean; error: EngineError | null } | null;
 }
 
 /** Why a network operation failed (`engine/transport.rs`). */
@@ -118,6 +139,18 @@ export type ExperimentNode = {
   | { type: "emulator"; emulator: Emulator }
   /** A request to the run's HTTP emulator on `bind`, or to a listener of the run's own that answers 204. */
   | { type: "wait_http"; bind: string; method: string; path: string; when: Condition[]; timeout_ms: number; variable: string }
+  /** A UDP impairment relay for the whole run: `listen` → `target`; addresses take parameters only. */
+  | { type: "impairment"; listen: string; target: string; profile: ImpairProfile }
+  /** The run's Impairment `relay` (a node id) impairs with `profile` from now on. */
+  | { type: "impairment_change"; relay: string; profile: ImpairProfile }
+  /** The run's Emulator `emulator` (a node id) goes down, or comes back up. */
+  | { type: "emulator_state"; emulator: string; down: boolean; fault: DownFault }
+  /** A WebSocket for the rest of the run; the nodes below name it by this node's id. */
+  | { type: "ws_connect"; url: string; headers: [string, string][]; protocols: string[]; timeout_ms: number }
+  /** `binary`: `text` is hex bytes, sent as a binary message. */
+  | { type: "ws_send"; connection: string; text: string; binary: boolean }
+  | { type: "wait_ws"; connection: string; mode: UdpMode; pattern: string; timeout_ms: number; variable: string }
+  | { type: "ws_close"; connection: string; code: number; reason: string }
 );
 
 // ---- emulators (engine/src/emulator.rs) ----
@@ -186,8 +219,9 @@ export interface Exchange {
   /** What arrived, as templates read it (`emulator_exchanges` only). */
   data?: unknown;
 }
-export interface EmulatorSnapshot { job_id: number; name: string; protocol: EmulatorProtocol; local: string; counts: EmulatorCounts; exchanges: Exchange[] }
-export interface EmulatorActivity { job_id: number; ts: number; counts: EmulatorCounts; exchanges: Exchange[]; dropped: number }
+/** `forced`: taken down by a person or a run, with what HTTP meets meanwhile. */
+export interface EmulatorSnapshot { job_id: number; name: string; protocol: EmulatorProtocol; local: string; counts: EmulatorCounts; forced?: DownFault; exchanges: Exchange[] }
+export interface EmulatorActivity { job_id: number; ts: number; counts: EmulatorCounts; forced?: DownFault; exchanges: Exchange[]; dropped: number }
 
 /** `args[index] <op> value` on a received OSC message; the value is a template. */
 export interface ArgRule { index: number; op: CompareOp; value: string }
@@ -219,6 +253,8 @@ export interface Experiment {
   profile: string | null;
   /** null: a fresh seed for every run. */
   seed: number | null;
+  /** Send back what servers set with Set-Cookie, as a browser does. Absent: on (off for files from before version 8). */
+  cookies?: boolean;
   nodes: ExperimentNode[];
   edges: { from: string; to: string; port?: ExperimentPort }[];
 }
@@ -257,23 +293,39 @@ export interface GenConfig {
 }
 
 export interface BurstConfig extends HttpRequest {
+  /** At most this many in flight. */
   concurrency: number;
   total: number;
   duration_s: number;
+  /** Requests started per second on a fixed schedule; 0: each worker sends again on its answer. */
+  rate?: number;
+  /** Use the screen's cookie jar, as its single requests do. */
+  cookies?: boolean;
 }
 
+/** What an impairment relay does to every packet, both ways (engine/src/netsim.rs). Probabilities are 0..1. */
 export interface ImpairProfile {
+  /** A preset's key (`4g`) or a person's own label; empty: described by its values. */
+  name?: string;
   latency_ms: number;
   jitter_ms: number;
   loss: number;
   duplicate: number;
   corrupt: number;
+  reorder?: number;
+  /** 0: no limit. */
+  rate_kbps?: number;
+  /** Bursts of loss: the chance a packet starts one, and how many packets one lasts on average. */
+  burst_start?: number;
+  burst_length?: number;
+  offline?: boolean;
 }
 
 export interface ProxyConfig {
   listen: string;
   target: string;
   profile: ImpairProfile;
+  seed?: number | null;
 }
 
 export interface StormConfig {
@@ -354,6 +406,33 @@ export interface Peer {
   last_summary: string;
   responded: number;
 }
+
+// ---- websocket (engine/src/ws.rs) ----
+
+export interface WsConfig {
+  /** ws:// or wss:// */
+  url: string;
+  headers: [string, string][];
+  /** Subprotocols to offer, in order of preference. */
+  protocols: string[];
+  timeout_ms: number;
+}
+/** Text, or bytes as hex (a binary message). */
+export type WsPayload = { text: string } | { hex: string };
+export interface WsHandshake { url: string; peer: string; local: string; protocol: string | null; ms: number }
+export interface WsClosed { code: number; reason: string; by: "client" | "server" | "lost"; error: EngineError | null }
+export interface WsMessage {
+  ts: number;
+  dir: "rx" | "tx";
+  kind: "text" | "binary";
+  /** UTF-8 (lossy for binary, which has `hex` too), cut at 64 KB: then `truncated`. */
+  text: string;
+  hex: string | null;
+  bytes: number;
+  truncated: boolean;
+}
+export interface WsBatch { job_id: number; ts: number; messages: WsMessage[]; dropped: number }
+export interface WsStateEvent { job_id: number; ts: number; state: "connected" | "closed"; handshake: WsHandshake; closed: WsClosed | null }
 
 // ---- mqtt ----
 
@@ -480,12 +559,20 @@ export interface OscInbound {
 export interface GenTick { job_id: number; ts: number; value: number; sent: number; }
 export interface BurstProgress {
   job_id: number; ts: number; sent: number; ok: number; failed: number;
+  /** Due while every worker was busy, and skipped (a paced burst). */
+  missed: number;
+  /** Over the last report's window; in the last report (`done`), over the whole burst. */
   rps: number; last_latency_ms: number; min_latency_ms: number;
   max_latency_ms: number; avg_latency_ms: number;
+  /** Over every request so far, failures included. */
+  p50_ms: number; p90_ms: number; p95_ms: number; p99_ms: number;
+  done: boolean;
 }
 export interface ProxyStat {
-  job_id: number; ts: number; forwarded: number; dropped: number;
-  duplicated: number; corrupted: number; bytes: number;
+  job_id: number; ts: number; received: number; forwarded: number; dropped: number; throttled: number;
+  duplicated: number; corrupted: number; reordered: number; bytes: number;
+  /** The profile it impairs with now, as the timeline names it. */
+  profile: string;
 }
 export interface StormStat {
   job_id: number; ts: number; packets: number; bytes: number;
@@ -594,10 +681,15 @@ export const api = {
   oscMonitorStart: (bind: string) => invoke<JobInfo>("osc_monitor_start", { bind }),
   oscGeneratorStart: (config: GenConfig) => invoke<JobInfo>("osc_generator_start", { config }),
 
-  httpRequest: (request: HttpRequest) => invoke<HttpResponse>("http_request", { request }),
+  /** `cookies`: send the screen's jar and keep what the answer sets. */
+  httpRequest: (request: HttpRequest, cookies = false) => invoke<HttpResponse>("http_request", { request, cookies }),
+  httpCookies: () => invoke<CookieInfo[]>("http_cookies"),
+  httpCookiesClear: () => invoke<null>("http_cookies_clear"),
   httpBurstStart: (config: BurstConfig) => invoke<JobInfo>("http_burst_start", { config }),
 
   netsimStart: (config: ProxyConfig) => invoke<JobInfo>("netsim_start", { config }),
+  /** A running relay impairs with `profile` from now on, without rebinding. */
+  netsimSetProfile: (jobId: number, profile: ImpairProfile) => invoke<null>("netsim_set_profile", { jobId, profile }),
   stormStart: (config: StormConfig) => invoke<JobInfo>("storm_start", { config }),
   scanStart: (config: ScanConfig) => invoke<JobInfo>("scan_start", { config }),
 
@@ -613,6 +705,11 @@ export const api = {
   inspectClear: () => invoke<CaptureStats>("inspect_clear"),
   inspectExport: (format: "jsonl" | "txt") => invoke<string>("inspect_export", { format }),
 
+  /** A connection held open as a job; events `ws://state`, `ws://messages`. */
+  wsConnect: (config: WsConfig) => invoke<JobInfo>("ws_connect", { config }),
+  wsSend: (jobId: number, message: WsPayload) => invoke<number>("ws_send", { jobId, message }),
+  /** A close handshake; the job ends once the server has answered. */
+  wsClose: (jobId: number, code = 1000, reason = "") => invoke<WsClosed>("ws_close", { jobId, code, reason }),
   mqttConnect: (config: MqttConfig) => invoke<JobInfo>("mqtt_connect", { config }),
   mqttPublish: (jobId: number, topic: string, payload: string, qos: number, retain: boolean) =>
     invoke<void>("mqtt_publish", { jobId, topic, payload, qos, retain }),
@@ -635,6 +732,8 @@ export const api = {
   emulatorStart: (emulator: Emulator, source: string | null, params?: Record<string, string>) =>
     invoke<JobInfo>("emulator_start", { emulator, params: params ?? null, seed: null, source }),
   emulatorExchanges: (jobId: number, after = 0) => invoke<EmulatorSnapshot>("emulator_exchanges", { jobId, after, limit: null }),
+  /** Take a running emulator down (HTTP meets `fault`) until brought up, whatever its outage says. */
+  emulatorDown: (jobId: number, down: boolean, fault: DownFault = "unavailable") => invoke<null>("emulator_down", { jobId, down, fault }),
 };
 
 // Typed event subscription helper.
@@ -656,6 +755,8 @@ export const EV = {
   emitStat: "broadcast://emit-stat",
   peers: "broadcast://peers",
   inspectBatch: "inspect://batch",
+  wsMessages: "ws://messages",
+  wsState: "ws://state",
   mqttMessages: "mqtt://messages",
   mqttState: "mqtt://state",
   mqttAck: "mqtt://ack",

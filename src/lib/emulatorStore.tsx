@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { api, on, EV, type Emulator, type EmulatorActivity, type EmulatorCounts, type Exchange, type JobInfo, type StoredEmulator } from "./api";
+import { api, on, EV, type DownFault, type Emulator, type EmulatorActivity, type EmulatorCounts, type Exchange, type JobInfo, type StoredEmulator } from "./api";
 import { localizeEmulatorSeed } from "./emulators";
 import { useStore, type SaveState } from "./store";
 import { useI18n } from "./i18n";
@@ -17,6 +17,8 @@ export interface Live {
   exchanges: Exchange[];
   /** Exchanges that happened but were not sent to this page. */
   dropped: number;
+  /** Taken down by a person or a run, with what HTTP meets meanwhile. */
+  forced?: DownFault;
 }
 
 interface EmulatorStore {
@@ -121,7 +123,7 @@ export function EmulatorProvider({ children }: { children: ReactNode }) {
         const before = prior[activity.job_id] ?? { counts: activity.counts, exchanges: [], dropped: 0 };
         const known = new Set(before.exchanges.map((exchange) => exchange.seq));
         const exchanges = [...before.exchanges, ...activity.exchanges.filter((exchange) => !known.has(exchange.seq))].slice(-SHOWN);
-        return { ...prior, [activity.job_id]: { counts: activity.counts, exchanges, dropped: before.dropped + activity.dropped } };
+        return { ...prior, [activity.job_id]: { counts: activity.counts, exchanges, dropped: before.dropped + activity.dropped, forced: activity.forced } };
       });
     });
     return () => { off.then((stop) => stop()); };
@@ -133,7 +135,7 @@ export function EmulatorProvider({ children }: { children: ReactNode }) {
       if (live[job.id] || asked.current.has(job.id)) continue;
       asked.current.add(job.id);
       api.emulatorExchanges(job.id).then(
-        (snapshot) => setLive((prior) => prior[job.id] ? prior : { ...prior, [job.id]: { counts: snapshot.counts, exchanges: snapshot.exchanges.slice(-SHOWN), dropped: 0 } }),
+        (snapshot) => setLive((prior) => prior[job.id] ? prior : { ...prior, [job.id]: { counts: snapshot.counts, exchanges: snapshot.exchanges.slice(-SHOWN), dropped: 0, forced: snapshot.forced } }),
         () => {},
       );
     }

@@ -192,7 +192,7 @@ fn doc(broker: SocketAddr, filter: &str, timeout_wired: bool, wait_timeout_ms: u
         edges.push(json!({ "from": "silent", "to": "end", "port": "next" }));
     }
     let mut document = json!({
-        "version": 6, "name": "MQTT ping", "seed": null, "profile": null, "profiles": [],
+        "version": 8, "name": "MQTT ping", "seed": null, "profile": null, "profiles": [],
         "params": [{ "name": "broker", "value": "127.0.0.1" }],
         "nodes": [
             { "id": "start", "type": "start", "x": 0, "y": 0 },

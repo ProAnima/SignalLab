@@ -1,9 +1,10 @@
 // Loopback stand-ins for the gear the end-to-end tour talks to: an HTTP API,
-// a UDP and a TCP sink, an OSC device that answers /ping with /pong, and a
-// small MQTT 3.1.1 broker. Everything listens on 127.0.0.1 and counts what it
-// received, so the runner can check the far end of every send, not only what
-// the interface says it did. No dependencies.
+// a UDP and a TCP sink, an OSC device that answers /ping with /pong, a small
+// MQTT 3.1.1 broker and a WebSocket echo service. Everything listens on
+// 127.0.0.1 and counts what it received, so the runner can check the far end
+// of every send, not only what the interface says it did. No dependencies.
 
+import { createHash, randomBytes } from "node:crypto";
 import { createSocket } from "node:dgram";
 import { createServer } from "node:http";
 import { createServer as createTcpServer } from "node:net";
@@ -206,6 +207,96 @@ function startBroker(counts) {
   return { server, clients };
 }
 
+// ---- HTTP Digest (RFC 7616), checked here with hashing of its own: SHA-256, qop=auth ----
+
+export const DIGEST = { realm: "tour", username: "tour", password: "e2e-secret" };
+
+function digestParams(header) {
+  const params = {};
+  for (const match of header.matchAll(/(\w+)=(?:"((?:[^"\\]|\\.)*)"|([^,\s]+))/g)) params[match[1]] = match[2] ?? match[3];
+  return params;
+}
+
+/** Whether `header` answers one of `nonces` for `method`, as RFC 7616 computes it. */
+function digestAnswered(header, method, nonces) {
+  if (!header?.startsWith("Digest ")) return false;
+  const p = digestParams(header.slice(7));
+  if (!nonces.has(p.nonce) || p.username !== DIGEST.username || p.realm !== DIGEST.realm || p.qop !== "auth" || p.algorithm !== "SHA-256") return false;
+  const h = (text) => createHash("sha256").update(text).digest("hex");
+  const ha1 = h(`${p.username}:${p.realm}:${DIGEST.password}`);
+  const ha2 = h(`${method}:${p.uri}`);
+  return p.response === h(`${ha1}:${p.nonce}:${p.nc}:${p.cnonce}:${p.qop}:${ha2}`);
+}
+
+// ---- WebSocket (RFC 6455), just enough for an echo service ---------------------
+
+/** A frame from the server: unmasked, unfragmented. */
+function wsFrame(opcode, payload) {
+  const length = payload.length;
+  const head = length < 126 ? Buffer.from([0x80 | opcode, length])
+    : length < 65536 ? Buffer.from([0x80 | opcode, 126, length >> 8, length & 0xff])
+    : (() => { const big = Buffer.alloc(10); big[0] = 0x80 | opcode; big[1] = 127; big.writeBigUInt64BE(BigInt(length), 2); return big; })();
+  return Buffer.concat([head, payload]);
+}
+
+/** The next whole frame of `buffer` (a client's: masked), or null while it is still arriving. */
+function wsParse(buffer) {
+  if (buffer.length < 2) return null;
+  const opcode = buffer[0] & 0x0f;
+  const masked = (buffer[1] & 0x80) !== 0;
+  let length = buffer[1] & 0x7f;
+  let at = 2;
+  if (length === 126) { if (buffer.length < 4) return null; length = buffer.readUInt16BE(2); at = 4; }
+  else if (length === 127) { if (buffer.length < 10) return null; length = Number(buffer.readBigUInt64BE(2)); at = 10; }
+  const mask = masked ? buffer.subarray(at, at + 4) : null;
+  if (masked) at += 4;
+  if (buffer.length < at + length) return null;
+  const payload = Buffer.from(buffer.subarray(at, at + length));
+  if (mask) for (let i = 0; i < payload.length; i++) payload[i] ^= mask[i % 4];
+  return { opcode, payload, used: at + length };
+}
+
+/**
+ * An echo service: `welcome` on connecting, then every text and binary
+ * message back as it came; pings answered, a close answered. It takes the
+ * first subprotocol offered and keeps the headers of each upgrade.
+ */
+function startWebSocket(counts) {
+  const server = createServer((request, response) => response.writeHead(426, { connection: "close" }).end("WebSocket only"));
+  const sockets = new Set();
+  server.on("upgrade", (request, socket) => {
+    const key = request.headers["sec-websocket-key"];
+    if (!key) { socket.destroy(); return; }
+    const accept = createHash("sha1").update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest("base64");
+    const offered = String(request.headers["sec-websocket-protocol"] ?? "").split(",").map((name) => name.trim()).filter(Boolean);
+    counts.wsUpgrades.push({ path: request.url, protocols: offered, headers: request.headers });
+    socket.write(["HTTP/1.1 101 Switching Protocols", "Upgrade: websocket", "Connection: Upgrade", `Sec-WebSocket-Accept: ${accept}`,
+      ...(offered.length ? [`Sec-WebSocket-Protocol: ${offered[0]}`] : []), "", ""].join("\r\n"));
+    sockets.add(socket);
+    socket.write(wsFrame(1, Buffer.from("welcome")));
+    let pending = Buffer.alloc(0);
+    socket.on("data", (chunk) => {
+      pending = Buffer.concat([pending, chunk]);
+      for (let frame = wsParse(pending); frame; frame = wsParse(pending)) {
+        pending = pending.subarray(frame.used);
+        if (frame.opcode === 1 || frame.opcode === 2) {
+          counts.wsMessages.push(frame.opcode === 1 ? frame.payload.toString("utf8") : `binary ${frame.payload.toString("hex")}`);
+          socket.write(wsFrame(frame.opcode, frame.payload));
+        } else if (frame.opcode === 9) {
+          socket.write(wsFrame(10, frame.payload));
+        } else if (frame.opcode === 8) {
+          counts.wsCloses.push(frame.payload.length >= 2 ? frame.payload.readUInt16BE(0) : 1005);
+          socket.end(wsFrame(8, frame.payload.subarray(0, 2)));
+        }
+      }
+    });
+    const gone = () => sockets.delete(socket);
+    socket.on("close", gone);
+    socket.on("error", gone);
+  });
+  return { server, sockets };
+}
+
 // ---- everything together ------------------------------------------------------
 
 const listen = (server, port = 0) => new Promise((resolve, reject) => {
@@ -225,7 +316,10 @@ export async function startFixtures({ pongPort }) {
   const counts = {
     http: 0, httpPaths: [], udp: 0, udpBytes: 0, tcpConnections: 0, tcpBytes: 0,
     pings: 0, statusPolls: 0, mqttConnections: 0, mqttPublishes: 0, mqttTopics: new Set(), mqttSubscriptions: [],
+    wsUpgrades: [], wsMessages: [], wsCloses: [],
+    digestChallenges: 0, digestAnswered: 0, me: [],
   };
+  const nonces = new Set();
 
   const http = createServer((request, response) => {
     const chunks = [];
@@ -233,6 +327,29 @@ export async function startFixtures({ pongPort }) {
     request.on("end", () => {
       counts.http += 1;
       counts.httpPaths.push(request.url);
+      // Digest: a challenge, then the answer checked; /login sets a cookie that /me wants.
+      if (request.url.startsWith("/digest")) {
+        if (digestAnswered(request.headers.authorization, request.method, nonces)) {
+          counts.digestAnswered += 1;
+          response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ digest: "ok" }));
+        } else {
+          counts.digestChallenges += 1;
+          const nonce = randomBytes(12).toString("hex");
+          nonces.add(nonce);
+          response.writeHead(401, { "www-authenticate": `Digest realm="${DIGEST.realm}", nonce="${nonce}", qop="auth", algorithm=SHA-256, opaque="tour"` }).end();
+        }
+        return;
+      }
+      if (request.url === "/login") {
+        response.writeHead(200, { "content-type": "application/json", "set-cookie": "tour=1; Path=/; HttpOnly" }).end(JSON.stringify({ ok: true }));
+        return;
+      }
+      if (request.url === "/me") {
+        const known = /(^|;\s*)tour=1(;|$)/.test(request.headers.cookie ?? "");
+        counts.me.push(known ? 200 : 401);
+        response.writeHead(known ? 200 : 401, { "content-type": "application/json" }).end(JSON.stringify({ me: known }));
+        return;
+      }
       const body = Buffer.concat(chunks).toString("utf8");
       const reply = JSON.stringify({ ok: true, method: request.method, path: request.url, body, n: counts.http });
       response.writeHead(200, { "content-type": "application/json", "x-fixture": "signal-lab-e2e" }).end(reply);
@@ -269,6 +386,9 @@ export async function startFixtures({ pongPort }) {
   const broker = startBroker(counts);
   const mqttPort = await listen(broker.server);
 
+  const websocket = startWebSocket(counts);
+  const wsPort = await listen(websocket.server);
+
   // Datagrams into a port of the app (the impairment relay), from a socket of their own.
   const sender = createSocket("udp4");
   await bindUdp(sender);
@@ -282,8 +402,9 @@ export async function startFixtures({ pongPort }) {
     new Promise((resolve) => { http.closeAllConnections(); http.close(resolve); }),
     new Promise((resolve) => tcp.close(resolve)),
     new Promise((resolve) => { for (const client of broker.clients) client.socket.destroy(); broker.server.close(resolve); }),
+    new Promise((resolve) => { for (const socket of websocket.sockets) socket.destroy(); websocket.server.close(resolve); }),
     ...[sink, device, sender].map((socket) => new Promise((resolve) => socket.close(resolve))),
   ]);
 
-  return { ports: { http: httpPort, sink: sinkPort, tcp: tcpPort, device: devicePort, mqtt: mqttPort, pong: pongPort }, counts, sendUdp, close };
+  return { ports: { http: httpPort, sink: sinkPort, tcp: tcpPort, device: devicePort, mqtt: mqttPort, ws: wsPort, pong: pongPort }, counts, sendUdp, close };
 }

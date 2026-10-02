@@ -1,26 +1,14 @@
-import { useEffect, useId, useState } from "react";
-import { api, EV, type JobInfo, type ProxyStat } from "../lib/api";
+import { useEffect, useRef, useState } from "react";
+import { api, EV, type ImpairProfile, type JobInfo, type ProxyStat } from "../lib/api";
 import { useStore } from "../lib/store";
-import { useT } from "../lib/i18n";
+import { useT, type TKey } from "../lib/i18n";
 import { useFieldIds, useJobStream } from "../lib/hooks";
 import { fmtBytes, fmtNum } from "../lib/format";
+import { fullProfile, impairNotation, IMPAIR_PRESETS, presetOf, type ImpairPreset } from "../lib/impairments";
+import { ImpairProfileFields } from "../components/ImpairProfileFields";
 
-function Slider({ label, tip, value, onChange, min, max, step, unit }: {
-  label: string; tip: string; value: number; onChange: (v: number) => void;
-  min: number; max: number; step: number; unit: string;
-}) {
-  const id = useId();
-  return (
-    <div className="field">
-      <label htmlFor={id} data-tip={tip} style={{ display: "flex", justifyContent: "space-between" }}>
-        <span>{label}</span>
-        <span style={{ fontFamily: "var(--mono)", color: "var(--accent)" }}>{value}{unit}</span>
-      </label>
-      {/* aria-valuetext: a screen reader says the value with its unit, as the label shows it. */}
-      <input id={id} type="range" min={min} max={max} step={step} value={value} aria-valuetext={`${value}${unit}`} onChange={(e) => onChange(+e.target.value)} />
-    </div>
-  );
-}
+/** How long after the last change a running relay is told the new profile. */
+const APPLY_AFTER_MS = 250;
 
 export function NetsimView() {
   const { pushLog, pushError, refreshJobs, stopJob, jobGone } = useStore();
@@ -29,11 +17,7 @@ export function NetsimView() {
 
   const [listen, setListen] = useState("0.0.0.0:9010");
   const [target, setTarget] = useState("127.0.0.1:9000");
-  const [latency, setLatency] = useState(40);
-  const [jitter, setJitter] = useState(15);
-  const [loss, setLoss] = useState(2);
-  const [duplicate, setDuplicate] = useState(0);
-  const [corrupt, setCorrupt] = useState(0);
+  const [profile, setProfile] = useState<ImpairProfile>(() => fullProfile({ latency_ms: 40, jitter_ms: 15, loss: 0.02, duplicate: 0, corrupt: 0 }));
 
   const [job, setJob] = useState<JobInfo | null>(null);
   const [stat, setStat] = useState<ProxyStat | null>(null);
@@ -43,24 +27,38 @@ export function NetsimView() {
     if (jobGone(job)) setJob(null);
   }, [jobGone, job]);
 
+  // A running relay takes an edit at once, without dropping its port: the
+  // profile it was started with is not sent again.
+  const applied = useRef<ImpairProfile | null>(null);
+  useEffect(() => {
+    if (!job || applied.current === profile) return;
+    const timer = window.setTimeout(() => {
+      applied.current = profile;
+      api.netsimSetProfile(job.id, profile).then(
+        // The preset's key, worded when the line is shown: the console re-renders in another language.
+        () => pushLog("info", "netsim", "log.netsimProfile", { profile: presetOf(profile) ?? impairNotation(profile) }),
+        (error) => pushError("netsim", error),
+      );
+    }, APPLY_AFTER_MS);
+    return () => window.clearTimeout(timer);
+  }, [job, profile, pushLog, pushError]);
+
   const toggle = async () => {
     if (job) { stopJob(job.id); setJob(null); return; }
     try {
       setStat(null);
-      const j = await api.netsimStart({
-        listen, target,
-        profile: {
-          latency_ms: latency, jitter_ms: jitter,
-          loss: loss / 100, duplicate: duplicate / 100, corrupt: corrupt / 100,
-        },
-      });
-      setJob(j);
-      pushLog("ok", "netsim", "log.netsimStarted", { listen, target, latency, jitter, loss });
+      const started = await api.netsimStart({ listen, target, profile });
+      applied.current = profile;
+      setJob(started);
+      const full = fullProfile(profile);
+      pushLog("ok", "netsim", "log.netsimStarted", { listen, target, latency: full.latency_ms, jitter: full.jitter_ms, loss: Math.round(full.loss * 1000) / 10 });
       refreshJobs();
-    } catch (e) {
-      pushError("netsim", e);
+    } catch (error) {
+      pushError("netsim", error);
     }
   };
+
+  const shownProfile = stat?.profile && IMPAIR_PRESETS.includes(stat.profile as ImpairPreset) ? t(`ns.preset.${stat.profile}` as TKey) : stat?.profile;
 
   return (
     <div>
@@ -80,12 +78,8 @@ export function NetsimView() {
             <input id={fid("target")} value={target} onChange={(e) => setTarget(e.target.value)} disabled={!!job} />
           </div>
 
-          <p className="section-label" style={{ marginTop: 20 }}>{t("ns.profile")}</p>
-          <Slider label={t("ns.latency")} tip={t("ns.latencyHint")} value={latency} onChange={setLatency} min={0} max={1000} step={5} unit={` ${t("unit.ms")}`} />
-          <Slider label={t("ns.jitter")} tip={t("ns.jitterHint")} value={jitter} onChange={setJitter} min={0} max={500} step={5} unit={` ${t("unit.ms")}`} />
-          <Slider label={t("ns.loss")} tip={t("ns.lossHint")} value={loss} onChange={setLoss} min={0} max={100} step={1} unit="%" />
-          <Slider label={t("ns.duplicate")} tip={t("ns.duplicateHint")} value={duplicate} onChange={setDuplicate} min={0} max={100} step={1} unit="%" />
-          <Slider label={t("ns.corrupt")} tip={t("ns.corruptHint")} value={corrupt} onChange={setCorrupt} min={0} max={100} step={1} unit="%" />
+          <p className="section-label" style={{ marginTop: 20 }} data-tip={t("ns.profileHint")}>{t("ns.profile")}</p>
+          <ImpairProfileFields profile={profile} onChange={setProfile} />
 
           <div className="btn-row">
             <button className={job ? "danger" : "primary"} onClick={toggle}>
@@ -96,14 +90,17 @@ export function NetsimView() {
 
         <div className="panel">
           <p className="section-label">{t("ns.live")}</p>
+          {job && shownProfile && <p className="impair-now" role="status">{t("ns.now", { profile: shownProfile })}</p>}
           <div className="metrics">
+            <div className="metric"><div className="k">{t("ns.received")}</div><div className="v">{fmtNum(stat?.received ?? 0)}</div></div>
             <div className="metric"><div className="k">{t("ns.forwarded")}</div><div className="v accent">{fmtNum(stat?.forwarded ?? 0)}</div></div>
             <div className="metric"><div className="k">{t("ns.dropped")}</div><div className="v red">{fmtNum(stat?.dropped ?? 0)}</div></div>
+            <div className="metric"><div className="k" data-tip={t("ns.throttledHint")}>{t("ns.throttled")}</div><div className="v red">{fmtNum(stat?.throttled ?? 0)}</div></div>
             <div className="metric"><div className="k">{t("ns.duplicated")}</div><div className="v amber">{fmtNum(stat?.duplicated ?? 0)}</div></div>
             <div className="metric"><div className="k">{t("ns.corrupted")}</div><div className="v amber">{fmtNum(stat?.corrupted ?? 0)}</div></div>
+            <div className="metric"><div className="k">{t("ns.reordered")}</div><div className="v amber">{fmtNum(stat?.reordered ?? 0)}</div></div>
             <div className="metric"><div className="k">{t("common.volume")}</div><div className="v">{fmtBytes(stat?.bytes ?? 0)}</div></div>
           </div>
-
         </div>
       </div>
     </div>

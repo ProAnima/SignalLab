@@ -245,11 +245,11 @@ export function key(target: EventTarget, init: KeyboardEventInit) {
 
 export const NAV: Record<string, Key> = {
   experiment: "nav.experiment", signals: "nav.signals", emulators: "nav.emulators", osc: "nav.osc", mqtt: "nav.mqtt", broadcast: "nav.broadcast",
-  http: "nav.http", netsim: "nav.netsim", storm: "nav.storm", scan: "nav.scan",
+  http: "nav.http", ws: "nav.ws", netsim: "nav.netsim", storm: "nav.storm", scan: "nav.scan",
 };
 export const TITLES: Record<string, Key> = {
   signals: "sig.title", emulators: "emu.title", osc: "osc.title", mqtt: "mq.title", broadcast: "bc.title",
-  http: "http.title", netsim: "ns.title", storm: "st.title", scan: "sc.title",
+  http: "http.title", ws: "ws.title", netsim: "ns.title", storm: "st.title", scan: "sc.title",
 };
 
 export async function go(view: string, dict: Words = en): Promise<HTMLElement> {

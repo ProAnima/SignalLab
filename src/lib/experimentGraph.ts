@@ -1,5 +1,6 @@
 import type { ArgRule, Experiment, ExperimentNode, ExperimentPort, HttpRequest, OscArg } from "./api";
 import { blankEmulator } from "./emulators.ts";
+import { presetProfile } from "./impairments.ts";
 
 export type NodeType = ExperimentNode["type"];
 export type Port = ExperimentPort;
@@ -45,7 +46,62 @@ export function createNode(type: NodeType, x: number, y: number): ExperimentNode
     // A new emulator and a new HTTP wait share an address, so the wait sees what the emulator answers.
     case "emulator": return { ...base, type, emulator: blankEmulator("http", "API", "127.0.0.1:18080") };
     case "wait_http": return { ...base, type, bind: "127.0.0.1:18080", method: "ANY", path: "/*", when: [], timeout_ms: 5000, variable: "request" };
+    // A relay in front of the default OSC/UDP target, clean to start with.
+    case "impairment": return { ...base, type, listen: "127.0.0.1:9010", target: "127.0.0.1:9000", profile: presetProfile("lan") };
+    // Which relay or emulator it changes is chosen in its fields (the first of the document's, when added there).
+    case "impairment_change": return { ...base, type, relay: "", profile: presetProfile("offline") };
+    case "emulator_state": return { ...base, type, emulator: "", down: true, fault: "unavailable" };
+    // Loopback, like every shipped target; the others name it by its id (chosen when added).
+    case "ws_connect": return { ...base, type, url: "ws://127.0.0.1:9001/", headers: [], protocols: [], timeout_ms: 5000 };
+    case "ws_send": return { ...base, type, connection: "", text: "hello", binary: false };
+    case "wait_ws": return { ...base, type, connection: "", mode: "any", pattern: "", timeout_ms: 2000, variable: "reply" };
+    case "ws_close": return { ...base, type, connection: "", code: 1000, reason: "" };
   }
+}
+
+/**
+ * A new node as the editor adds it to `doc`: a Change impairment, an Emulator
+ * down/up and a WebSocket send, wait or close name the document's first
+ * Impairment, Emulator or WebSocket connect, so they work as they are when
+ * there is one.
+ */
+export function createNodeIn(doc: Experiment, type: NodeType, x: number, y: number): ExperimentNode {
+  const node = createNode(type, x, y);
+  if (node.type === "impairment_change") node.relay = doc.nodes.find((candidate) => candidate.type === "impairment")?.id ?? "";
+  if (node.type === "emulator_state") node.emulator = doc.nodes.find((candidate) => candidate.type === "emulator")?.id ?? "";
+  if (node.type === "ws_send" || node.type === "wait_ws" || node.type === "ws_close") {
+    node.connection = doc.nodes.find((candidate) => candidate.type === "ws_connect")?.id ?? "";
+  }
+  return node;
+}
+
+/** A loopback port no Impairment of the document listens on yet, from 9010 up. */
+function freeRelayPort(doc: Experiment): number {
+  const taken = new Set(doc.nodes.flatMap((node) => node.type === "impairment" ? [Number(node.listen.slice(node.listen.lastIndexOf(":") + 1))] : []));
+  let port = 9010;
+  while (taken.has(port)) port += 1;
+  return port;
+}
+
+/**
+ * "Route through impairment": an Impairment in front of an OSC or UDP node —
+ * placed before it, forwarding to its target — and the node pointed at the
+ * relay, so the next run degrades what it sends. The node's wires stay; the
+ * Impairment is spliced in after whatever led to it.
+ */
+export function routeThroughImpairment(doc: Experiment, nodeId: string): { doc: Experiment; relay: ExperimentNode } | null {
+  const node = doc.nodes.find((candidate) => candidate.id === nodeId);
+  if (!node || (node.type !== "osc" && node.type !== "udp")) return null;
+  const listen = `127.0.0.1:${freeRelayPort(doc)}`;
+  const relay: ExperimentNode = { ...createNode("impairment", node.x, Math.max(12, node.y - STEP_Y)), type: "impairment", listen, target: node.target, profile: presetProfile("lan") };
+  const incoming = doc.edges.filter((edge) => edge.to === nodeId);
+  const edges = [
+    ...doc.edges.filter((edge) => edge.to !== nodeId),
+    ...incoming.map((edge) => ({ ...edge, to: relay.id })),
+    { from: relay.id, to: nodeId, port: "next" as Port },
+  ];
+  const nodes = [...doc.nodes.map((candidate) => candidate.id === nodeId ? { ...candidate, target: listen } as ExperimentNode : candidate), relay];
+  return { doc: { ...doc, nodes, edges }, relay };
 }
 
 /** Argument rules a Wait for OSC may hold, and the highest argument index (as the engine allows). */
@@ -77,7 +133,7 @@ export function validPortsFor(type: NodeType): Port[] {
   switch (type) {
     case "branch_status": case "branch_value": return ["yes", "no"];
     case "fork": return ["branch1", "branch2"];
-    case "wait_osc": case "wait_udp": case "wait_mqtt": case "wait_http": return ["matched", "timeout"];
+    case "wait_osc": case "wait_udp": case "wait_mqtt": case "wait_http": case "wait_ws": return ["matched", "timeout"];
     case "loop": return ["body", "done", "limit"];
     case "end": return [];
     default: return ["next"];

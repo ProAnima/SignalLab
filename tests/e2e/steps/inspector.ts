@@ -16,8 +16,21 @@ export async function inspectCheck(expect: Expect, args: StepArgs) {
   const captured = numberIn(textOf([...shown.querySelectorAll(".tag-chip")][0]));
   // High-rate sources (the storm, a burst) are sampled by design, so this is a floor, not a count.
   expect("the capture holds the tour's traffic", captured >= 20, String(captured));
-  const protocols = new Set([...shown.querySelectorAll("tbody tr[data-frame] td:nth-child(3)")].map(textOf));
-  expect("OSC, UDP, TCP, HTTP and MQTT frames are all there", ["osc", "udp", "tcp", "http", "mqtt"].every((proto) => protocols.has(proto)), [...protocols].join(", "));
+  // Asked of the whole capture through each protocol's chip: the list draws only the newest
+  // frames, and a run's datagrams through a relay are many.
+  const rowsOf = () => [...shown.querySelectorAll("tbody tr[data-frame]")];
+  const present: string[] = [];
+  for (const proto of ["osc", "udp", "tcp", "http", "mqtt", "ws"]) {
+    await click(button(shown, proto));
+    try {
+      await until(`${proto} frames`, () => rowsOf().length > 0 && rowsOf().every((tr) => textOf(tr.querySelector("td:nth-child(3)")) === proto), 3000);
+      present.push(proto);
+    } catch {
+      // Absent: said below.
+    }
+    await click(button(shown, proto));
+  }
+  expect("OSC, UDP, TCP, HTTP, MQTT and WebSocket frames are all there", present.length === 6, present.join(", "));
   await click(button(shown, "osc"));
   const rows = [...shown.querySelectorAll("tbody tr[data-frame]")];
   expect("the osc chip leaves only OSC", rows.length > 0 && rows.every((tr) => textOf(tr.querySelector("td:nth-child(3)")) === "osc"));

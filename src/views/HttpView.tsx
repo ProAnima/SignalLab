@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
-import { api, EV, type HttpResponse, type JobInfo, type BurstProgress, type Signal, type SignalBody } from "../lib/api";
+import { api, EV, type CookieInfo, type HttpAuth, type HttpResponse, type JobInfo, type BurstProgress, type Signal, type SignalBody } from "../lib/api";
+import { HttpAuthFields } from "../components/HttpAuthFields";
 import { SaveSignal, saveShortcut } from "../components/SaveSignal";
 import { useStore } from "../lib/store";
 import { describeError, responseFailure } from "../lib/errors";
 import { ErrorMessage } from "../components/ErrorMessage";
 import { useT } from "../lib/i18n";
 import { useFieldIds, useJobStream, usePersistentState, useSeries } from "../lib/hooks";
-import { fmtBytes, fmtNum, fmtTime, prettyJson, statusClass } from "../lib/format";
+import { fmtBytes, fmtNum, fmtRate, fmtTime, latencyParts, prettyJson, statusClass } from "../lib/format";
 import { Scope } from "../components/Scope";
 import { MockThis } from "../components/MockThis";
 
@@ -43,6 +44,12 @@ export function HttpView({ onToExperiment, load, onShowSignal, onShowEmulator }:
   const [headers, setHeaders] = usePersistentState<[string, string][]>("signal-lab.http.headers", [["Accept", "application/json"]], isHeaders);
   const [body, setBody] = usePersistentState("signal-lab.http.body", "");
   const [timeout, setTimeoutMs] = usePersistentState("signal-lab.http.timeout", 10000);
+  // Credentials stay in memory only: a password is never written to the browser's storage.
+  const [auth, setAuth] = useState<HttpAuth>({ scheme: "none" });
+  const [keepCookies, setKeepCookies] = usePersistentState("signal-lab.http.cookies", true);
+  const [cookies, setCookies] = useState<CookieInfo[]>([]);
+  const refreshCookies = () => { api.httpCookies().then(setCookies).catch(() => {}); };
+  useEffect(refreshCookies, []);
   // The library signal this request is saved as, if any.
   const [signalId, setSignalId] = usePersistentState<string | null>("signal-lab.http.signal", null, (value) => value === null || typeof value === "string");
 
@@ -50,7 +57,7 @@ export function HttpView({ onToExperiment, load, onShowSignal, onShowEmulator }:
     if (load?.signal.body.transport !== "http") return;
     const request = load.signal.body.request;
     setMethod(request.method); setUrl(request.url); setHeaders(request.headers.map(([name, value]) => [name, value]));
-    setBody(request.body ?? ""); setTimeoutMs(request.timeout_ms); setSignalId(load.signal.id);
+    setBody(request.body ?? ""); setTimeoutMs(request.timeout_ms); setAuth(request.auth ?? { scheme: "none" }); setSignalId(load.signal.id);
   }, [load]); // eslint-disable-line react-hooks/exhaustive-deps
   const [busy, setBusy] = useState(false);
   const [resp, setResp] = useState<HttpResponse | null>(null);
@@ -66,14 +73,16 @@ export function HttpView({ onToExperiment, load, onShowSignal, onShowEmulator }:
     headers: headers.filter(([k]) => k.trim()),
     body: body.length ? body : null,
     timeout_ms: timeout,
+    ...(auth.scheme === "none" ? {} : { auth }),
   });
 
   const send = async () => {
     if (busy) return;
     setBusy(true);
     try {
-      const r = await api.httpRequest(buildReq());
+      const r = await api.httpRequest(buildReq(), keepCookies);
       setResp(r);
+      if (keepCookies) refreshCookies();
       setSentAt(Date.now());
       setSentUrl(url);
       if (r.error) {
@@ -106,13 +115,21 @@ export function HttpView({ onToExperiment, load, onShowSignal, onShowEmulator }:
   const [concurrency, setConcurrency] = useState(20);
   const [total, setTotal] = useState(500);
   const [duration, setDuration] = useState(0);
+  const [rate, setRate] = useState(0);
   const [burstJob, setBurstJob] = useState<JobInfo | null>(null);
+  // The rate the shown numbers were asked for: editing the field does not relabel them.
+  const [burstRate, setBurstRate] = useState(0);
   const [prog, setProg] = useState<BurstProgress | null>(null);
   const { data: rpsSeries, push: pushRps, clear: clearRps } = useSeries(240);
+  const latency = (ms: number | undefined) => {
+    const [value, unit] = latencyParts(ms ?? 0);
+    return <>{value}<small>{t(unit)}</small></>;
+  };
 
   useJobStream<BurstProgress>(EV.burstProgress, burstJob?.id ?? null, (p) => {
     setProg(p);
-    pushRps(p.rps);
+    // The last report rates the whole burst; the chart keeps the windows.
+    if (!p.done) pushRps(p.rps);
   });
 
   useEffect(() => {
@@ -124,9 +141,11 @@ export function HttpView({ onToExperiment, load, onShowSignal, onShowEmulator }:
     try {
       clearRps();
       setProg(null);
-      const job = await api.httpBurstStart({ ...buildReq(), concurrency, total, duration_s: duration });
+      const job = await api.httpBurstStart({ ...buildReq(), concurrency, total, duration_s: duration, rate, cookies: keepCookies });
       setBurstJob(job);
-      pushLog("ok", "http", "log.httpBurst", { method, url, workers: concurrency });
+      setBurstRate(rate);
+      if (rate > 0) pushLog("ok", "http", "log.httpBurstPaced", { method, url, workers: concurrency, rate });
+      else pushLog("ok", "http", "log.httpBurst", { method, url, workers: concurrency });
       refreshJobs();
     } catch (e) {
       pushError("http", e);
@@ -178,6 +197,13 @@ export function HttpView({ onToExperiment, load, onShowSignal, onShowEmulator }:
             <button className="ghost sm" onClick={() => setHeaders([...headers, ["", ""]])}>
               {t("http.addHeader")}
             </button>
+          </div>
+          <HttpAuthFields auth={auth} onChange={setAuth} onKeyDown={onEnterSend} />
+          <div className="field">
+            <label className="checkbox" data-tip={t("http.keepCookiesHint")}>
+              <input type="checkbox" checked={keepCookies} onChange={(e) => setKeepCookies(e.target.checked)} />
+              {t("http.keepCookies")}
+            </label>
           </div>
           {method !== "GET" && method !== "HEAD" && (
             <div className="field">
@@ -233,6 +259,8 @@ export function HttpView({ onToExperiment, load, onShowSignal, onShowEmulator }:
                 </div>
               </div>
               {resp.error && <ErrorMessage className="hint amber" error={responseFailure(resp, sentUrl)} />}
+              {resp.digest?.error && <ErrorMessage className="hint amber" error={resp.digest.error} />}
+              {resp.digest?.challenged && <p className="http-auth-state"><span className="sig-badge" data-tip={t("http.digestAnsweredHint")}>{t("http.digestAnswered")}</span></p>}
               <button className="ghost sm" onClick={() => setShowHeaders(!showHeaders)} style={{ marginBottom: 8 }}>
                 {showHeaders ? "▾" : "▸"} {t("http.responseHeaders", { n: resp.headers.length })}
               </button>
@@ -263,6 +291,32 @@ export function HttpView({ onToExperiment, load, onShowSignal, onShowEmulator }:
       </div>
 
       <div className="panel" style={{ marginTop: 16 }}>
+        <div className="row" style={{ alignItems: "center", marginBottom: 8 }}>
+          <p className="section-label" style={{ margin: 0 }} data-tip={t("http.cookiesHint")}>{t("http.cookies", { n: cookies.length })}</p>
+          <span style={{ flex: 1 }} />
+          <button className="ghost sm" style={{ flex: "0 0 auto" }} disabled={!cookies.length}
+            onClick={() => { api.httpCookiesClear().then(refreshCookies).catch((e) => pushError("http", e)); }}>{t("common.clear")}</button>
+        </div>
+        {cookies.length === 0 ? <div className="empty-state" style={{ padding: 14 }}>{t("http.noCookies")}</div> : (
+          <div className="scroll-y" style={{ maxHeight: 180 }}>
+            <table className="grid http-cookies"><thead><tr>
+              <th>{t("http.cookieName")}</th><th>{t("http.cookieValue")}</th><th>{t("http.cookieWhere")}</th><th>{t("http.cookieExpires")}</th><th>{t("http.cookieFlags")}</th>
+            </tr></thead><tbody>
+              {cookies.map((cookie) => (
+                <tr key={`${cookie.domain}${cookie.path}${cookie.name}`}>
+                  <td>{cookie.name}</td>
+                  <td className="http-cookie-value">{cookie.value}</td>
+                  <td>{cookie.host_only ? cookie.domain : `.${cookie.domain}`}{cookie.path}</td>
+                  <td>{cookie.expires === null ? t("http.cookieSession") : new Date(cookie.expires * 1000).toLocaleString()}</td>
+                  <td>{[cookie.secure && "Secure", cookie.http_only && "HttpOnly", cookie.same_site && `SameSite=${cookie.same_site}`].filter(Boolean).join(" · ") || "—"}</td>
+                </tr>
+              ))}
+            </tbody></table>
+          </div>
+        )}
+      </div>
+
+      <div className="panel" style={{ marginTop: 16 }}>
         <p className="section-label">{t("http.burst")}</p>
         <div className="cols side">
           <div>
@@ -279,18 +333,24 @@ export function HttpView({ onToExperiment, load, onShowSignal, onShowEmulator }:
                 <label htmlFor={fid("burst-duration")} data-tip={t("http.durationHint")}>{t("http.duration")}</label>
                 <input id={fid("burst-duration")} type="number" value={duration} onChange={(e) => setDuration(+e.target.value)} />
               </div>
+              <div className="field">
+                <label htmlFor={fid("burst-rate")} data-tip={t("http.rateHint")}>{t("http.rate")}</label>
+                <input id={fid("burst-rate")} type="number" min={0} step="any" value={rate} onChange={(e) => setRate(+e.target.value)} />
+              </div>
             </div>
             <div className="metrics">
               <div className="metric"><div className="k">{t("http.sent")}</div><div className="v">{fmtNum(prog?.sent ?? 0)}</div></div>
               <div className="metric"><div className="k">{t("http.ok")}</div><div className="v accent">{fmtNum(prog?.ok ?? 0)}</div></div>
               <div className="metric"><div className="k">{t("http.failed")}</div><div className="v red">{fmtNum(prog?.failed ?? 0)}</div></div>
-              <div className="metric" data-tip={t("http.rpsCaption")}><div className="k">{t("http.rps")}</div><div className="v accent">{fmtNum(prog?.rps ?? 0)}</div></div>
-              <div className="metric"><div className="k">{t("http.avg")}</div><div className="v">{fmtNum(prog?.avg_latency_ms ?? 0)}<small>{t("unit.ms")}</small></div></div>
-              <div className="metric">
-                <div className="k">{t("http.minMax")}</div>
-                <div className="v" style={{ fontSize: 15 }}>
-                  {fmtNum(prog?.min_latency_ms ?? 0)} / {fmtNum(prog?.max_latency_ms ?? 0)}<small>{t("unit.ms")}</small>
+              {burstRate > 0 && (
+                <div className="metric" data-tip={t("http.missedHint")}>
+                  <div className="k">{t("http.missed")}</div>
+                  <div className={"v" + ((prog?.missed ?? 0) > 0 ? " amber" : "")}>{fmtNum(prog?.missed ?? 0)}</div>
                 </div>
+              )}
+              <div className="metric" data-tip={t(prog?.done ? "http.rpsWholeHint" : "http.rpsCaption")}>
+                <div className="k">{burstRate > 0 ? t("http.rpsOf", { rate: fmtRate(burstRate) }) : t("http.rps")}</div>
+                <div className="v accent">{fmtNum(prog?.rps ?? 0)}</div>
               </div>
             </div>
             <div className="btn-row">
@@ -302,6 +362,18 @@ export function HttpView({ onToExperiment, load, onShowSignal, onShowEmulator }:
           <div data-tip={t("http.rpsCaption")}>
             <Scope data={rpsSeries} height={200} color="#6aa9ff" min={0} />
           </div>
+        </div>
+        {/* Latency across the panel: the distribution read left to right, never wrapped inside a card. */}
+        <div className="metrics latency">
+          {(["p50", "p90", "p95", "p99"] as const).map((p) => (
+            <div className="metric" key={p} data-tip={t("http.percentileHint", { p: p.slice(1) })}>
+              <div className="k">{t(`http.${p}`)}</div>
+              <div className="v">{latency(prog?.[`${p}_ms`])}</div>
+            </div>
+          ))}
+          <div className="metric"><div className="k">{t("http.avg")}</div><div className="v">{latency(prog?.avg_latency_ms)}</div></div>
+          <div className="metric"><div className="k">{t("http.min")}</div><div className="v">{latency(prog?.min_latency_ms)}</div></div>
+          <div className="metric"><div className="k">{t("http.max")}</div><div className="v">{latency(prog?.max_latency_ms)}</div></div>
         </div>
       </div>
     </div>

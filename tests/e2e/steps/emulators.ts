@@ -63,6 +63,13 @@ export async function emulators(expect: Expect, args: StepArgs) {
   await until("the restart", () => !hasButton(back, T("emu.restart")) && textOf(back.querySelector(".emu-state")) === T("emu.runningOn", { local }));
   expect("a restart takes the rules as they are now", true);
 
+  // Pulled and put back by hand.
+  await click(button(back, T("emu.takeDown")));
+  await until("it to be down", () => textOf(back.querySelector(".emu-state")) === T("emu.isDown", { local }));
+  await click(button(back, T("emu.bringUp")));
+  await until("it to be up", () => textOf(back.querySelector(".emu-state")) === T("emu.runningOn", { local }));
+  expect("an emulator can be taken down and brought up", true);
+
   await click(button(back, T("emu.stop")));
   await until("it to stop", () => textOf(back.querySelector(".emu-state")) === T("emu.notRunning"));
   await click(button(back, T("emu.delete")));

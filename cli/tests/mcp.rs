@@ -106,7 +106,7 @@ async fn every_tool_works_for_a_client_here() {
         { "id": "go", "name": "Go cue", "group": "Show", "body": { "transport": "osc", "target": gear.osc.to_string(), "address": "/go", "args": [] } },
         { "id": "hello", "name": "Hello", "body": { "transport": "udp", "target": gear.udp.to_string(), "payload": { "kind": "text", "text": "hello" } } },
     ] }).to_string()).unwrap();
-    let (osc, udp, http, mqtt) = (gear.osc.to_string(), gear.udp.to_string(), gear.http, gear.mqtt.to_string());
+    let (osc, udp, http, mqtt, ws) = (gear.osc.to_string(), gear.udp.to_string(), gear.http, gear.mqtt.to_string(), gear.ws);
     let seen = gear.seen.clone();
     let listen_port = free_udp_port();
     let library_path = library.display().to_string();
@@ -117,15 +117,15 @@ async fn every_tool_works_for_a_client_here() {
         let tools = client.request("tools/list", json!({}));
         let names: Vec<&str> = tools["result"]["tools"].as_array().unwrap().iter().map(|tool| tool["name"].as_str().unwrap()).collect();
         for name in [
-            "describe_nodes", "list_templates", "get_template", "validate_experiment", "run_experiment", "send_osc", "send_udp", "send_http", "send_mqtt", "listen",
-            "list_signals", "fire_signal", "list_emulators", "start_emulator", "emulator_exchanges", "list_jobs", "stop_job",
+            "describe_nodes", "list_templates", "get_template", "validate_experiment", "run_experiment", "send_osc", "send_udp", "send_http", "send_mqtt", "send_ws", "listen",
+            "list_signals", "fire_signal", "list_emulators", "start_emulator", "emulator_exchanges", "set_emulator_down", "list_jobs", "stop_job",
         ] {
             assert!(names.contains(&name), "{name} in {names:?}");
         }
 
         // What an experiment is made of, and the templates to start from.
         let (_, catalogue, failed) = client.call("describe_nodes", json!({}));
-        assert!(!failed && catalogue["nodes"].as_array().unwrap().len() == 25, "{catalogue}");
+        assert!(!failed && catalogue["nodes"].as_array().unwrap().len() == 32, "{catalogue}");
         assert!(catalogue["emulators"]["protocols"]["http"]["fields"]["responses"].is_string(), "the emulator document is described too");
         let (text, _, _) = client.call("list_templates", json!({}));
         assert!(text.contains("osc-ping-reply") && text.contains("device="), "{text}");
@@ -133,14 +133,14 @@ async fn every_tool_works_for_a_client_here() {
         assert_eq!(template["document"]["name"], "Empty experiment");
 
         // Validate, then run — a document the model wrote, with a parameter.
-        let document = json!({ "version": 6, "name": "Model's check", "params": [{ "name": "who", "value": "x" }],
+        let document = json!({ "version": 8, "name": "Model's check", "params": [{ "name": "who", "value": "x" }],
             "nodes": [{ "id": "start", "type": "start", "x": 0, "y": 0 }, { "id": "say", "type": "log", "x": 200, "y": 0, "message": "hi {{who}}" },
                       { "id": "get", "type": "http", "x": 400, "y": 0, "request": { "method": "GET", "url": format!("http://{http}/") } },
                       { "id": "ok", "type": "assert_status", "x": 600, "y": 0, "status": 200 }, { "id": "end", "type": "end", "x": 800, "y": 0 }],
             "edges": [{ "from": "start", "to": "say" }, { "from": "say", "to": "get" }, { "from": "get", "to": "ok" }, { "from": "ok", "to": "end" }] });
         let (text, data, failed) = client.call("validate_experiment", json!({ "document": document }));
         assert!(!failed && data["valid"] == true, "{text}");
-        let broken = json!({ "version": 6, "name": "Broken", "nodes": [{ "id": "start", "type": "start", "x": 0, "y": 0 }], "edges": [] });
+        let broken = json!({ "version": 8, "name": "Broken", "nodes": [{ "id": "start", "type": "start", "x": 0, "y": 0 }], "edges": [] });
         let (text, data, failed) = client.call("validate_experiment", json!({ "document": broken }));
         assert!(failed && data["error"]["code"].is_string(), "a broken document says why: {text}");
 
@@ -169,8 +169,17 @@ async fn every_tool_works_for_a_client_here() {
         assert!(!failed);
         let (text, data, failed) = client.call("send_http", json!({ "method": "get", "url": format!("http://{http}/status"), "headers": { "Accept": "application/json" } }));
         assert!(!failed && data["status"] == 200 && text.contains("\"state\":\"ready\""), "{text}");
+        // Credentials pass through to the engine; a server that asks for none answers as before.
+        let (text, data, failed) = client.call("send_http", json!({ "method": "GET", "url": format!("http://{http}/"), "auth": { "scheme": "bearer", "token": "t" } }));
+        assert!(!failed && data["status"] == 200, "{text}");
+        let (text, _, failed) = client.call("send_http", json!({ "method": "GET", "url": format!("http://{http}/"), "auth": { "scheme": "kerberos" } }));
+        assert!(failed, "an unknown scheme is refused: {text}");
         let (text, _, failed) = client.call("send_mqtt", json!({ "broker": mqtt, "topic": "lab/model", "payload": "1" }));
         assert!(!failed && text.contains("lab/model"), "{text}");
+        let (text, data, failed) = client.call("send_ws", json!({ "url": format!("ws://{ws}/"), "text": "{\"q\":1}", "expect": "echo", "protocols": ["lab.v1"] }));
+        assert!(!failed && data["reply"]["text"] == "echo {\"q\":1}" && data["handshake"]["protocol"] == "lab.v1" && text.contains("subprotocol lab.v1"), "{text}");
+        let (text, data, failed) = client.call("send_ws", json!({ "url": format!("ws://{ws}/"), "text": "x", "expect": "never", "timeout_ms": 200 }));
+        assert!(failed && data["error"]["code"] == "wait.timeout", "{text}");
         let (text, data, failed) = client.call("send_osc", json!({ "target": "127.0.0.1", "address": "/x" }));
         assert!(failed && data["error"]["code"] == "transport.target_invalid", "{text}");
 
@@ -200,7 +209,7 @@ async fn every_tool_works_for_a_client_here() {
         assert!(failed);
 
         // A run that is cancelled stops, and nothing answers the cancelled request.
-        let slow = json!({ "version": 6, "name": "Slow", "nodes": [{ "id": "start", "type": "start", "x": 0, "y": 0 }, { "id": "wait", "type": "delay", "x": 200, "y": 0, "ms": 20000 }, { "id": "end", "type": "end", "x": 400, "y": 0 }],
+        let slow = json!({ "version": 8, "name": "Slow", "nodes": [{ "id": "start", "type": "start", "x": 0, "y": 0 }, { "id": "wait", "type": "delay", "x": 200, "y": 0, "ms": 20000 }, { "id": "end", "type": "end", "x": 400, "y": 0 }],
             "edges": [{ "from": "start", "to": "wait" }, { "from": "wait", "to": "end" }] });
         let cancelled = client.start_request("tools/call", json!({ "name": "run_experiment", "arguments": { "document": slow } }));
         std::thread::sleep(Duration::from_millis(500));
@@ -255,6 +264,15 @@ async fn an_emulator_is_started_read_and_stopped_by_a_client() {
         let after = seen["exchanges"][1]["seq"].clone();
         let (_, later, _) = client.call("emulator_exchanges", json!({ "job_id": job, "after": after }));
         assert_eq!(later["exchanges"], json!([]), "only what came after");
+
+        // Pulled and put back: the client meets 503 in between.
+        let (text, _, failed) = client.call("set_emulator_down", json!({ "job_id": job, "down": true }));
+        assert!(!failed && text.contains("is down"), "{text}");
+        let (_, down, _) = client.call("send_http", json!({ "method": "GET", "url": format!("http://127.0.0.1:{port}/users/7") }));
+        assert_eq!(down["status"], 503);
+        client.call("set_emulator_down", json!({ "job_id": job, "down": false }));
+        let (_, up, _) = client.call("send_http", json!({ "method": "GET", "url": format!("http://127.0.0.1:{port}/users/7") }));
+        assert_eq!(up["status"], 200);
 
         // One the assistant wrote itself.
         let device = json!({ "name": "Echo", "bind": format!("127.0.0.1:{udp}"), "protocol": "udp", "rules": [{ "mode": "any", "reply": { "kind": "text", "text": "echo {{request.text}}" } }] });

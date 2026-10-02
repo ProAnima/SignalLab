@@ -1,5 +1,5 @@
 /** The tool screens, each against its loopback fixture: OSC, MQTT, Broadcast, Network simulator, Storm, Scanner, HTTP. */
-import { T, sleep, textOf, numberIn, until, screen, control, checkbox, button, hasButton, buttonWith, metric, panel, click, type, setChecked, key, go, result, type Key, type StepArgs, type Expect } from "../dsl";
+import { T, sleep, textOf, numberIn, until, screen, control, checkbox, button, hasButton, buttonWith, metric, panel, unnamed, click, type, setChecked, key, go, result, type Key, type StepArgs, type Expect } from "../dsl";
 
 export async function osc(expect: Expect, args: StepArgs) {
   const shown = await go("osc");
@@ -165,6 +165,10 @@ export async function netsimCheck(expect: Expect, args: StepArgs) {
   const shown = screen();
   await until(`${args.n} forwarded`, () => numberIn(metric(shown, T("ns.forwarded"))) === args.n);
   expect(`forwards all ${args.n} datagrams with no loss configured`, metric(shown, T("ns.dropped")) === "0");
+  // A preset while it runs: applied at once, without dropping the port.
+  await click(button(shown, T("ns.preset.offline")));
+  await until("the relay to go offline", () => textOf(shown).includes(T("ns.now", { profile: T("ns.preset.offline") })));
+  expect("a profile changes while the relay runs", true);
   await click(button(shown, T("ns.stopRelay")));
   await until("the relay to stop", () => hasButton(shown, T("ns.startRelay")));
   return { forwarded: numberIn(metric(shown, T("ns.forwarded"))) };
@@ -234,6 +238,55 @@ export async function http(expect: Expect, args: StepArgs) {
   await until("the burst to finish", () => numberIn(metric(burst, T("http.sent"))) === 40 && hasButton(burst, T("http.startBurst")), 15000);
   expect("a burst of 40 all succeed", metric(burst, T("http.ok")) === "40" && metric(burst, T("http.failed")) === "0",
     `${metric(burst, T("http.ok"))} ok, ${metric(burst, T("http.failed"))} failed`);
+  // In ms; from a second on the screen says seconds.
+  const latency = (caption: string) => {
+    const text = metric(burst, caption);
+    return numberIn(text) * (text.endsWith(T("unit.ms")) ? 1 : 1000);
+  };
+  const latencies = [T("http.p50"), T("http.p90"), T("http.p95"), T("http.p99")].map(latency);
+  const [least, most] = [T("http.min"), T("http.max")].map(latency);
+  expect("its percentiles are read and in order", latencies[0] > 0 && [least, ...latencies, most].every((value, i, all) => i === 0 || all[i - 1] <= value),
+    `${least} ≤ ${latencies.join(" ≤ ")} ≤ ${most}`);
+  expect("an unpaced burst misses nothing, so says nothing about it", !textOf(burst).includes(T("http.missed")));
+
+  // At a rate: 20 at 50/s take ~0.4 s, and every one starts on time.
+  await type(control(burst, T("http.total")), 20);
+  await type(control(burst, T("http.rate")), 50);
+  await click(button(burst, T("http.startBurst")));
+  await until("the paced burst to finish", () => numberIn(metric(burst, T("http.sent"))) === 20 && hasButton(burst, T("http.startBurst")), 15000);
+  const achieved = numberIn(metric(burst, T("http.rpsOf", { rate: "50" })));
+  expect("a paced burst keeps its rate and misses nothing", achieved > 20 && achieved <= 60 && metric(burst, T("http.missed")) === "0",
+    `${achieved} rps, ${metric(burst, T("http.missed"))} missed`);
+  await type(control(burst, T("http.rate")), 0);
+
+  // Digest: the fixture checks the answer with its own hashing.
+  await type(control(request, "URL"), `http://127.0.0.1:${args.port}/digest/screen`);
+  await type(control(request, T("field.auth")), "digest");
+  await type(control(request, T("field.username")), "tour");
+  await type(control(request, T("field.password")), "e2e-secret");
+  const authNameless = unnamed(request);
+  expect("the authentication fields have names", authNameless.length === 0, authNameless.join(" | "));
+  await click(button(request, T("common.send")));
+  const answered = await until("the Digest answer", () => result(request)?.classList.contains("ok") && result(request), 10000);
+  expect("Digest answers the server's challenge and gets 200", textOf(answered).startsWith("200"), textOf(answered));
+  expect("…and the response says it was challenged", textOf(response).includes(T("http.digestAnswered")), textOf(response).slice(0, 200));
+  await type(control(request, T("field.auth")), "none");
+
+  // The screen's cookie jar: /login sets one, /me needs it, Clear forgets it.
+  const jarPanel = () => [...shown.querySelectorAll<HTMLElement>(".panel")].find((element) => textOf(element.querySelector(".section-label")).startsWith(T("http.cookies", { n: 0 })))!;
+  await type(control(request, "URL"), `http://127.0.0.1:${args.port}/login`);
+  await click(button(request, T("common.send")));
+  await until("the cookie", () => textOf(jarPanel()).includes("tour"), 10000);
+  expect("the jar lists what the server set", textOf(jarPanel().querySelector("tbody")).includes("HttpOnly"), textOf(jarPanel()));
+  await type(control(request, "URL"), `http://127.0.0.1:${args.port}/me`);
+  await click(button(request, T("common.send")));
+  const me = await until("the answer to /me", () => result(request)?.classList.contains("ok") && result(request), 10000);
+  expect("a later request carries the cookie", textOf(me).startsWith("200"), textOf(me));
+  await click(button(jarPanel(), T("common.clear")));
+  await until("the jar emptied", () => textOf(jarPanel()).includes(T("http.noCookies")));
+  await click(button(request, T("common.send")));
+  await until("refused without it", () => result(request)?.classList.contains("warn"), 10000);
+  expect("after Clear it is refused again", textOf(result(request)).startsWith("401"), textOf(result(request)));
 
   await click(button(request, T("common.toExperiment")));
   const editor = await until("the experiment editor", () => !document.querySelector<HTMLElement>(".experiment-host")!.hidden && document.querySelector(".experiment-properties h2"));

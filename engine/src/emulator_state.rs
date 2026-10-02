@@ -13,7 +13,7 @@ use serde_json::Value;
 
 use crate::host::Host;
 
-use super::emulator::Fault;
+use super::emulator::{DownFault, Fault};
 use super::emulator_rules::Compiled;
 use super::error::{EngineError, EngineResult};
 use super::inspect::{self, Frame, Gate};
@@ -101,6 +101,8 @@ pub struct Emulation {
     failed: AtomicU64,
     down: AtomicU64,
     missed: AtomicU64,
+    /// Taken down by a run's *Emulator down/up* step or a person, until brought up.
+    forced: Mutex<Option<DownFault>>,
     seq: AtomicU64,
     recent: Mutex<VecDeque<Exchange>>,
     fresh: Mutex<Fresh>,
@@ -118,6 +120,7 @@ impl Emulation {
             failed: AtomicU64::new(0),
             down: AtomicU64::new(0),
             missed: AtomicU64::new(0),
+            forced: Mutex::new(None),
             seq: AtomicU64::new(0),
             recent: Mutex::new(VecDeque::new()),
             fresh: Mutex::new(Fresh::default()),
@@ -127,6 +130,17 @@ impl Emulation {
     /// Count a hit of rule `index` (0-based): how many it has had, this one included.
     pub(crate) fn hit(&self, index: usize) -> u64 {
         self.hits.get(index).map(|hits| hits.fetch_add(1, Ordering::Relaxed) + 1).unwrap_or(1)
+    }
+
+    /// Down (`Some`, with what HTTP meets) or up again (`None`), whatever its outage says.
+    pub fn force(&self, down: Option<DownFault>) {
+        *self.forced.lock().unwrap() = down;
+        self.fresh.lock().unwrap().changed = true;
+    }
+
+    /// Whether, and how, it was taken down.
+    pub fn forced(&self) -> Option<DownFault> {
+        *self.forced.lock().unwrap()
     }
 
     /// Messages a broker could not deliver to a slow client.
@@ -234,6 +248,13 @@ pub(crate) fn kept(request: &Value) -> Value {
     value
 }
 
+/// An emulator that is down: what an HTTP request meets, and when it is back
+/// (`None`: when someone brings it up).
+pub(crate) struct Down {
+    pub fault: DownFault,
+    pub back: Option<Duration>,
+}
+
 /// Everything a serving emulator reads: its rules, its counters, where it reports.
 pub(crate) struct Context {
     pub host: Host,
@@ -254,12 +275,16 @@ impl Context {
         Arc::new(Context { host, compiled, emulation, seed, job, inbox, gate: Gate::new(FRAME_GAP_MS), started: Instant::now() })
     }
 
-    /// How long until it is back, while its outage has it down; `None` while it is up.
-    pub(crate) fn down_for(&self) -> Option<Duration> {
+    /// Whether it is down now — taken down, or in its outage's down stretch —
+    /// what HTTP meets meanwhile, and when it is back if that is known.
+    pub(crate) fn down(&self) -> Option<Down> {
+        if let Some(fault) = self.emulation.forced() {
+            return Some(Down { fault, back: None });
+        }
         let outage = self.compiled.outage.as_ref()?;
         let period = outage.up_ms + outage.down_ms;
         let into = (self.started.elapsed().as_millis() % u128::from(period)) as u64;
-        (into >= outage.up_ms).then(|| Duration::from_millis(period - into))
+        (into >= outage.up_ms).then(|| Down { fault: outage.fault, back: Some(Duration::from_millis(period - into)) })
     }
 
     /// Render the fields of rule `rule`'s reply (1-based; 0 for a fallback or

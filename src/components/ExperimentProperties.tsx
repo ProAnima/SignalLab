@@ -2,7 +2,7 @@ import { useMemo, type RefObject } from "react";
 import type { Experiment, ExperimentNode } from "../lib/api";
 import { NODE_CATALOG } from "../lib/experimentCatalog";
 import { canRepeat, canRetry, GENERATORS, replyFields, secretNames, variablesBefore } from "../lib/experimentData";
-import { disconnect, portOf } from "../lib/experimentGraph";
+import { disconnect, portOf, routeThroughImpairment } from "../lib/experimentGraph";
 import { nodeHelp, nodeLabel, portLabel, wireName } from "../lib/experimentText";
 import type { Wire } from "../lib/experimentWires";
 import type { Failure } from "../lib/errors";
@@ -78,13 +78,16 @@ export function ExperimentProperties({ panelRef, doc, node, wire, busy, problemN
       {problemNodeId === node.id && <ErrorMessage className="experiment-node-problem" error={validationError} />}
       <fieldset disabled={busy}>
       <TemplateSuggestions.Provider value={suggestions}>
-        <ExperimentNodeFields node={node} patch={(change) => onPatch(node.id, change)} />
+        <ExperimentNodeFields node={node} doc={doc} patch={(change) => onPatch(node.id, change)} />
         {canRepeat(node) && <RepeatFields repeat={node.repeat} patch={(change) => onPatch(node.id, change)} />}
         {canRetry(node) && <RetryFields retry={node.retry} patch={(change) => onPatch(node.id, change)} />}
       </TemplateSuggestions.Provider>
       {preview?.nodeId === node.id && <ExperimentNodePreview node={node} preview={preview} />}
       {canSendNow(node) && <ExperimentNodeTest node={node} test={test} sending={sending} onSend={onSend} onExtract={onExtract} onShowEmulator={onShowEmulator} />}
       {doc.edges.filter((edge) => edge.from === node.id).map((edge) => <div className="experiment-connection" key={`${portOf(edge)}-${edge.to}`}><span>{portLabel(portOf(edge), t)} → {label(doc.nodes.find((item) => item.id === edge.to)?.type ?? "end")}</span><button className="ghost sm" data-tip={t("exp.disconnect")} aria-label={t("exp.disconnect")} onClick={() => onEdit((current) => disconnect(current, edge.from, portOf(edge), edge.to))}>×</button></div>)}
+      {(node.type === "osc" || node.type === "udp") && <div className="experiment-node-actions">
+        <button className="ghost sm" data-tip={t("exp.routeThroughHint")} onClick={() => onEdit((current) => routeThroughImpairment(current, node.id)?.doc ?? current)}>⚡ {t("exp.routeThrough")}</button>
+      </div>}
       {node.type !== "end" && <div className="experiment-node-actions"><button className="ghost sm" data-tip={`${t("exp.addAfter")} · A`} onClick={onAddNext}>＋ {t("exp.addNext")}</button>
         {node.type !== "start" && <><button className="ghost sm" data-tip={`${t("exp.duplicate")} · Ctrl+D`} onClick={onDuplicate}>{t("exp.duplicate")}</button><button className="ghost sm experiment-delete" data-tip={`${t("exp.delete")} · Delete`} onClick={onDelete}>{t("exp.delete")}</button></>}</div>}
     </fieldset></> : wire ? <>

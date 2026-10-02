@@ -3,7 +3,7 @@ import { downloads } from "../page";
 import { T, textOf, numberIn, until, control, checkbox, button, hasButton, buttonWith, unnamed, click, type, setChecked, key, go, type Key, type StepArgs, type Expect } from "../dsl";
 
 /** Open one of the bundled templates through the Experiments dialog. */
-async function openTemplate(title: Key) {
+export async function openTemplate(title: Key) {
   const editor = await go("experiment");
   await click(button(editor, T("exp.documents")));
   const dialog = await until("the Experiments dialog", () => document.querySelector<HTMLDialogElement>("dialog.experiment-documents[open]"));
@@ -14,7 +14,7 @@ async function openTemplate(title: Key) {
   return editor;
 }
 
-async function selectNode(editor: HTMLElement, type: Key, index = 0, expect?: Expect) {
+export async function selectNode(editor: HTMLElement, type: Key, index = 0, expect?: Expect) {
   const bodies = [...editor.querySelectorAll<HTMLButtonElement>(".experiment-node-body")].filter((element) => textOf(element.querySelector(".experiment-node-type")) === T(type));
   if (!bodies[index]) throw new Error(`no ${T(type)} node on the canvas`);
   await click(bodies[index], T(type));
@@ -27,7 +27,7 @@ async function selectNode(editor: HTMLElement, type: Key, index = 0, expect?: Ex
   return properties;
 }
 
-async function runAndWait(editor: HTMLElement, timeout = 15000) {
+export async function runAndWait(editor: HTMLElement, timeout = 15000) {
   await click(button(editor, T("exp.run")));
   const outcome = await until("the run to end", () => {
     const text = textOf(editor.querySelector(".experiment-timeline-title strong"));
@@ -77,6 +77,25 @@ export async function experimentHttp(expect: Expect, args: StepArgs) {
   await click(button(editor, T("exp.undo")));
   await until("undo", () => nodes() === before);
   expect("Undo removes it", true);
+}
+
+/** An HTTP node with Digest, its password a parameter, and the run's cookie setting. */
+export async function experimentAuth(expect: Expect, args: StepArgs) {
+  const editor = await openTemplate("exp.templateHttp");
+  await click(button(editor, T("exp.params")));
+  const params = await until("the parameters", () => document.querySelector<HTMLElement>(".experiment-params"));
+  const cookies = params.querySelector<HTMLInputElement>("label.checkbox input[type=checkbox]")!;
+  expect("an experiment keeps cookies unless told otherwise", cookies.checked);
+  await click(button(params, T("exp.close")));
+  const properties = await selectNode(editor, "exp.node.http", 0, expect);
+  await type(control(properties, "URL"), `http://127.0.0.1:${args.port}/digest/run`);
+  await type(control(properties, T("field.auth")), "digest");
+  await type(control(properties, T("field.username")), "tour");
+  await type(control(properties, T("field.password")), "e2e-secret");
+  const nameless = unnamed(properties);
+  expect("the node's authentication fields have names", nameless.length === 0, nameless.join(" | "));
+  const { outcome, rows } = await runAndWait(editor);
+  expect("the run with a Digest request passes", outcome === T("exp.passed"), `${outcome} · ${rows.join(" | ")}`);
 }
 
 export async function experimentOsc(expect: Expect, args: StepArgs) {
@@ -190,4 +209,23 @@ export async function experimentEmulator(expect: Expect, args: StepArgs) {
   expect("the flaky API run passes", outcome === T("exp.passed"), `${outcome} · ${rows.join(" | ")}`);
   expect("the emulator served the run", rows.some((row) => row.includes(T("exp.step.emulating", { name: "Flaky API", local }))), rows.join(" | "));
   expect("answered on the third attempt", rows.some((row) => row.includes(`http://${local} answered on attempt 3`)), rows.join(" | "));
+}
+
+/**
+ * Fault phases: a relay in front of an emulated device, switched clean →
+ * lossy → offline → clean by a branch of its own while the other sends.
+ */
+export async function experimentFaults(expect: Expect) {
+  const editor = await openTemplate("exp.templateFaults");
+  expect("a relay and three switches, in the Faults group", editor.querySelectorAll('[data-group="fault"]').length === 4, String(editor.querySelectorAll('[data-group="fault"]').length));
+  const properties = await selectNode(editor, "exp.node.impairment_change", 1, expect);
+  const offline = button(properties, T("ns.preset.offline"));
+  expect("the switch's preset is shown as chosen", offline.getAttribute("aria-pressed") === "true");
+  const nameless = unnamed(properties);
+  expect("the profile's fields all have names", nameless.length === 0, nameless.join(" | "));
+  const { outcome, rows } = await runAndWait(editor, 30000);
+  expect("the fault phases run passes", outcome === T("exp.passed"), `${outcome} · ${rows.join(" | ")}`);
+  for (const preset of ["wifi", "offline", "lan"] as const) {
+    expect(`the timeline says the network went ${preset}`, rows.some((row) => row.includes(T("exp.step.impaired", { profile: T(`ns.preset.${preset}`) }))), rows.join(" | "));
+  }
 }

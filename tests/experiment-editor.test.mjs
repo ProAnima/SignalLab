@@ -463,7 +463,7 @@ test("a loop's body may wire back to it, and nothing else may go back; the edito
   const loop = { ...createNode("loop", 240, 40), id: "loop" };
   const ask = { ...createNode("osc", 470, 40), id: "ask" };
   const pause = { ...createNode("delay", 700, 40), id: "pause" };
-  let doc = { version: 6, name: "Loop", params: [], profiles: [], profile: null, seed: null, nodes: [start, loop, ask, pause, end], edges: [] };
+  let doc = { version: 8, name: "Loop", params: [], profiles: [], profile: null, seed: null, nodes: [start, loop, ask, pause, end], edges: [] };
   assert.deepEqual(validPortsFor("loop"), ["body", "done", "limit"]);
   assert.deepEqual(requiredPortsFor("loop"), ["body", "done"], "Limit is optional, like a wait's Timeout");
   doc = connect(doc, "start", "next", "loop");
@@ -522,7 +522,7 @@ test("a loop's body may wire back to it, and nothing else may go back; the edito
 });
 
 test("repeat is for the steps that send", () => {
-  assert.deepEqual(ADDABLE_NODES.filter((type) => canRepeat(createNode(type, 0, 0))).sort(), ["http", "mqtt", "osc", "tcp", "udp"]);
+  assert.deepEqual(ADDABLE_NODES.filter((type) => canRepeat(createNode(type, 0, 0))).sort(), ["http", "mqtt", "osc", "tcp", "udp", "ws_send"], "a WebSocket send repeats; a connect does not");
   assert.equal(DEFAULT_REPEAT.until, "count");
   assert.ok(DEFAULT_REPEAT.interval_ms >= 10 && DEFAULT_REPEAT.count >= 2, "the default is one the engine accepts");
 });

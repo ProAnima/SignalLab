@@ -12,7 +12,8 @@ export type NodeTest = { ok: boolean; text: string; ts: number; error?: Failure;
 export type Preview = { nodeId: string; lines: string[]; missing: string[]; error?: Failure };
 
 /** Send now applies to actions, and Listen now to waits. */
-export const canSendNow = (node: ExperimentNode) => !!signalBodyOfNode(node) || isWait(node);
+/** A WebSocket send or wait opens the connection its connect node describes, for that one test. */
+export const canSendNow = (node: ExperimentNode) => !!signalBodyOfNode(node) || isWait(node) || node.type === "ws_connect" || node.type === "ws_send";
 
 /**
  * One node on its own: Send now / Listen now, and the resolved preview of the

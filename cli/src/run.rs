@@ -19,6 +19,7 @@ use signal_lab_engine::{paths, Capture, Host, Mode, Service};
 
 use crate::fail::{Exit, Failure};
 use crate::i18n::{Texts, TEMPLATES};
+use crate::matrix::{self, Combination};
 use crate::remote::Remote;
 use crate::{junit, params, Ctx, Experiments, Place, RunArgs, SecretSource, ValidateArgs};
 
@@ -64,15 +65,20 @@ pub struct Ended {
     /// What each Emulator node received: `{node, name, protocol, local, counts}`.
     #[serde(default)]
     pub emulators: Vec<Value>,
+    /// What each Impairment node's relay did: `{node, listen, target, counts, phases}`.
+    #[serde(default)]
+    pub impairments: Vec<Value>,
     #[serde(default)]
     pub report_path: Option<String>,
     #[serde(default)]
     pub report_error: Option<EngineError>,
 }
 
-/// What became of one experiment.
+/// What became of one experiment (one combination of the matrix).
 pub struct Record {
     pub label: String,
+    /// The values of the matrix it ran with; empty without one.
+    pub matrix: Combination,
     pub document: Experiment,
     pub outcome: Result<Ended, Failure>,
     /// Where its report is now: copied by --report, or kept in --data-dir or on the server.
@@ -232,27 +238,56 @@ pub(crate) fn parse_params(given: &[String]) -> Result<Vec<(String, String)>, Fa
         .collect()
 }
 
-/// An experiment ready to run, with the parameter values it takes.
-type Prepared = (Input, BTreeMap<String, String>);
+/// An experiment ready to run: once per combination of the matrix it has.
+struct Prepared {
+    /// Labelled with its combination: `file [name=value, …]`.
+    input: Input,
+    /// The argument it came from, for the report's file name.
+    file: String,
+    overrides: BTreeMap<String, String>,
+    combination: Combination,
+}
 
-/// Every input, its profile applied, and the values each one takes: a value
-/// applies to the experiments that have that parameter, and must name a
-/// parameter of at least one of them. A failure names the input it is about.
+/// Every input, its profile applied, once per combination of the matrix, and
+/// the values each run takes: a value — of --param or of the matrix — applies
+/// to the experiments that have that parameter and must name a parameter of
+/// at least one of them. An experiment without a matrix parameter runs once,
+/// not once per value it would ignore. A failure names the input it is about.
 fn prepare(experiments: &Experiments) -> Result<Vec<Prepared>, (String, Failure)> {
     let params = parse_params(&experiments.params).map_err(|failure| (String::new(), failure))?;
-    let mut prepared = Vec::new();
+    let combinations = matrix::combinations(&experiments.matrix, experiments.matrix_file.as_deref()).map_err(|failure| (String::new(), failure))?;
+    let matrixed = matrix::names(&combinations);
+    if let Some((name, _)) = params.iter().find(|(name, _)| matrixed.contains(name)) {
+        return Err((String::new(), Failure::invalid(EngineError::new("cli.matrix_conflict").with("name", name))));
+    }
+    let mut inputs = Vec::new();
     for label in &experiments.files {
         let mut input = read_input(label).map_err(|failure| (label.clone(), failure))?;
         if let Some(profile) = &experiments.profile {
             input.document.profile = (!profile.is_empty()).then(|| profile.clone());
         }
-        let known: BTreeSet<&str> = input.document.params.iter().map(|param| param.name.as_str()).collect();
-        let overrides = params.iter().filter(|(name, _)| known.contains(name.as_str())).cloned().collect();
-        prepared.push((input, overrides));
+        inputs.push(input);
     }
-    if let Some((name, _)) = params.iter().find(|(name, _)| !prepared.iter().any(|(input, _)| input.document.params.iter().any(|param| &param.name == name))) {
-        let label = if prepared.len() == 1 { prepared[0].0.label.clone() } else { String::new() };
+    let named: Vec<&String> = params.iter().map(|(name, _)| name).chain(matrixed.iter()).collect();
+    if let Some(name) = named.iter().find(|name| !inputs.iter().any(|input| input.document.params.iter().any(|param| &param.name == **name))) {
+        let label = if inputs.len() == 1 { inputs[0].label.clone() } else { String::new() };
         return Err((label, Failure::invalid(EngineError::new("run.override_unknown").with("name", name))));
+    }
+    let mut prepared = Vec::new();
+    for input in inputs {
+        let known: BTreeSet<&str> = input.document.params.iter().map(|param| param.name.as_str()).collect();
+        let mut seen: Vec<Combination> = Vec::new();
+        for combination in &combinations {
+            let own: Combination = combination.iter().filter(|(name, _)| known.contains(name.as_str())).cloned().collect();
+            if seen.contains(&own) {
+                continue;
+            }
+            seen.push(own.clone());
+            let mut overrides: BTreeMap<String, String> = params.iter().filter(|(name, _)| known.contains(name.as_str())).cloned().collect();
+            overrides.extend(own.iter().cloned());
+            let label = matrix::label(&input.label, &own);
+            prepared.push(Prepared { input: Input { label, document: input.document.clone() }, file: input.label.clone(), overrides, combination: own });
+        }
     }
     Ok(prepared)
 }
@@ -270,15 +305,16 @@ fn about(label: &str) -> String {
 struct Printer<'a> {
     ctx: &'a Ctx,
     label: &'a str,
+    combination: &'a Combination,
     document: &'a Experiment,
     first_ts: Option<u64>,
     width: usize,
 }
 
 impl<'a> Printer<'a> {
-    fn new(ctx: &'a Ctx, label: &'a str, document: &'a Experiment) -> Self {
+    fn new(ctx: &'a Ctx, label: &'a str, combination: &'a Combination, document: &'a Experiment) -> Self {
         let width = document.nodes.iter().map(|node| node_label(&ctx.texts, document, &node.id).chars().count()).max().unwrap_or(0);
-        Printer { ctx, label, document, first_ts: None, width }
+        Printer { ctx, label, combination, document, first_ts: None, width }
     }
 
     fn line(&mut self, kind: &str, value: &Value) {
@@ -288,6 +324,9 @@ impl<'a> Printer<'a> {
                 map.insert("type".into(), kind.into());
                 if kind != "step" {
                     map.insert("file".into(), self.label.into());
+                    if !self.combination.is_empty() {
+                        map.insert("matrix".into(), matrix_value(self.combination));
+                    }
                 }
             }
             println!("{value}");
@@ -323,6 +362,16 @@ impl<'a> Printer<'a> {
             _ => {}
         }
     }
+}
+
+/// A combination as JSON: `{"name": "value", …}`.
+fn matrix_value(combination: &Combination) -> Value {
+    Value::Object(combination.iter().map(|(name, value)| (name.clone(), Value::String(value.clone()))).collect())
+}
+
+/// How a run is named in its summary: the experiment, and its combination.
+pub fn run_name(experiment: &str, combination: &Combination) -> String {
+    matrix::label(experiment, combination)
 }
 
 /// A node as the app names it: the name of its type.
@@ -378,32 +427,32 @@ pub async fn run(ctx: &Ctx, args: RunArgs) -> Exit {
         Ok(engine) => engine,
         Err(failure) => return failure.report(ctx, ""),
     };
-    // Every experiment would start before any runs: a broken third file stops the first one too.
-    for (input, overrides) in &prepared {
-        if let Err(failure) = engine.validate(&input.document, overrides).await {
-            return failure.report(ctx, &about(&input.label));
+    // Every experiment, every combination, would start before any runs: a broken third one stops the first too.
+    for prepared in &prepared {
+        if let Err(failure) = engine.validate(&prepared.input.document, &prepared.overrides).await {
+            return failure.report(ctx, &about(&prepared.input.label));
         }
     }
 
     let count = prepared.len();
     let mut records = Vec::new();
     let mut worst = Exit::Passed;
-    for (index, (input, overrides)) in prepared.into_iter().enumerate() {
+    for (index, Prepared { input, file, overrides, combination }) in prepared.into_iter().enumerate() {
         let options = RunOptions { overrides, seed: args.seed, limit: args.timeout.map(Duration::from_secs) };
         let outcome = {
-            let mut printer = Printer::new(ctx, &input.label, &input.document);
+            let mut printer = Printer::new(ctx, &input.label, &combination, &input.document);
             engine.run(input.document.clone(), options, &mut |kind, value| printer.line(kind, value)).await
         };
         let outcome = outcome.and_then(|value| {
             serde_json::from_value::<Ended>(value).map_err(|error| Failure::environment(EngineError::new("cli.server_reply").with("url", "").with("status", 200).because(error)))
         });
-        let mut record = Record { label: input.label, document: input.document, outcome, report: None };
+        let mut record = Record { label: input.label, matrix: combination, document: input.document, outcome, report: None };
         if let Ok(ended) = &record.outcome {
             summarize(ctx, &record, ended, engine.remote());
             if let Some(report) = &ended.report_path {
                 record.report = engine.keeps_reports().then(|| report.clone());
                 if let Some(target) = &args.report {
-                    let target = report_target(target, index, count, &record.label);
+                    let target = report_target(target, index, count, &file);
                     match engine.copy_report(report, &target).await {
                         Ok(()) => record.report = Some(target.display().to_string()),
                         Err(failure) => worst = worst.max(failure.report(ctx, "")),
@@ -423,7 +472,15 @@ pub async fn run(ctx: &Ctx, args: RunArgs) -> Exit {
             }
         }
         worst = worst.max(record.exit());
+        let stop = args.fail_fast && record.exit() != Exit::Passed;
         records.push(record);
+        if stop {
+            break;
+        }
+    }
+    let not_started = count - records.len();
+    if not_started > 0 {
+        ctx.say(&ctx.texts.t("cli.notStarted", &params! { "n" => not_started }));
     }
 
     if let Some(path) = &args.junit {
@@ -440,8 +497,14 @@ pub async fn run(ctx: &Ctx, args: RunArgs) -> Exit {
     }
     let passed = records.iter().filter(|record| record.exit() == Exit::Passed).count();
     if ctx.json {
-        println!("{}", json!({ "type": "summary", "total": records.len(), "passed": passed, "failed": records.len() - passed, "exit_code": worst.code() }));
+        println!("{}", json!({ "type": "summary", "total": records.len(), "passed": passed, "failed": records.len() - passed, "not_started": not_started, "exit_code": worst.code() }));
     } else if records.len() > 1 {
+        // Each run's verdict on one line, then the count: what a pipeline log is read for.
+        for record in &records {
+            let mark = match record.exit() { Exit::Passed => "✔", _ => "✖" };
+            let time = record.outcome.as_ref().map(|ended| format!(" · {}", duration(&ctx.texts, ended.ended_ms.saturating_sub(ended.started_ms)))).unwrap_or_default();
+            println!("  {mark} {}{time}", record.label);
+        }
         println!("{}", ctx.texts.t("cli.summary", &params! { "n" => records.len(), "passed" => passed, "failed" => records.len() - passed }));
     }
     worst
@@ -458,12 +521,38 @@ pub fn duration(texts: &Texts, ms: u64) -> String {
 }
 
 /// One line per experiment on stdout; why it failed and its seed on stderr.
+/// `127.0.0.1:9010 → 127.0.0.1:9000: 120 received, 30 dropped, 0 throttled ·
+/// lan 0.0–2.0 s 40/40, offline 2.0–4.0 s 0/40, lan 4.0–6.0 s 40/40` — the
+/// phases as forwarded / received, in the notation of the timeline.
+pub(crate) fn impairment_line(texts: &Texts, impairment: &Value) -> String {
+    let counts = &impairment["counts"];
+    let line = texts.t(
+        "cli.impairmentSummary",
+        &params! {
+            "listen" => impairment["listen"].as_str().unwrap_or_default(),
+            "target" => impairment["target"].as_str().unwrap_or_default(),
+            "received" => &counts["received"],
+            "dropped" => &counts["dropped"],
+            "throttled" => &counts["throttled"],
+        },
+    );
+    let seconds = |ms: &Value| format!("{:.1}", ms.as_u64().unwrap_or_default() as f64 / 1000.0);
+    let phases: Vec<String> = impairment["phases"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|phase| format!("{} {}–{} s {}/{}", phase["profile"].as_str().unwrap_or_default(), seconds(&phase["from_ms"]), seconds(&phase["to_ms"]), phase["counts"]["forwarded"], phase["counts"]["received"]))
+        .collect();
+    if phases.is_empty() { line } else { format!("{line} · {}", phases.join(", ")) }
+}
+
 fn summarize(ctx: &Ctx, record: &Record, ended: &Ended, remote: bool) {
     if ctx.json {
         return;
     }
     let texts = &ctx.texts;
-    let values = params! { "name" => ended.experiment.as_str(), "time" => duration(texts, ended.ended_ms.saturating_sub(ended.started_ms)), "seed" => ended.seed };
+    let name = run_name(&ended.experiment, &record.matrix);
+    let values = params! { "name" => name.as_str(), "time" => duration(texts, ended.ended_ms.saturating_sub(ended.started_ms)), "seed" => ended.seed };
     match ended.outcome.as_str() {
         "passed" => println!("✔ {}", texts.t("cli.passed", &values)),
         "stopped" => println!("■ {}", texts.t("cli.stopped", &values)),
@@ -484,6 +573,10 @@ fn summarize(ctx: &Ctx, record: &Record, ended: &Ended, remote: bool) {
     // What the dependencies the run played were asked: the proof a mock was called.
     for emulator in &ended.emulators {
         eprintln!("  {}", crate::emulate::counts_line(texts, emulator["name"].as_str().unwrap_or_default(), &emulator["counts"]));
+    }
+    // And what the network was put through, phase by phase.
+    for impairment in &ended.impairments {
+        eprintln!("  {}", impairment_line(texts, impairment));
     }
     if let Some(error) = &ended.report_error {
         eprintln!("  {}", texts.describe(error, &["cli.err."], &|_| None).text);
@@ -507,7 +600,7 @@ pub async fn validate(ctx: &Ctx, args: ValidateArgs) -> Exit {
     };
     let texts = &ctx.texts;
     let mut worst = Exit::Passed;
-    for (input, overrides) in &prepared {
+    for Prepared { input, overrides, .. } in &prepared {
         let result = engine.validate(&input.document, overrides).await;
         if ctx.json {
             let line = match &result {
@@ -587,14 +680,35 @@ mod tests {
             files: vec!["osc-ping-reply".into(), "empty".into()],
             params: params.iter().map(|param| param.to_string()).collect(),
             profile: None,
+            matrix: Vec::new(),
+            matrix_file: None,
         };
         let prepared = prepare(&experiments(&["device=10.0.0.5:9000"])).unwrap();
-        assert_eq!(prepared[0].1["device"], "10.0.0.5:9000");
-        assert!(prepared[1].1.is_empty(), "the empty template has no such parameter and takes nothing");
+        assert_eq!(prepared[0].overrides["device"], "10.0.0.5:9000");
+        assert!(prepared[1].overrides.is_empty(), "the empty template has no such parameter and takes nothing");
         let (_, failure) = prepare(&experiments(&["devise=x"])).err().unwrap();
         assert_eq!((failure.error.code.as_str(), failure.exit), ("run.override_unknown", Exit::Invalid));
-        let (label, failure) = prepare(&Experiments { files: vec!["no-such-thing".into()], params: vec![], profile: None }).err().unwrap();
+        let (label, failure) = prepare(&Experiments { files: vec!["no-such-thing".into()], params: vec![], profile: None, matrix: Vec::new(), matrix_file: None }).err().unwrap();
         assert_eq!((label.as_str(), failure.error.code.as_str()), ("no-such-thing", "cli.file_unknown"));
+    }
+
+    #[test]
+    fn a_matrix_runs_an_experiment_once_per_combination_it_has() {
+        let given = |matrix: &[&str], params: &[&str]| Experiments {
+            files: vec!["osc-ping-reply".into(), "empty".into()],
+            params: params.iter().map(|param| param.to_string()).collect(),
+            profile: None,
+            matrix: matrix.iter().map(|axis| axis.to_string()).collect(),
+            matrix_file: None,
+        };
+        let prepared = prepare(&given(&["device=10.0.0.5:9000,10.0.0.6:9000"], &[])).unwrap();
+        let labels: Vec<&str> = prepared.iter().map(|prepared| prepared.input.label.as_str()).collect();
+        assert_eq!(labels, ["osc-ping-reply [device=10.0.0.5:9000]", "osc-ping-reply [device=10.0.0.6:9000]", "empty"], "the empty template ignores device: it runs once");
+        assert_eq!((prepared[1].overrides["device"].as_str(), prepared[1].file.as_str()), ("10.0.0.6:9000", "osc-ping-reply"));
+        let (_, failure) = prepare(&given(&["device=a"], &["device=b"])).err().unwrap();
+        assert_eq!(failure.error.code, "cli.matrix_conflict", "a name set twice is refused");
+        let (_, failure) = prepare(&given(&["nobody=a,b"], &[])).err().unwrap();
+        assert_eq!((failure.error.code.as_str(), failure.error.params["name"].as_str()), ("run.override_unknown", "nobody"));
     }
 
     #[test]

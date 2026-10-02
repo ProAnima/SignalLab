@@ -166,3 +166,15 @@ pub(crate) async fn emulator_exchanges(state: &State, arguments: &Value) -> Answ
         Err(failure) => Answer::failed(state, &failure),
     }
 }
+
+pub(crate) async fn set_emulator_down(state: &State, arguments: &Value) -> Answer {
+    let (Some(id), Some(down)) = (arguments["job_id"].as_u64(), arguments["down"].as_bool()) else {
+        return Answer::wrong("job_id is the number start_emulator gave, down is true or false");
+    };
+    let fault = arguments["fault"].as_str().unwrap_or("unavailable");
+    match state.engine.invoke("emulator_down", json!({ "jobId": id, "down": down, "fault": fault })).await {
+        Ok(_) if down => Answer::ok(format!("Emulator job #{id} is down until set_emulator_down brings it up (HTTP meets {fault})."), json!({ "job_id": id, "down": true, "fault": fault })),
+        Ok(_) => Answer::ok(format!("Emulator job #{id} answers again."), json!({ "job_id": id, "down": false })),
+        Err(failure) => Answer::failed(state, &failure),
+    }
+}

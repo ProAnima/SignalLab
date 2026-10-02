@@ -7,13 +7,15 @@ use std::collections::BTreeMap;
 use serde::Serialize;
 
 use super::emulator_state::EmulatorSummary;
+use super::netsim::ImpairmentSummary;
 use super::error::{EngineError, EngineResult};
 use super::experiment::Experiment;
 use super::experiment_run::{Outcome, RunEvent};
 use super::paths::data_dir;
 
-/// Version of the run report file: 3 added the emulators' counters.
-const REPORT_VERSION: u32 = 3;
+/// Version of the run report file: 3 added the emulators' counters, 4 the
+/// impairments' phases.
+const REPORT_VERSION: u32 = 4;
 
 #[derive(Serialize)]
 struct RunReport<'a> {
@@ -32,6 +34,8 @@ struct RunReport<'a> {
     steps: &'a [RunEvent],
     #[serde(skip_serializing_if = "<[EmulatorSummary]>::is_empty")]
     emulators: &'a [EmulatorSummary],
+    #[serde(skip_serializing_if = "<[ImpairmentSummary]>::is_empty")]
+    impairments: &'a [ImpairmentSummary],
 }
 
 pub(crate) struct RunSettings {
@@ -45,7 +49,7 @@ fn file_error(path: &std::path::Path, error: impl ToString) -> EngineError {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn save_report(id: u64, settings: &RunSettings, started_ms: u64, ended_ms: u64, doc: &Experiment, steps: &[RunEvent], emulators: &[EmulatorSummary], error: &Option<EngineError>) -> EngineResult<String> {
+pub(crate) fn save_report(id: u64, settings: &RunSettings, started_ms: u64, ended_ms: u64, doc: &Experiment, steps: &[RunEvent], emulators: &[EmulatorSummary], impairments: &[ImpairmentSummary], error: &Option<EngineError>) -> EngineResult<String> {
     let dir = data_dir().join("runs");
     std::fs::create_dir_all(&dir).map_err(|error| file_error(&dir, error))?;
     let report = RunReport {
@@ -62,6 +66,7 @@ pub(crate) fn save_report(id: u64, settings: &RunSettings, started_ms: u64, ende
         error,
         steps,
         emulators,
+        impairments,
     };
     let bytes = serde_json::to_vec_pretty(&report).map_err(|error| file_error(&dir, error))?;
     // Never over another report: two processes sharing a data folder (command

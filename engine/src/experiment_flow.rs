@@ -17,11 +17,15 @@ use tokio::sync::mpsc;
 use crate::host::Host;
 
 use super::emulator_run::{HttpListeners, RunServing};
+use super::emulator_state::Emulation;
+use super::netsim::Relay;
+use super::netsim_run;
 use super::error::{EngineError, EngineResult, Field};
 use super::experiment::{Experiment, Node, NodeKind, Repeat, RepeatUntil};
 use super::experiment_data as data;
 use super::experiment_run::RunEvent;
-use super::experiment_steps::{self as steps, BranchContext, StepEnv, StepOutcome};
+use super::cookies::CookieJar;
+use super::experiment_steps::{self as steps, BranchContext, RunSockets, StepEnv, StepOutcome};
 use super::experiment_fields::{check_bind, check_reply_bind};
 use super::jobs::{now_ms, TaskGuard};
 use super::listen::{FrameSink, Listener, Listeners, Tap};
@@ -84,6 +88,15 @@ struct EngineShared {
     http: HttpListeners,
     /// The run's emulators and HTTP listeners, serving until the run ends.
     serving: Mutex<RunServing>,
+    /// The run's impairment relays and emulators by node id, for the steps that change them.
+    relays: HashMap<String, Arc<Relay>>,
+    emulations: HashMap<String, Arc<Emulation>>,
+    /// The relays' tasks: closed with the run, so nothing stays impaired.
+    relay_serving: Mutex<netsim_run::RunServing>,
+    /// The WebSocket connections the run opened; closed with it.
+    websockets: RunSockets,
+    /// What the run's servers set with Set-Cookie, sent back as a browser would.
+    cookies: Option<Arc<CookieJar>>,
     started: Instant,
 }
 
@@ -105,6 +118,13 @@ impl Drop for CancelBranches {
         }
         if let Ok(mut serving) = self.0.serving.lock() {
             drop(std::mem::take(&mut *serving));
+        }
+        if let Ok(mut serving) = self.0.relay_serving.lock() {
+            drop(std::mem::take(&mut *serving));
+        }
+        // Each connection says goodbye (a close frame) as its last handle goes.
+        if let Ok(mut websockets) = self.0.websockets.lock() {
+            websockets.clear();
         }
     }
 }
@@ -300,6 +320,10 @@ async fn run_branch(
             listeners: shared.listeners.lock().map(|listeners| listeners.clone()).unwrap_or_default(),
             subscriptions: shared.subscriptions.lock().map(|subscriptions| subscriptions.clone()).unwrap_or_default(),
             http: shared.http.clone(),
+            relays: shared.relays.clone(),
+            emulators: shared.emulations.clone(),
+            websockets: shared.websockets.clone(),
+            cookies: shared.cookies.clone(),
             has_timeout: shared.outgoing.contains_key(&(current.clone(), "timeout".to_string())),
             has_limit: shared.outgoing.contains_key(&(current.clone(), "limit".to_string())),
             inputs: shared.joins.lock().ok().and_then(|joins| joins.get(&current).map(|barrier| barrier.expected)).unwrap_or(1),
@@ -307,7 +331,7 @@ async fn run_branch(
         };
         // A template that does not resolve is neither retried nor repeated.
         let result = match rendered {
-            Ok(kind) => match node.repeat.as_ref().filter(|_| node.kind.is_action()) {
+            Ok(kind) => match node.repeat.as_ref().filter(|_| node.kind.repeats()) {
                 Some(repeat) => repeated(&shared, &env, &node, kind, repeat, &mut context).await,
                 None => attempts(&shared, &env, &node, &kind, &mut context).await,
             },
@@ -475,6 +499,9 @@ pub(crate) struct Prepared {
     pub(crate) subscriptions: Subscriptions,
     pub(crate) http: HttpListeners,
     pub(crate) serving: RunServing,
+    pub(crate) relays: HashMap<String, Arc<Relay>>,
+    pub(crate) relay_serving: netsim_run::RunServing,
+    pub(crate) emulations: HashMap<String, Arc<Emulation>>,
     /// The run fails with `run.timeout` after this long.
     pub(crate) limit: Duration,
 }
@@ -516,6 +543,11 @@ pub(crate) async fn run(host: &Host, followers: Followers, job_id: u64, doc: &Ex
         subscriptions: Mutex::new(prepared.subscriptions),
         http: prepared.http,
         serving: Mutex::new(prepared.serving),
+        relays: prepared.relays,
+        emulations: prepared.emulations,
+        relay_serving: Mutex::new(prepared.relay_serving),
+        websockets: RunSockets::default(),
+        cookies: doc.cookies.then(CookieJar::new),
         started: Instant::now(),
     });
     let _cancel = CancelBranches(shared.clone());

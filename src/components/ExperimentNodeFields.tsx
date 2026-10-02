@@ -1,9 +1,12 @@
-import type { ArgRule, CompareOp, ExperimentNode, ExtractFrom, UdpMode } from "../lib/api";
+import type { ArgRule, CompareOp, Experiment, ExperimentNode, ExtractFrom, UdpMode } from "../lib/api";
 import { ExperimentOscFields } from "./ExperimentOscFields";
 import { ReplyFields } from "./ExperimentNodeOptions";
 import { TemplateField } from "./TemplateField";
 import { ConditionsEditor } from "./EmulatorEditor";
 import { ExperimentEmulatorFields } from "./ExperimentEmulatorFields";
+import { ExperimentFaultFields } from "./ExperimentFaultFields";
+import { ExperimentWsFields } from "./ExperimentWsFields";
+import { HttpAuthFields } from "./HttpAuthFields";
 import { useT, type TKey } from "../lib/i18n";
 
 const HTTP_METHODS = ["ANY", "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
@@ -15,8 +18,8 @@ const UDP_MODES: UdpMode[] = ["any", "contains", "regex", "hex"];
 const MODE_PLACEHOLDER: Partial<Record<UdpMode, string>> = { contains: "PONG", regex: "PONG (\\d+)", hex: "de ad be ef" };
 const unary = (op: CompareOp) => op === "empty" || op === "not_empty";
 
-/** Parameters of one node. Text fields that are sent or compared accept `{{templates}}`. */
-export function ExperimentNodeFields({ node, patch }: { node: ExperimentNode; patch: (change: Partial<ExperimentNode>) => void }) {
+/** Parameters of one node. Text fields that are sent or compared accept `{{templates}}`; `doc` is where a node that names another finds it. */
+export function ExperimentNodeFields({ node, doc, patch }: { node: ExperimentNode; doc: Experiment; patch: (change: Partial<ExperimentNode>) => void }) {
   const t = useT();
   return <>
     {node.type === "assert_body" && <label>{t("exp.contains")}<TemplateField multiline primary value={node.contains} onChange={contains => patch({ contains })} /></label>}
@@ -47,6 +50,8 @@ export function ExperimentNodeFields({ node, patch }: { node: ExperimentNode; pa
         <button className="ghost sm" aria-label={t("exp.removeHeader")} data-tip={t("exp.removeHeader")} onClick={() => patch({ request: { ...node.request, headers: node.request.headers.filter((_, i) => i !== index) } })}>×</button>
       </div>)}<button className="ghost sm" onClick={() => patch({ request: { ...node.request, headers: [...node.request.headers, ["", ""]] } })}>＋ {t("exp.addHeader")}</button></div>
       <label>{t("exp.body")}<TemplateField multiline value={node.request.body ?? ""} onChange={body => patch({ request: { ...node.request, body: body || null } })} /></label>
+      <HttpAuthFields templates auth={node.request.auth ?? { scheme: "none" }}
+        onChange={auth => { const { auth: _, ...rest } = node.request; patch({ request: auth.scheme === "none" ? rest : { ...rest, auth } }); }} />
     </>}
     {node.type === "delay" && <label>{t("exp.delayMs")}<input data-primary type="number" min="0" max="60000" value={node.ms} onChange={(event) => patch({ ms: Number(event.target.value) })} /></label>}
     {(node.type === "assert_status" || node.type === "branch_status") && <label>{t("exp.expectedStatus")}<input data-primary type="number" min="100" max="599" value={node.status} onChange={(event) => patch({ status: Number(event.target.value) })} /></label>}
@@ -87,7 +92,8 @@ export function ExperimentNodeFields({ node, patch }: { node: ExperimentNode; pa
       <label>{t("exp.port")}<input type="number" min="1" max="65535" value={node.port} onChange={event => patch({ port: Number(event.target.value) })} /></label>
       <label data-tip={t("exp.topicFilterHint")}>{t("exp.topicFilter")}<TemplateField primary value={node.topic} placeholder="lab/+/state" onChange={topic => patch({ topic })} /></label>
     </>}
-    {(node.type === "wait_udp" || node.type === "wait_mqtt") && <>
+    {(node.type === "ws_connect" || node.type === "ws_send" || node.type === "wait_ws" || node.type === "ws_close") && <ExperimentWsFields node={node} doc={doc} patch={patch} />}
+    {(node.type === "wait_udp" || node.type === "wait_mqtt" || node.type === "wait_ws") && <>
       <label>{t("exp.waitMode")}<select value={node.mode} onChange={event => patch({ mode: event.target.value as UdpMode })}>{UDP_MODES.map(mode => <option key={mode} value={mode}>{t(`exp.mode.${mode}` as TKey)}</option>)}</select></label>
       {node.mode !== "any" && <label>{t("field.pattern")}<TemplateField primary value={node.pattern} placeholder={MODE_PLACEHOLDER[node.mode]} onChange={pattern => patch({ pattern })} /></label>}
     </>}
@@ -100,7 +106,8 @@ export function ExperimentNodeFields({ node, patch }: { node: ExperimentNode; pa
       <ConditionsEditor conditions={node.when} onChange={when => patch({ when })} idPrefix={`${node.id}-`} />
     </>}
     {node.type === "emulator" && <ExperimentEmulatorFields emulator={node.emulator} onChange={emulator => patch({ emulator })} />}
-    {(node.type === "wait_osc" || node.type === "wait_udp" || node.type === "wait_mqtt" || node.type === "wait_http") && <>
+    {(node.type === "impairment" || node.type === "impairment_change" || node.type === "emulator_state") && <ExperimentFaultFields node={node} doc={doc} patch={patch} />}
+    {(node.type === "wait_osc" || node.type === "wait_udp" || node.type === "wait_mqtt" || node.type === "wait_http" || node.type === "wait_ws") && <>
       <label>{t("exp.waitTimeout")}<input type="number" min="1" max="120000" value={node.timeout_ms} onChange={event => patch({ timeout_ms: Number(event.target.value) })} /></label>
       <label>{t("exp.replyVariable")}<input value={node.variable} spellCheck={false} onChange={event => patch({ variable: event.target.value.replace(/\s+/g, "_") })} /></label>
     </>}

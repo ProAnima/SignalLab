@@ -48,6 +48,59 @@ release notes — so what is written here is what users read. See
   closes, or holds the request), TCP devices and the broker drop and refuse connections,
   OSC and UDP devices go silent; what met an outage is counted apart. A response can be
   *malformed*: complete HTTP whose JSON stops halfway.
+- **Faults on a schedule.** Three new nodes break things on cue. **Impairment** puts a
+  UDP impairment relay in front of a device for the whole run (*Route through
+  impairment* on an OSC or UDP node inserts one and points the node at it); **Change
+  impairment** switches it to another profile mid-run; **Emulator down/up** takes one of
+  the run's emulators down and brings it back. The relay's decisions come from the run's
+  seed — the same seed drops the same packets — each phase is counted in the report, and
+  a run that ends in any way closes its relays. Templates *Fault phases* and *Dependency
+  outage* show both. Experiment files are now version 7; run reports version 4.
+- **More ways a network fails.** The impairment relay adds bursts of loss, reordering, a
+  bandwidth limit and *offline*, has presets (*LAN*, *Busy Wi-Fi*, *4G*, *Satellite*,
+  *Intermittent*, *Offline*), takes edits while it runs without dropping its port, and
+  counts what it received, throttled and reordered. A running emulator can be taken down
+  and brought up by hand on the Emulators screen, over the API (`emulator_down`) and by an
+  assistant (`set_emulator_down`).
+- **WebSocket.** A new *WebSocket* screen connects to `ws://` and `wss://` services with
+  the headers and subprotocols they expect, sends text or bytes (`Ctrl+Enter`) and lists
+  every message as it comes, JSON formatted, with the close handshake and who closed.
+  Experiments get **WebSocket connect**, **WebSocket send**, **Wait for WebSocket** (any,
+  contains, regex, hex; the message as `{{reply.text}}`, `{{reply.json.field}}`) and
+  **WebSocket close**; a token extracted earlier can be in the URL or a header, and a run
+  that ends in any way closes its connections with a proper close frame. *Send now* on a
+  send or a wait opens the connection its connect node describes. The template *WebSocket
+  echo*; `signallab send ws <url> --text … --expect …` and the assistant's `send_ws`;
+  the API's `ws_connect`, `ws_send`, `ws_close`, `ws_exchange`. Experiment files are now
+  version 8.
+- **A parameter matrix for the command line.** `signallab run` and `validate` take
+  `--matrix NAME=V1,V2` (repeat for more names: every combination runs) and
+  `--matrix-file` (axes, or a list of combinations), and `--fail-fast` stops at the
+  first run that does not pass. Each combination is a run of its own — named with its
+  values, a JUnit suite with `param.NAME` properties, a report of its own, a `matrix`
+  object in `--json` — all checked before the first sends anything, here or on a
+  server. The GitHub Action has `matrix`, `matrix-file` and `fail-fast` inputs.
+- **HTTP authentication and cookies.** A request — on the HTTP screen, in an experiment's
+  HTTP node, in a burst, from `signallab send http` (`-u name:password`, `--digest`,
+  `--bearer`) and the assistant's `send_http` — authenticates with **Basic**, **Bearer**
+  or **Digest**: the server's 401 challenge is answered (RFC 7616: MD5 and SHA-256, their
+  `-sess` variants, `qop=auth` and `auth-int`) and the request sent again; a burst
+  answers one challenge for all its requests and a stale nonce once more. The
+  credentials go only into the request: nothing in the Inspector, a step or a report
+  shows them, and a node's password can be `{{secret.NAME}}`. A **cookie jar** sends back
+  what servers set with Set-Cookie, as a browser does (domain, path, Secure, expiry): the
+  HTTP screen keeps one, listed and cleared there (*Keep cookies*), and every run keeps
+  its own (*Keep cookies between requests* in the Parameters panel). Files from before
+  version 8 open with the run's jar off, so they run as they did.
+- **Load at a rate, read in percentiles.** The HTTP screen's burst can start requests on
+  a schedule of its own — *Rate, req/s*, 0.1 to 100 000 — instead of each worker sending
+  again on its answer. A request that finds every worker busy is skipped and counted as
+  *Missed* rather than sent late, so a server that cannot keep up shows it instead of
+  being given a breather. Every burst reports p50, p90, p95 and p99 next to the average
+  and min/max (read to within half a percent, in constant memory however long it runs),
+  in a row of their own; a short latency reads with two decimals instead of "0 ms", one
+  from a second on in seconds, and the last report rates the whole burst.
+  `http_burst_start` takes `rate`.
 - Every HTTP route has **Copy the URL**, and **Mock this** is offered on a *Send now*
   response in the experiment editor as well, a URL template becoming a path pattern
   (`{{api}}/orders/{{id}}` → `/orders/:id`). A problem in an emulator says which rule
@@ -215,6 +268,9 @@ release notes — so what is written here is what users read. See
 
 ### Fixed
 
+- The Inspector had no MQTT filter chip, although it captures MQTT.
+- A job that ended before it was registered — a burst of one against a refused port —
+  stayed in the console strip's list for good.
 - A check of the last HTTP response right after a Loop (*HTTP status* on Done, an
   *Extract*) was refused as having no request before it, although the Loop's body, which
   always runs, made one.

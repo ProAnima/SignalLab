@@ -12,7 +12,7 @@ use serde_json::json;
 
 use crate::host::Host;
 
-use super::emulator::Emulator;
+use super::emulator::{DownFault, Emulator};
 use super::emulator_http;
 use super::emulator_mqtt;
 use super::emulator_net;
@@ -55,6 +55,9 @@ pub struct Snapshot {
     pub protocol: &'static str,
     pub local: String,
     pub counts: Counts,
+    /// Taken down by a person (or a run), with what HTTP meets meanwhile.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub forced: Option<DownFault>,
     pub exchanges: Vec<Exchange>,
 }
 
@@ -67,8 +70,15 @@ impl EmulatorHub {
             protocol: emulation.protocol,
             local: emulation.local.to_string(),
             counts: emulation.counts(),
+            forced: emulation.forced(),
             exchanges: emulation.exchanges(after, limit.clamp(1, RECENT)),
         })
+    }
+
+    /// Take emulator job `id` down (`Some`) or bring it up, whatever its outage says.
+    pub fn force(&self, id: u64, down: Option<DownFault>) -> EngineResult<()> {
+        self.get(id)?.force(down);
+        Ok(())
     }
 }
 
@@ -139,6 +149,8 @@ struct Activity {
     job_id: u64,
     ts: u64,
     counts: Counts,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    forced: Option<DownFault>,
     exchanges: Vec<Exchange>,
     /// Exchanges that happened but were not sent in this event.
     dropped: u64,
@@ -146,7 +158,7 @@ struct Activity {
 
 fn flush(host: &Host, id: u64, emulation: &Emulation) {
     if let Some((exchanges, dropped)) = emulation.take_fresh() {
-        host.emit("emulator://activity", Activity { job_id: id, ts: now_ms(), counts: emulation.counts(), exchanges, dropped });
+        host.emit("emulator://activity", Activity { job_id: id, ts: now_ms(), counts: emulation.counts(), forced: emulation.forced(), exchanges, dropped });
     }
 }
 

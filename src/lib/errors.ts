@@ -45,11 +45,16 @@ export function fieldLabel(field: { key: string; index?: number }, t: Translate)
 
 /**
  * Values for an engine message (an error or a step result), with comparison
- * operators (`op`) worded in the current language.
+ * operators (`op`) and impairment presets (`profile`, `before`: `4g`) worded
+ * in the current language.
  */
 export function messageParams(params: Record<string, string | number> | undefined, t: Translate): Record<string, string | number> {
   const out: Record<string, string | number> = { ...params };
   if (typeof out.op === "string" && has(`exp.op.${out.op}`)) out.op = t(`exp.op.${out.op}`);
+  for (const name of ["profile", "before"]) {
+    const value = out[name];
+    if (typeof value === "string" && has(`ns.preset.${value}`)) out[name] = t(`ns.preset.${value}`);
+  }
   return out;
 }
 

@@ -25,7 +25,7 @@ This decides what we build and what we leave to others:
 
 ### Delivered
 
-- **Direct instruments:** OSC sender/monitor/generator, MQTT client, broadcast/multicast/sweep and discovery responder, HTTP request and concurrent burst, UDP impairment relay, UDP/TCP storm, TCP scanner, Inspector capture bus, Signals library with `Ctrl+K`.
+- **Direct instruments:** OSC sender/monitor/generator, MQTT client, broadcast/multicast/sweep and discovery responder, HTTP request and concurrent burst (at a rate, with percentiles), UDP impairment relay, UDP/TCP storm, TCP scanner, Inspector capture bus, Signals library with `Ctrl+K`.
 - **Experiment editor:** versioned JSON documents, templates, import/export, grouped undo/redo, autosave, search, arrange/fit, focus and fullscreen modes, 900×600 layout.
 - **Node creation:** `A` adds after the selected node and focuses its main field; drag a wire from an output onto a node to connect or onto empty canvas to create the next node — an output may have several wires, which run in parallel; the ＋ on a wire inserts into that wire; saved Signals appear in the add menu as prefilled nodes; OSC and HTTP screens have *Add to experiment*.
 - **Nodes:** Start/End, HTTP, OSC, UDP, TCP, MQTT publish, Log, Delay, HTTP status/body/header/latency checks, status branch, parallel branch and join.
@@ -37,8 +37,8 @@ This decides what we build and what we leave to others:
 
 ### Known gaps in what exists
 
-- An emulator's outage is a fixed schedule from its start; changing it mid-run, in step with the traffic, is milestone 6.
-- HTTP burst reports min/avg/max, not percentiles; there is no rate control.
+- The impairment relay is UDP only; impairing a TCP stream (latency, throttling, reset, half-open) is still to come.
+- The HTTP burst runs at one fixed rate or as fast as its workers go; ramps, steps and spikes, thresholds and an HTTP node under load are milestone 7.
 - The Inspector ring truncates payloads at 1 KiB and holds 8192 frames: good for looking, not for replay.
 - Remaining editor work: multi-selection and copy/paste.
 
@@ -154,6 +154,8 @@ Detailed design: [docs/milestone-4-reactive.md](docs/milestone-4-reactive.md). *
 
 **Goal.** Degrade the network or a dependency on a schedule, from the same graph, and always restore it.
 
+**Status:** delivered — the **Impairment**, **Change impairment** and **Emulator down/up** nodes (document version 7); presets *LAN*, *Busy Wi-Fi*, *4G*, *Satellite*, *Intermittent*, *Offline*; bursts of loss (Gilbert–Elliott), reordering, a bandwidth limit and offline in the relay; profiles changed while a relay runs, on the Impairment screen too; every decision drawn from the run's seed; each phase counted in the run report (version 4) and every applied fault a timeline step; relays closed with the run whatever its outcome; *Route through impairment* on OSC and UDP nodes; the templates *Fault phases* and *Dependency outage*; a running emulator taken down and brought up by hand, over the API and over MCP. The "done when" below is an engine test (`engine/tests/faults.rs`). Still open: TCP impairment, and comparing two runs' reports side by side (milestone 7).
+
 **What the user gets**
 
 - **Impairment** node: starts the UDP relay (listen → target) with a profile; **Change impairment** switches profiles mid-run; the relay stops and is restored at the end of the run, whatever the outcome.
@@ -179,6 +181,8 @@ Detailed design: [docs/milestone-4-reactive.md](docs/milestone-4-reactive.md). *
 
 **Goal.** Measure, not only pass/fail.
 
+**Status:** started — the HTTP screen's burst runs at a fixed rate (open model) or as fast as its workers go, counts the requests it missed, and reports p50/p90/p95/p99 (`engine/tests/burst.rs`). Still open: profiles, the *Load* setting on a node, thresholds, run history and Compare.
+
 **What the user gets**
 
 - **Load** on an HTTP node (later OSC/UDP/MQTT): constant rate, ramp, step, spike, soak, Poisson arrivals; bounded by rate and duration caps.
@@ -193,8 +197,8 @@ Detailed design: [docs/milestone-4-reactive.md](docs/milestone-4-reactive.md). *
 
 **How (engine)**
 
-- Extend the burst runner with an open-model scheduler (token bucket following the profile) next to today's closed model (fixed workers).
-- Percentiles through `hdrhistogram`; progress events stay batched and rate-gated.
+- The burst runner already has both models: a fixed rate on an absolute schedule (each request due at n / rate, missed when no worker is free within 50 ms) and the closed model (each worker sends again on its answer); a profile makes the rate a function of time.
+- Percentiles come from `latency::LatencyHistogram` (log buckets 1 % wide, atomics, constant memory); progress events stay batched and rate-gated.
 - Reports gain a metrics block; comparison is a pure function over two reports.
 
 **Done when** a ramp test with thresholds fails for the right reason and its comparison with a previous run shows the regression.
@@ -251,7 +255,7 @@ Detailed design: [docs/milestone-4-reactive.md](docs/milestone-4-reactive.md). *
 
 Added when a real experiment needs them, each on the same node/wait/template model:
 
-- **WebSocket**: connect, send, wait for message, close; later load with many clients.
+- **WebSocket**: connect, send, wait for message, close — delivered (the WebSocket screen, four nodes, `send ws`, `send_ws`; document version 8). Still to come: load with many clients, and a WebSocket emulator.
 - **SSE** listener: events as waitable messages, reconnect detection.
 - **Scripted TCP/UDP exchange**: `SEND HEX`, `WAIT`, `EXPECT` with wildcards, `READ n`, `EXTRACT bytes[4:8]` — for proprietary binary protocols.
 - **Protocol bridge**: a job that maps OSC ↔ MQTT ↔ HTTP ↔ UDP with templates (`/sensor/temp $1` → topic `sensor/temp`, payload `{"t": $1}`), useful as a temporary integration gateway.
@@ -277,7 +281,7 @@ Detailed design: [docs/delivery.md](docs/delivery.md).
 
 ## Next concrete slice (milestone 6 — faults as nodes)
 
-Milestone 5 is delivered as emulators (HTTP, OSC, UDP, TCP, an MQTT broker), with outages and the malformed fault, the *Emulator* node and *Wait for HTTP request*; document version 6. Milestone 4 before it added **Repeat** and the bounded **Loop** (version 5). Every screen, the Emulators screen included, is walked end to end — desktop app and server, Windows and Linux, and the published image (`npm run e2e`). Next: **faults as nodes and phases** (milestone 6) — the impairment relay as a node with profiles that change mid-run, and the emulators' outages put on the same schedule, so a phase can take a dependency down and bring it back.
+Milestone 6 is delivered: faults as nodes and phases — Impairment, Change impairment and Emulator down/up, seeded and counted per phase; document version 7. Milestone 5 before it delivered emulators (HTTP, OSC, UDP, TCP, an MQTT broker), with outages and the malformed fault, the *Emulator* node and *Wait for HTTP request* (version 6). Milestone 4 before it added **Repeat** and the bounded **Loop** (version 5). Every screen, the Emulators screen included, is walked end to end — desktop app and server, Windows and Linux, and the published image (`npm run e2e`). Next: **faults as nodes and phases** (milestone 6) — the impairment relay as a node with profiles that change mid-run, and the emulators' outages put on the same schedule, so a phase can take a dependency down and bring it back.
 
 ### PR 4.2 as planned
 

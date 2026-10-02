@@ -40,6 +40,9 @@ signallab doctor                                   # what stands between Signal 
 | `<FILE>…` | experiment files (any version the app reads; older ones are migrated) or bundled template names |
 | `--param NAME=VALUE` | a parameter value for this run, repeatable; it applies to the experiments that have that parameter and must belong to at least one |
 | `--profile NAME` | run with this profile (`""` = the defaults) |
+| `--matrix NAME=V1,V2` (`-m`) | run once per value; repeat for more names — every combination runs, the first name varying slowest — or the same name again for more values |
+| `--matrix-file PATH` | combinations from JSON: `{"NAME": [values], …}` (every combination; its names after `--matrix`'s, alphabetically) or `[{"NAME": value, …}, …]` (these, each crossed with `--matrix`) |
+| `--fail-fast` | stop at the first run that does not pass; the rest are not started (said, and counted as `not_started` in `--json`'s summary) |
 | `--seed N` | the seed of the random values; a failed run prints the one it used |
 | `--timeout SECONDS` | fail a run that takes longer (1–300, default 300) |
 | `--junit PATH` | a JUnit report: a suite per experiment, a case per node that ran, skipped cases for nodes the run never reached, the failure in words with its technical detail |
@@ -65,6 +68,19 @@ summary.
 ```
 
 On GitHub Actions a failure is also an `::error` annotation on the run page.
+
+**A matrix** runs one experiment against every target, every user, every
+payload size. Each combination is a run of its own — named `file [host=a,
+user=admin]`, a test suite of the JUnit report (with `param.NAME` properties),
+a report of its own under `--report` (a folder) and, with `--json`, a `matrix`
+object on its `started` and `ended` lines. Every combination is checked before
+the first one sends anything; an experiment without one of the matrix's
+parameters runs once, not once per value it would ignore. At most 256
+combinations from one command.
+
+```
+signallab run smoke.json -m host=10.0.0.20:9000,10.0.0.21:9000 -m user=admin,guest --fail-fast --junit junit.xml
+```
 
 ### Exit codes
 
@@ -108,8 +124,9 @@ is exit code 2, before any traffic.
 | --- | --- |
 | `send osc <host:port> <address> [ARG]…` | one OSC message; arguments typed as `i:3 f:0.5 d:1.5 h:64 s:text b:de ad T F N`, a plain integer is `i`, a plain decimal `f`, anything else `s` |
 | `send udp <host:port> --text T \| --hex "de ad"` | one datagram |
-| `send http <METHOD> <URL> [-H 'Name: value'] [--body TEXT\|@file] [--expect-status N] [--timeout MS]` | prints the status line on stderr and the body on stdout |
+| `send http <METHOD> <URL> [-H 'Name: value'] [--body TEXT\|@file] [--expect-status N] [--timeout MS] [-u NAME:PASSWORD [--digest] \| --bearer TOKEN]` | prints the status line on stderr and the body on stdout; `-u` is Basic, with `--digest` the server's 401 challenge is answered (MD5, SHA-256); exit 1 when a Digest could not be answered, and why |
 | `send mqtt <host:port> <topic> [payload] [--qos 0\|1\|2] [--retain]` | one publish, MQTT 3.1.1; an empty payload with `--retain` clears a retained value |
+| `send ws <ws://…> [--text T \| --hex "de ad"] [-H 'Name: value'] [--protocol P]… [--expect TEXT \| --expect-regex RE \| --wait] [--timeout MS]` | connect, send, wait for the answer, close: the answer on stdout, the handshake on stderr; exit 1 when the expected answer does not come (`--wait` with nothing sent: the first message, a greeting) |
 | `fire <id or name> [--library PATH]` | a signal of a library (default: the app's `Documents/SignalLab/signals.json`), by id, else by name |
 
 They use the commands the app's screens use, so a fired signal is
@@ -142,6 +159,12 @@ emulator ends with its counts: requests, how many no rule took, how many failed,
 many met an outage (`down`, when it has one), and the hits per rule. `--json` prints
 `started`, every `exchange` (with what arrived: method, path, headers, body, JSON;
 address and arguments; text; topic, levels and payload) and a `summary` per emulator. A port that is taken is exit code 3, an emulator that would not start 2.
+
+A run with *Impairment* nodes ends with a line per relay too — what it received,
+dropped and throttled, and each phase as forwarded / received:
+`127.0.0.1:9010 → 127.0.0.1:9000: 160 datagrams, 41 dropped, 0 throttled · lan
+0.0–2.0 s 40/40, wifi 2.0–4.0 s 39/40, offline 4.0–6.0 s 0/40, lan 6.0–8.0 s 40/40` —
+and the report and `--json` carry them (`impairments`).
 
 In a pipeline, the dependency runs in the background while the system under test is
 tested against it:
@@ -188,7 +211,7 @@ talk to gear directly:
 | `list_templates`, `get_template` | the bundled experiments, to run or adapt |
 | `validate_experiment` | the editor's check, nothing sent |
 | `run_experiment` | a run to its end: every step, what came back, why it failed; progress while it runs; cancelling stops the run |
-| `send_osc`, `send_udp`, `send_http`, `send_mqtt` | one message, as the app sends it |
+| `send_osc`, `send_udp`, `send_http`, `send_mqtt`, `send_ws` | one message (a WebSocket exchange: connect, send, the answer, close), as the app sends it |
 | `listen` | what arrives on a UDP port for a while — OSC decoded, other datagrams as text and hex |
 | `list_signals`, `fire_signal` | the user's signal library |
 | `list_emulators` | the user's emulator library |
@@ -311,7 +334,8 @@ jobs:
         with: { name: signallab-junit, path: signallab-junit.xml }
 ```
 
-Inputs: `experiments`, `params`, `profile`, `server`, `token`, `junit`,
+Inputs: `experiments`, `params`, `profile`, `matrix` (`NAME=V1,V2`, one per
+line), `matrix-file`, `fail-fast`, `server`, `token`, `junit`,
 `timeout`, `version` (the image tag, default `latest`), `image`, `lang`,
 `fail-on-error` (`"false"` to go on after a failed run and branch on `exit-code` —
 GitHub hands on no outputs of an action that failed); outputs `junit` and

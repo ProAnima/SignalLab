@@ -14,6 +14,7 @@ mod extract;
 mod fail;
 mod i18n;
 mod junit;
+mod matrix;
 mod mcp;
 mod mcp_library;
 mod mcp_send;
@@ -100,6 +101,16 @@ struct Experiments {
     /// Run with this profile (every experiment must have it); "" runs with the defaults.
     #[arg(long, value_name = "NAME")]
     profile: Option<String>,
+
+    /// Run once per value: NAME=V1,V2; repeat for more names (every combination runs, the
+    /// first name varying slowest) or the same name again for more values.
+    #[arg(long = "matrix", short = 'm', value_name = "NAME=V1,V2")]
+    matrix: Vec<String>,
+
+    /// Combinations from a JSON file: {"NAME": [values], …} (every combination, its names
+    /// after --matrix's, alphabetically) or [{"NAME": value, …}, …] (these, each crossed with --matrix).
+    #[arg(long = "matrix-file", value_name = "PATH")]
+    matrix_file: Option<PathBuf>,
 }
 
 /// Where the experiments run: here (the default) or on a server.
@@ -144,6 +155,10 @@ struct RunArgs {
     /// Fail a run that takes longer than this, 1–300 seconds [default: 300].
     #[arg(long, value_name = "SECONDS")]
     timeout: Option<u64>,
+
+    /// Stop at the first run that does not pass; the rest are not started.
+    #[arg(long)]
+    fail_fast: bool,
 
     /// Write a JUnit XML report here: a test suite per experiment, a test case per node.
     #[arg(long, value_name = "PATH")]
@@ -206,6 +221,45 @@ enum SendCommand {
         expect_status: Option<u16>,
         /// Milliseconds to wait for the response.
         #[arg(long, value_name = "MS", default_value_t = 10_000)]
+        timeout: u64,
+        /// Credentials, "name:password": Basic, or Digest with --digest.
+        #[arg(short = 'u', long = "user", value_name = "NAME:PASSWORD", conflicts_with = "bearer")]
+        user: Option<String>,
+        /// Answer the server's Digest challenge with --user (MD5 or SHA-256).
+        #[arg(long, requires = "user")]
+        digest: bool,
+        /// A bearer token: "Authorization: Bearer <token>".
+        #[arg(long, value_name = "TOKEN")]
+        bearer: Option<String>,
+    },
+    /// One WebSocket exchange: connect, send a message, wait for an answer, close.
+    /// Prints the answer; exits 1 when the expected one does not come.
+    Ws {
+        /// ws://host:port/path or wss://…
+        url: String,
+        /// The message as text.
+        #[arg(long, conflicts_with = "hex")]
+        text: Option<String>,
+        /// The message as hex bytes, sent as a binary message: "de ad be ef".
+        #[arg(long)]
+        hex: Option<String>,
+        /// A header for the upgrade, "Name: value"; repeat for more.
+        #[arg(short = 'H', long = "header", value_name = "NAME: VALUE")]
+        headers: Vec<String>,
+        /// A subprotocol to offer; repeat for more, in order of preference.
+        #[arg(long = "protocol", value_name = "NAME")]
+        protocols: Vec<String>,
+        /// Wait for a message containing this text.
+        #[arg(long, value_name = "TEXT", conflicts_with_all = ["expect_regex", "wait"])]
+        expect: Option<String>,
+        /// Wait for a message matching this regular expression.
+        #[arg(long, value_name = "REGEX", conflicts_with = "wait")]
+        expect_regex: Option<String>,
+        /// Wait for any message.
+        #[arg(long)]
+        wait: bool,
+        /// Milliseconds to wait for the answer.
+        #[arg(long, value_name = "MS", default_value_t = 2_000)]
         timeout: u64,
     },
     /// One MQTT publish (3.1.1, plain TCP, no credentials).

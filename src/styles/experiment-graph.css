@@ -175,6 +175,7 @@
 [data-group="data"] { --node-color: var(--node-data); }
 [data-group="observe"] { --node-color: var(--node-observe); }
 [data-group="emulate"] { --node-color: var(--node-emulate); }
+[data-group="fault"] { --node-color: var(--node-fault); }
 .experiment-node-type { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 .experiment-node-type::before { content: ""; display: inline-block; width: 5px; height: 12px; margin-right: var(--space-2); border-radius: var(--radius-xs); background: var(--node-color); vertical-align: -1px; }
 .experiment-add-menu .experiment-kind { flex: 0 0 26px; height: 26px; border-radius: var(--radius-xs); color: var(--node-color); background: var(--surface-3); font-size: 14px; }

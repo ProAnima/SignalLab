@@ -14,8 +14,8 @@ use crate::catalog;
 use crate::fail::Failure;
 use crate::i18n::TEMPLATES;
 use crate::mcp::{Answer, State};
-use crate::mcp_library::{emulator_exchanges, fire, list_emulators, list_signals, start_emulator};
-use crate::mcp_send::{listen, send_http, send_mqtt, send_osc, send_udp};
+use crate::mcp_library::{emulator_exchanges, fire, list_emulators, list_signals, set_emulator_down, start_emulator};
+use crate::mcp_send::{listen, send_http, send_mqtt, send_osc, send_udp, send_ws};
 use crate::run::{failure_text, node_label, read_input, step_text, Ended, Input};
 
 fn experiment_source() -> Value {
@@ -52,12 +52,19 @@ pub(crate) fn tools() -> Vec<Value> {
             json!({ "target": { "type": "string", "description": "host:port" }, "address": { "type": "string", "description": "/osc/address" }, "args": { "type": "array" } }), &["target", "address"], false),
         tool("send_udp", "Send UDP", "Send one UDP datagram: text, or hex bytes.",
             json!({ "target": { "type": "string", "description": "host:port" }, "text": { "type": "string" }, "hex": { "type": "string", "description": "e.g. \"de ad be ef\"" } }), &["target"], false),
-        tool("send_http", "Send HTTP", "Send one HTTP request; returns the status, the time, the headers and the body (the first 16 KB).",
+        tool("send_http", "Send HTTP", "Send one HTTP request; returns the status, the time, the headers and the body (the first 16 KB). auth: Basic, Bearer, or Digest (the server's 401 challenge answered, MD5 or SHA-256).",
             json!({ "method": { "type": "string", "description": "GET, POST, …" }, "url": { "type": "string" }, "headers": { "type": "object", "additionalProperties": { "type": "string" } },
-                    "body": { "type": "string" }, "timeout_ms": { "type": "integer", "minimum": 1 } }), &["method", "url"], false),
+                    "body": { "type": "string" }, "timeout_ms": { "type": "integer", "minimum": 1 },
+                    "auth": { "type": "object", "description": "{scheme: basic|digest, username, password} or {scheme: bearer, token}",
+                              "properties": { "scheme": { "type": "string", "enum": ["none", "basic", "bearer", "digest"] }, "username": { "type": "string" }, "password": { "type": "string" }, "token": { "type": "string" } } } }), &["method", "url"], false),
         tool("send_mqtt", "Publish MQTT", "Publish one MQTT 3.1.1 message. An empty payload with retain clears a retained value.",
             json!({ "broker": { "type": "string", "description": "host:port (1883 when no port)" }, "topic": { "type": "string" }, "payload": { "type": "string" },
                     "qos": { "type": "integer", "enum": [0, 1, 2] }, "retain": { "type": "boolean" } }), &["broker", "topic"], false),
+        tool("send_ws", "WebSocket exchange", "Connect to a WebSocket (ws:// or wss://), send one message, optionally wait for the answer, then close. Returns the handshake (subprotocol, time), what was sent and the answer, its JSON parsed when it is JSON.",
+            json!({ "url": { "type": "string", "description": "ws://host:port/path or wss://…" }, "text": { "type": "string" }, "hex": { "type": "string", "description": "a binary message, e.g. \"de ad be ef\"" },
+                    "headers": { "type": "object", "additionalProperties": { "type": "string" } }, "protocols": { "type": "array", "items": { "type": "string" }, "description": "subprotocols to offer" },
+                    "expect": { "type": "string", "description": "wait for a message containing this" }, "expect_regex": { "type": "string", "description": "wait for a message matching this" },
+                    "wait": { "type": "boolean", "description": "wait for any message" }, "timeout_ms": { "type": "integer", "minimum": 1, "maximum": 120000, "description": "for the answer (default 2000)" } }), &["url"], false),
         tool("listen", "Listen on a port", "Listen on a UDP port of the machine signallab runs on for a while and return what arrived: OSC messages decoded, other datagrams as text and hex. Not with --server.",
             json!({ "protocol": { "type": "string", "enum": ["osc", "udp"] }, "bind": { "type": "string", "description": "IP:port, e.g. 0.0.0.0:9000" },
                     "seconds": { "type": "number", "minimum": 0.1, "maximum": 60 }, "max": { "type": "integer", "minimum": 1, "maximum": 1000 } }), &["bind"], false),
@@ -73,6 +80,8 @@ pub(crate) fn tools() -> Vec<Value> {
                     "params": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Values its templates read as parameters" }, "seed": { "type": "integer", "minimum": 0 } }), &[], false),
         tool("emulator_exchanges", "What an emulator received", "The requests a running emulator received and what it answered, rule by rule, each with what it carried (method, path, headers, body, JSON; address and arguments; text). after: only those after this sequence number.",
             json!({ "job_id": { "type": "integer" }, "after": { "type": "integer", "minimum": 0 } }), &["job_id"], true),
+        tool("set_emulator_down", "Take an emulator down or up", "Pull the plug on a running emulator, or put it back: down until brought up, whatever its outage says. HTTP meets fault meanwhile (unavailable: 503, reset, timeout); a TCP device and an MQTT broker drop connections; OSC and UDP answer nothing. For a dependency that goes away in the middle of a test.",
+            json!({ "job_id": { "type": "integer" }, "down": { "type": "boolean" }, "fault": { "type": "string", "enum": ["unavailable", "reset", "timeout"] } }), &["job_id", "down"], false),
         tool("list_jobs", "List jobs", "What is running: monitors, generators, emulators, runs.", json!({}), &[], true),
         tool("stop_job", "Stop a job", "Stop a running job by its id.", json!({ "id": { "type": "integer" } }), &["id"], false),
     ]
@@ -98,12 +107,14 @@ pub(crate) async fn call(state: &State, name: &str, arguments: &Value, request: 
         "send_udp" => send_udp(state, arguments).await,
         "send_http" => send_http(state, arguments).await,
         "send_mqtt" => send_mqtt(state, arguments).await,
+        "send_ws" => send_ws(state, arguments).await,
         "listen" => listen(state, arguments).await,
         "list_signals" => list_signals(state, arguments),
         "fire_signal" => fire(state, arguments).await,
         "list_emulators" => list_emulators(state, arguments),
         "start_emulator" => start_emulator(state, arguments).await,
         "emulator_exchanges" => emulator_exchanges(state, arguments).await,
+        "set_emulator_down" => set_emulator_down(state, arguments).await,
         "list_jobs" => match state.engine.invoke("jobs_list", json!({})).await {
             Ok(jobs) => {
                 let lines: Vec<String> = jobs.as_array().into_iter().flatten().map(|job| format!("#{} {} — {}", job["id"], job["kind"].as_str().unwrap_or_default(), job["label"].as_str().unwrap_or_default())).collect();
@@ -262,12 +273,19 @@ async fn run(state: &State, arguments: &Value, request: &str, progress: Value) -
             text.push_str(&format!("\n  {}", crate::emulate::counts_line(texts, emulator["name"].as_str().unwrap_or_default(), &emulator["counts"])));
         }
     }
+    // What the network was put through, phase by phase: the proof of a fault schedule.
+    if !ended.impairments.is_empty() {
+        text.push_str("\n\nImpairments:");
+        for impairment in &ended.impairments {
+            text.push_str(&format!("\n  {}", crate::run::impairment_line(texts, impairment)));
+        }
+    }
     if let Some(path) = &ended.report_path {
         text.push_str(&format!("\n\nReport: {path}"));
     }
     let data = json!({
         "outcome": ended.outcome, "experiment": ended.experiment, "seed": ended.seed, "duration_ms": ended.ended_ms.saturating_sub(ended.started_ms),
-        "error": ended.error, "steps": steps, "emulators": ended.emulators, "report_path": ended.report_path,
+        "error": ended.error, "steps": steps, "emulators": ended.emulators, "impairments": ended.impairments, "report_path": ended.report_path,
     });
     // A run that failed is an answer, not a failed call: the steps say why.
     Answer::ok(text, data)

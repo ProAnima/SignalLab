@@ -1,0 +1,6 @@
+/* ---------- http: authentication state, the cookie jar ---------- */
+
+.http-auth-state { margin: 0 0 10px; }
+.http-cookies td { font-family: var(--mono); font-size: 11px; }
+/* A session token is long: the cell ends in an ellipsis, the whole value is selectable. */
+.http-cookie-value { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; user-select: text; }

@@ -22,7 +22,7 @@ const CHECK_AFTER_MS = 300;
 export function EmulatorsView({ reveal, onShowFrame }: { reveal?: { id: string; at: number } | null; onShowFrame?: (seq: number) => void }) {
   const t = useT();
   const fid = useFieldIds();
-  const { stopJob } = useStore();
+  const { stopJob, pushLog, pushError } = useStore();
   const { emulators, setEmulators, path, error: libraryError, saveState, reload, running, live, start, startedWith } = useEmulators();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -161,6 +161,14 @@ export function EmulatorsView({ reveal, onShowFrame }: { reveal?: { id: string; 
                   {job ? t("emu.stop") : t("emu.start")}
                 </button>
                 {job && changed && <button className="ghost" disabled={starting} data-tip={t("emu.restartHint")} onClick={() => void run()}>{t("emu.restart")}</button>}
+                {/* Pull the plug, or put it back: the client under test meets an outage on cue. */}
+                {job && <button className="ghost" data-tip={activity?.forced ? undefined : t("emu.takeDownHint")} onClick={() => {
+                  const down = !activity?.forced;
+                  api.emulatorDown(job.id, down).then(
+                    () => pushLog(down ? "warn" : "ok", "emulators", down ? "log.emulatorTakenDown" : "log.emulatorBroughtUp", { name: selected.emulator.name }),
+                    (error) => pushError("emulators", error),
+                  );
+                }}>{activity?.forced ? t("emu.bringUp") : t("emu.takeDown")}</button>}
                 {url && <button className="ghost" data-tip={copied === true ? t("emu.copied") : copied === false ? t("emu.copyFailed", { url }) : t("emu.copyUrlHint", { url })} onClick={copyUrl}>{t("emu.copyUrl")}</button>}
                 <button className="ghost" onClick={duplicate}>{t("emu.duplicate")}</button>
                 {/* Two steps, because the file is written the moment you click. */}
@@ -168,8 +176,8 @@ export function EmulatorsView({ reveal, onShowFrame }: { reveal?: { id: string; 
                   {confirmDelete ? t("emu.confirmDelete") : t("emu.delete")}
                 </button>
                 <span className="spacer" />
-                <span className={`emu-state ${job ? "on" : ""}`} role="status">
-                  {job ? t("emu.runningOn", { local: job.params?.local ?? selected.emulator.bind }) : t("emu.notRunning")}
+                <span className={`emu-state ${job ? (activity?.forced ? "down" : "on") : ""}`} role="status">
+                  {!job ? t("emu.notRunning") : t(activity?.forced ? "emu.isDown" : "emu.runningOn", { local: job.params?.local ?? selected.emulator.bind })}
                 </span>
               </div>
               {startError !== null && <ErrorMessage error={startError} />}

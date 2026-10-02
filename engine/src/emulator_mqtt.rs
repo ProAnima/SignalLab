@@ -384,7 +384,7 @@ async fn connection(stream: TcpStream, peer: SocketAddr, shared: &Arc<Shared>) {
         return;
     }
     let request = format!("CONNECT {}", connect.client_id).trim_end().to_string();
-    let down = context.down_for().is_some();
+    let down = context.down().is_some();
     let (code, refusal) = verdict(rules, &connect, down);
     if code != 0 {
         let _ = tokio::time::timeout(WRITE_TIMEOUT, async {
@@ -476,7 +476,7 @@ async fn serve_client(
             }
             _ = kick.notified() => return Ending::Lost,
             _ = tick.tick() => {
-                if context.down_for().is_some() {
+                if context.down().is_some() {
                     return Ending::Down;
                 }
                 if keep_alive.is_some_and(|limit| heard.elapsed() > limit) {

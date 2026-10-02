@@ -3,6 +3,7 @@
 //! same code as a step in a run.
 
 use std::net::{IpAddr, SocketAddr};
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::host::Host;
@@ -11,7 +12,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use super::broadcast::{self, EmitConfig, Payload, TargetMode};
 use super::error::{EngineError, EngineResult, Field};
 use super::experiment::NodeKind;
-use super::http::{self, HttpResponse};
+use super::cookies::CookieJar;
+use super::http::{self, DigestOutcome, HttpResponse};
 use super::inspect::{self, Frame};
 use super::listen::Listener;
 use super::mqtt;
@@ -73,19 +75,23 @@ async fn tcp(host: &str, port: u16, payload: &str, timeout_ms: u64) -> EngineRes
     }
 }
 
-async fn http_request(host: &Host, request: &http::HttpRequest) -> EngineResult<ActionOutcome> {
+async fn http_request(host: &Host, request: &http::HttpRequest, cookies: Option<Arc<CookieJar>>) -> EngineResult<ActionOutcome> {
     let in_url = |error: EngineError| error.in_field(Field::new("url"));
-    let response = http::request_once(host.clone(), request.clone()).await.map_err(in_url)?;
+    let response = http::request_once(host.clone(), request.clone(), cookies).await.map_err(in_url)?;
     match &response.error {
         Some(error) => {
             let cause = response.cause.unwrap_or(Cause::Failed);
             let failed = cause.error(&request.url).because(error);
             Err(in_url(if cause == Cause::Timeout { failed.with("ms", request.timeout_ms) } else { failed }))
         }
-        None => Ok(ActionOutcome {
-            detail: format!("HTTP {} · {:.0} ms", response.status, response.latency_ms),
-            response: Some(response),
-        }),
+        None => match &response.digest {
+            // A Digest that could not be answered: the 401 stands, and the reason with it.
+            Some(DigestOutcome { error: Some(error), .. }) => Err(error.clone().in_field(Field::new("auth"))),
+            _ => Ok(ActionOutcome {
+                detail: format!("HTTP {} · {:.0} ms", response.status, response.latency_ms),
+                response: Some(response),
+            }),
+        },
     }
 }
 
@@ -128,10 +134,11 @@ async fn udp(host: &Host, target: &str, text: &str) -> EngineResult<ActionOutcom
 }
 
 /// Perform one resolved network action.
-pub async fn execute(host: &Host, client_id: String, kind: &NodeKind) -> EngineResult<ActionOutcome> {
+/// `cookies`: the run's jar, when the experiment keeps cookies.
+pub async fn execute(host: &Host, client_id: String, kind: &NodeKind, cookies: Option<Arc<CookieJar>>) -> EngineResult<ActionOutcome> {
     match kind {
         NodeKind::Tcp { host: target_host, port, payload, timeout_ms } => tcp(target_host, *port, payload, *timeout_ms).await,
-        NodeKind::Http { request } => http_request(host, request).await,
+        NodeKind::Http { request } => http_request(host, request, cookies).await,
         NodeKind::Mqtt { host: broker_host, port, topic, payload, qos, retain } => {
             let broker = host_port(broker_host, *port);
             let config = mqtt::MqttConfig {

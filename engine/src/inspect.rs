@@ -474,9 +474,52 @@ impl Gate {
     }
 }
 
+/// A budget of frames per second, lock-free: every frame while traffic is
+/// light (a request and its answer a millisecond apart are both kept), at
+/// most `per_second` when it is not. What a full second refused is handed
+/// to the next frame allowed, to say how many it stands for.
+pub struct Budget {
+    window_ms: AtomicU64,
+    used: AtomicU64,
+    refused: AtomicU64,
+    per_second: u64,
+}
+
+impl Budget {
+    pub fn new(per_second: u64) -> Self {
+        Budget { window_ms: AtomicU64::new(0), used: AtomicU64::new(0), refused: AtomicU64::new(0), per_second }
+    }
+
+    /// `Some(n)` when this frame may be drawn, `n` frames having been refused
+    /// before it; `None` when the second's budget is spent.
+    pub fn allow(&self) -> Option<u64> {
+        let now = now_ms();
+        let window = self.window_ms.load(Ordering::Relaxed);
+        if now.saturating_sub(window) >= 1000 && self.window_ms.compare_exchange(window, now, Ordering::Relaxed, Ordering::Relaxed).is_ok() {
+            self.used.store(0, Ordering::Relaxed);
+        }
+        if self.used.fetch_add(1, Ordering::Relaxed) < self.per_second {
+            Some(self.refused.swap(0, Ordering::Relaxed))
+        } else {
+            self.refused.fetch_add(1, Ordering::Relaxed);
+            None
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_budget_keeps_light_traffic_whole_and_caps_a_flood() {
+        let budget = Budget::new(3);
+        assert_eq!([budget.allow(), budget.allow(), budget.allow()], [Some(0), Some(0), Some(0)], "three at once are all kept");
+        assert_eq!((budget.allow(), budget.allow()), (None, None), "the fourth and fifth in the same second are not");
+        budget.window_ms.store(0, Ordering::Relaxed);
+        assert_eq!(budget.allow(), Some(2), "the next second's first frame says two were not shown");
+        assert_eq!(budget.allow(), Some(0));
+    }
 
     #[test]
     fn hex_dump_renders_offsets_and_ascii() {

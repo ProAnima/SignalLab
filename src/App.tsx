@@ -9,6 +9,7 @@ import { FirewallBanner } from "./components/FirewallBanner";
 import { ExperimentView, type ExperimentHandle } from "./views/ExperimentView";
 import { SignalsView } from "./views/SignalsView";
 import { MqttView } from "./views/MqttView";
+import { WsView } from "./views/WsView";
 import { OscView } from "./views/OscView";
 import { BroadcastView } from "./views/BroadcastView";
 import { InspectView } from "./views/InspectView";
@@ -25,7 +26,7 @@ import { api, on, EV, type CaptureStats, type ExperimentNode, type InspectBatch,
 import { en } from "./lib/locales/en";
 
 type ViewKey =
-  | "experiment" | "signals" | "emulators" | "osc" | "mqtt" | "broadcast" | "http" | "netsim" | "storm" | "scan";
+  | "experiment" | "signals" | "emulators" | "osc" | "mqtt" | "broadcast" | "http" | "ws" | "netsim" | "storm" | "scan";
 /** The bottom panel shows one of these; the Inspector watches every screen, so it lives here, not in the sidebar. */
 type DockTab = "console" | "inspector";
 
@@ -38,6 +39,7 @@ const NAV: { key: ViewKey; glyph: string; label: TKey; short?: TKey; kinds: stri
   { key: "mqtt", glyph: "◈", label: "nav.mqtt", kinds: ["mqtt"] },
   { key: "broadcast", glyph: "⊛", label: "nav.broadcast", short: "nav.short.broadcast", kinds: ["beacon", "discovery"] },
   { key: "http", glyph: "⇄", label: "nav.http", kinds: ["http-burst"] },
+  { key: "ws", glyph: "⇌", label: "nav.ws", short: "nav.short.ws", kinds: ["websocket"] },
   { key: "netsim", glyph: "⚡", label: "nav.netsim", short: "nav.short.netsim", kinds: ["netsim"] },
   { key: "storm", glyph: "☰", label: "nav.storm", kinds: ["storm"] },
   { key: "scan", glyph: "⊹", label: "nav.scan", kinds: ["scan"] },
@@ -256,6 +258,7 @@ function Shell() {
         {page("mqtt", <MqttView onWaitFor={waitInExperiment} load={openedFor("mqtt")} onShowSignal={showSignal} />)}
         {page("broadcast", <BroadcastView />)}
         {page("http", <HttpView onToExperiment={toExperiment} load={openedFor("http")} onShowSignal={showSignal} onShowEmulator={showEmulator} />)}
+        {page("ws", <WsView />)}
         {page("netsim", <NetsimView />)}
         {page("storm", <StormView />)}
         {page("scan", <ScanView />)}

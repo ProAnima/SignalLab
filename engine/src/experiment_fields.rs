@@ -87,7 +87,7 @@ pub const MIN_REPEAT_INTERVAL_MS: u64 = 10;
 /// Repeat sends again and again, so it is bounded twice: by its own numbers,
 /// and by the run, which every repetition must fit in.
 pub(crate) fn check_repeat(kind: &NodeKind, repeat: &Repeat) -> EngineResult<()> {
-    if !kind.is_action() {
+    if !kind.repeats() {
         return Err(EngineError::new("node.repeat_unsupported").in_field(Field::new("repeat")));
     }
     if !(MIN_REPEAT_INTERVAL_MS..=MAX_DELAY_MS).contains(&repeat.interval_ms) {
@@ -167,6 +167,13 @@ pub(crate) fn check_node(kind: &NodeKind, params: &BTreeMap<String, String>) -> 
                 return Err(EngineError::new("node.method_invalid").with("value", &request.method).in_field(Field::new("method")));
             }
             check_timeout(request.timeout_ms)?;
+            match &request.auth {
+                crate::http_auth::Auth::Basic { username, .. } | crate::http_auth::Auth::Digest { username, .. } if username.trim().is_empty() => {
+                    return Err(required(Field::new("username")));
+                }
+                crate::http_auth::Auth::Bearer { token } if token.trim().is_empty() => return Err(required(Field::new("token"))),
+                _ => {}
+            }
             for (index, (name, _)) in request.headers.iter().enumerate() {
                 if let Some(name) = fixed(name).filter(|name| !name.trim().is_empty()) {
                     if !header_valid(name.trim()) {
@@ -308,6 +315,79 @@ pub(crate) fn check_node(kind: &NodeKind, params: &BTreeMap<String, String>) -> 
                 return Err(EngineError::new("emulator.conditions_too_many").with("max", crate::emulator::MAX_CONDITIONS).in_field(Field::new("conditions")));
             }
             check_timeout(*timeout_ms)?;
+        }
+        // Opened before the first step: its addresses may use parameters only.
+        NodeKind::Impairment { listen, target, profile } => {
+            for (field, text) in [("listen", listen), ("target", target)] {
+                if text.trim().is_empty() {
+                    return Err(required(Field::new(field)));
+                }
+            }
+            crate::netsim_run::addresses(listen, target, params)?;
+            profile.check()?;
+        }
+        NodeKind::ImpairmentChange { relay, profile } => {
+            if relay.trim().is_empty() {
+                return Err(required(Field::new("relay")));
+            }
+            profile.check()?;
+        }
+        NodeKind::EmulatorState { emulator, .. } => {
+            if emulator.trim().is_empty() {
+                return Err(required(Field::new("emulator")));
+            }
+        }
+        NodeKind::WsConnect { url, headers, protocols, timeout_ms } => {
+            if url.trim().is_empty() {
+                return Err(required(Field::new("url")));
+            }
+            if let Some(url) = fixed(url) {
+                crate::ws::check_url(url.trim())?;
+            }
+            for (index, (name, _)) in headers.iter().enumerate() {
+                if let Some(name) = fixed(name).filter(|name| !name.trim().is_empty()) {
+                    if !header_valid(name.trim()) {
+                        let field = Field::nth("header_name", index + 1);
+                        return Err(EngineError::new("node.header_invalid").with("value", name).in_field(field));
+                    }
+                }
+            }
+            if let Some(protocol) = protocols.iter().find(|protocol| !crate::ws::protocol_valid(protocol)) {
+                return Err(EngineError::new("ws.protocol_invalid").with("value", protocol).in_field(Field::new("protocols")));
+            }
+            check_timeout(*timeout_ms)?;
+        }
+        NodeKind::WsSend { connection, text, binary } => {
+            if connection.trim().is_empty() {
+                return Err(required(Field::new("connection")));
+            }
+            if *binary {
+                if let Some(text) = fixed(text) {
+                    crate::matching::parse_hex(&text).map_err(|error| error.in_field(Field::new("payload")))?;
+                }
+            }
+            if text.len() > crate::ws::MAX_MESSAGE {
+                return Err(too_long(Field::new("payload"), crate::ws::MAX_MESSAGE));
+            }
+        }
+        NodeKind::WaitWs { connection, mode, pattern, timeout_ms, .. } => {
+            if connection.trim().is_empty() {
+                return Err(required(Field::new("connection")));
+            }
+            if *mode != UdpMode::Any && pattern.is_empty() {
+                return Err(required(Field::new("pattern")));
+            }
+            check_timeout(*timeout_ms)?;
+        }
+        NodeKind::WsClose { connection, code, reason } => {
+            if connection.trim().is_empty() {
+                return Err(required(Field::new("connection")));
+            }
+            crate::ws::check_close_code(*code)?;
+            // A close frame carries at most 125 bytes: the code and the reason.
+            if reason.len() > crate::ws::MAX_CLOSE_REASON {
+                return Err(too_long(Field::new("reason"), crate::ws::MAX_CLOSE_REASON));
+            }
         }
     }
     Ok(())

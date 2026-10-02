@@ -15,6 +15,21 @@ export function setFormatLanguage(lang: string, names: SizeUnits) {
   units = names;
 }
 
+/**
+ * A latency as precise as it is short — a loopback answer in 0.4 ms is not
+ * "0 ms" — and in seconds from one, so a timeout fits where 0.4 ms does.
+ * The value and the key of its unit.
+ */
+export function latencyParts(ms: number): [string, "unit.ms" | "unit.s"] {
+  if (ms >= 1000) return [formatNumber(ms / 1000, language, ms < 10_000 ? 2 : 1), "unit.s"];
+  return [formatNumber(ms, language, ms < 10 ? 2 : ms < 100 ? 1 : 0), "unit.ms"];
+}
+
+/** A rate as it was typed: 0.5/s is not "1/s". */
+export function fmtRate(rate: number): string {
+  return formatNumber(rate, language, Number.isInteger(rate) ? 0 : rate < 1 ? 2 : 1);
+}
+
 export function fmtBytes(n: number): string {
   if (n < 1024) return `${formatNumber(n, language, 0)} ${units.b}`;
   if (n < 1024 * 1024) return `${formatNumber(n / 1024, language, 1)} ${units.kb}`;

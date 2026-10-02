@@ -5,6 +5,9 @@ import parallel from "../../experiments/templates/parallel-flows.json";
 import pingReply from "../../experiments/templates/osc-ping-reply.json";
 import pollUntilReady from "../../experiments/templates/poll-until-ready.json";
 import flakyApi from "../../experiments/templates/flaky-api.json";
+import faultPhases from "../../experiments/templates/fault-phases.json";
+import dependencyOutage from "../../experiments/templates/dependency-outage.json";
+import websocketEcho from "../../experiments/templates/websocket-echo.json";
 import type { Experiment } from "./api";
 import type { TKey } from "./i18n";
 
@@ -16,4 +19,7 @@ export const experimentTemplates: { id: string; title: TKey; description: TKey; 
   { id: "ping-reply", title: "exp.templatePingReply", description: "exp.templatePingReplyHint", document: pingReply as Experiment },
   { id: "poll", title: "exp.templatePoll", description: "exp.templatePollHint", document: pollUntilReady as Experiment },
   { id: "flaky-api", title: "exp.templateFlaky", description: "exp.templateFlakyHint", document: flakyApi as Experiment },
+  { id: "fault-phases", title: "exp.templateFaults", description: "exp.templateFaultsHint", document: faultPhases as Experiment },
+  { id: "dependency-outage", title: "exp.templateOutage", description: "exp.templateOutageHint", document: dependencyOutage as Experiment },
+  { id: "websocket-echo", title: "exp.templateWsEcho", description: "exp.templateWsEchoHint", document: websocketEcho as Experiment },
 ];

@@ -1,6 +1,8 @@
 /* ---------- metrics ---------- */
 
 .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(112px, 1fr)); gap: 10px; }
+/* A row of latencies under a panel: seven in one line from a 900 px window (values stay short: seconds from 1000 ms). */
+.metrics.latency { grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); margin-top: 14px; }
 .metric {
   background: linear-gradient(180deg, var(--surface-2), var(--bg-input));
   border: 1px solid var(--border);

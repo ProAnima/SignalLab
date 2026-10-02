@@ -25,7 +25,8 @@ const KINDS: &[Kind] = &[
     Kind { kind: "delay", fields: &[("ms", "milliseconds")], example: || json!({ "ms": 500 }) },
     Kind {
         kind: "http",
-        fields: &[("request.method", "GET, POST, PUT, PATCH, DELETE, HEAD"), ("request.url", "http(s) URL, templated"), ("request.headers", "[[name, value], …], templated"), ("request.body", "text or null, templated"), ("request.timeout_ms", "milliseconds")],
+        fields: &[("request.method", "GET, POST, PUT, PATCH, DELETE, HEAD"), ("request.url", "http(s) URL, templated"), ("request.headers", "[[name, value], …], templated"), ("request.body", "text or null, templated"), ("request.timeout_ms", "milliseconds"),
+                 ("request.auth", "optional: {scheme: basic|digest, username, password} or {scheme: bearer, token}, templated ({{secret.NAME}}); Digest answers the server's 401 challenge")],
         example: || json!({ "request": { "method": "POST", "url": "{{api}}/cue", "headers": [["Content-Type", "application/json"]], "body": "{\"cue\": 1}", "timeout_ms": 5000 } }),
     },
     Kind { kind: "assert_status", fields: &[("status", "the HTTP status the last response must have")], example: || json!({ "status": 200 }) },
@@ -117,7 +118,71 @@ const KINDS: &[Kind] = &[
         ],
         example: || json!({ "bind": "127.0.0.1:18081", "method": "POST", "path": "/hooks/:name", "when": [{ "on": "json", "name": "$.event", "op": "eq", "value": "deploy" }], "timeout_ms": 5000, "variable": "request" }),
     },
+    Kind {
+        kind: "impairment",
+        fields: &[
+            ("listen", "IP:port the system under test sends to instead of the target; parameters only (opened before the first step)"),
+            ("target", "IP:port it forwards to (replies come back the same way); parameters only"),
+            ("profile", "the impairment from the first step on (see \"impairment profile\"); the flow passes at once"),
+        ],
+        // The profile written out whole, as the engine keeps it.
+        example: || json!({ "listen": "127.0.0.1:9010", "target": "{{device}}", "profile": profile(json!({ "name": "lan", "latency_ms": 1, "jitter_ms": 1 })) }),
+    },
+    Kind {
+        kind: "impairment_change",
+        fields: &[
+            ("relay", "the id of an impairment node of this document"),
+            ("profile", "what it impairs with from now on; each phase is counted apart in the report"),
+        ],
+        example: || json!({ "relay": "relay", "profile": profile(json!({ "name": "offline", "offline": true })) }),
+    },
+    Kind {
+        kind: "emulator_state",
+        fields: &[
+            ("emulator", "the id of an emulator node of this document"),
+            ("down", "true takes it down until a later step brings it up (false)"),
+            ("fault", "what HTTP meets while down: unavailable (503) | reset | timeout; TCP and MQTT drop connections, OSC and UDP answer nothing"),
+        ],
+        example: || json!({ "emulator": "api", "down": true, "fault": "unavailable" }),
+    },
+    Kind {
+        kind: "ws_connect",
+        fields: &[
+            ("url", "ws:// or wss:// (templates: a token extracted earlier may be in it)"),
+            ("headers", "[[name, value], …] sent with the upgrade"),
+            ("protocols", "subprotocols to offer, in order of preference"),
+            ("timeout_ms", "for the connection and the upgrade"),
+        ],
+        example: || json!({ "url": "ws://127.0.0.1:9001/chat", "headers": [["Authorization", "Bearer {{token}}"]], "protocols": ["chat.v1"], "timeout_ms": 5000 }),
+    },
+    Kind {
+        kind: "ws_send",
+        fields: &[("connection", "the id of a ws_connect node of this document"), ("text", "the message (templates)"), ("binary", "true: text is bytes written as hex, sent as a binary message")],
+        example: || json!({ "connection": "socket", "text": "{\"type\":\"ping\",\"id\":\"{{uuid}}\"}", "binary": false }),
+    },
+    Kind {
+        kind: "wait_ws",
+        fields: &[
+            ("connection", "the id of a ws_connect node; messages since it connected (or since the branch's last send) count"),
+            ("mode", "any | contains | regex | hex"),
+            ("pattern", "what the message must match"),
+            ("timeout_ms", "milliseconds"),
+            ("variable", "the message as {{reply.text}}, {{reply.json.field}} when it is JSON"),
+        ],
+        example: || json!({ "connection": "socket", "mode": "contains", "pattern": "pong", "timeout_ms": 3000, "variable": "reply" }),
+    },
+    Kind {
+        kind: "ws_close",
+        fields: &[("connection", "the id of a ws_connect node"), ("code", "1000, or 3000–4999 for an application's own"), ("reason", "at most 123 bytes")],
+        example: || json!({ "connection": "socket", "code": 1000, "reason": "done" }),
+    },
 ];
+
+/// An impairment profile with every field, as a document holds it after the engine wrote it.
+fn profile(value: Value) -> Value {
+    let profile: signal_lab_engine::netsim::ImpairProfile = serde_json::from_value(value).expect("the example is a profile");
+    serde_json::to_value(profile).unwrap_or_default()
+}
 
 /// What an emulator document holds, for a node's `emulator` and for `signallab emulate`.
 fn emulators() -> Value {
@@ -169,6 +234,11 @@ fn emulators() -> Value {
             },
         },
         "templates": "{{counter}} is the rule's hit number; {{uuid}}, {{now}}, {{now.iso}}, {{random_int(a, b)}} as in experiments",
+        "impairment profile": {
+            "fields": "{name (a label: lan, wifi, 4g, satellite, intermittent, offline, or your own), latency_ms, jitter_ms, loss, duplicate, corrupt, reorder (probabilities 0..1), rate_kbps (0: no limit; packets queue, past a second they are dropped as throttled), burst_start (0..1) and burst_length (packets, mean): bursts of loss, offline (nothing gets through)}",
+            "seed": "every decision draws from the run's seed: the same seed and the same traffic drop the same packets",
+            "report": "impairments: per impairment node, counts in all and a phase per profile it had (from_ms, to_ms, received, forwarded, dropped, throttled, duplicated, corrupted, reordered)",
+        },
         "example": (KINDS.iter().find(|kind| kind.kind == "emulator").map(|kind| (kind.example)()).unwrap_or_default())["emulator"].clone(),
     })
 }

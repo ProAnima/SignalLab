@@ -1,13 +1,18 @@
 //! HTTP client: single request inspector + concurrent load ("burst") runner.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
+use tokio::sync::Semaphore;
+use tokio::task::JoinSet;
 use crate::host::Host;
 
-use super::error::{EngineError, EngineResult};
+use super::cookies::CookieJar;
+use super::error::{EngineError, EngineResult, Field};
+use super::http_auth::{self, Auth, DigestMemory};
+use super::latency::{LatencyHistogram, Percentiles};
 use super::inspect::{self, Frame, Gate};
 use super::jobs::{now_ms, JobInfo, JobRegistry, TaskGuard};
 use super::transport::{self, Cause};
@@ -23,6 +28,9 @@ pub struct HttpRequest {
     /// Per-request timeout in milliseconds.
     #[serde(default = "default_timeout")]
     pub timeout_ms: u64,
+    /// Basic, Bearer or Digest; its `Authorization` header is never reported.
+    #[serde(default, skip_serializing_if = "Auth::is_none")]
+    pub auth: Auth,
 }
 
 fn default_timeout() -> u64 {
@@ -45,36 +53,56 @@ pub struct HttpResponse {
     /// What kind of failure `error` is, for a localized message.
     #[serde(default)]
     pub cause: Option<Cause>,
+    /// How a Digest request went: a 401's challenge answered, or why it could not be.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub digest: Option<DigestOutcome>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DigestOutcome {
+    /// The server asked (401) and was answered: the response is to the second request.
+    pub challenged: bool,
+    /// The 401 could not be answered: no Digest asked for, or one Signal Lab does not speak.
+    pub error: Option<EngineError>,
 }
 
 const MAX_BODY_PREVIEW: usize = 256 * 1024;
 
-fn build_client(timeout_ms: u64) -> EngineResult<reqwest::Client> {
-    reqwest::Client::builder()
-        .timeout(std::time::Duration::from_millis(timeout_ms.max(1)))
+fn build_client(timeout_ms: u64, jar: Option<Arc<CookieJar>>) -> EngineResult<reqwest::Client> {
+    let mut builder = reqwest::Client::builder()
+        .timeout(Duration::from_millis(timeout_ms.max(1)))
         .danger_accept_invalid_certs(false)
-        .user_agent("SignalLab/0.1")
-        .build()
-        .map_err(|e| EngineError::new("http.client_failed").because(transport::chain(&e)))
+        .user_agent("SignalLab/0.1");
+    if let Some(jar) = jar {
+        builder = builder.cookie_provider(jar);
+    }
+    builder.build().map_err(|e| EngineError::new("http.client_failed").because(transport::chain(&e)))
 }
 
-async fn execute(client: &reqwest::Client, req: &HttpRequest) -> HttpResponse {
-    let method = reqwest::Method::from_bytes(req.method.to_uppercase().as_bytes())
-        .unwrap_or(reqwest::Method::GET);
+/// The request as reqwest sends it, with `authorization` when there is one.
+fn builder(client: &reqwest::Client, req: &HttpRequest, authorization: Option<&str>) -> reqwest::RequestBuilder {
+    let method = reqwest::Method::from_bytes(req.method.to_uppercase().as_bytes()).unwrap_or(reqwest::Method::GET);
     let mut builder = client.request(method, &req.url);
     for (k, v) in &req.headers {
         if !k.trim().is_empty() {
             builder = builder.header(k, v);
         }
     }
+    if let Some(authorization) = authorization {
+        builder = builder.header(reqwest::header::AUTHORIZATION, authorization);
+    }
     if let Some(b) = &req.body {
         if !b.is_empty() {
             builder = builder.body(b.clone());
         }
     }
+    builder
+}
 
+/// One exchange: sent, the answer read (or the failure classified).
+async fn exchange(client: &reqwest::Client, req: &HttpRequest, authorization: Option<&str>) -> HttpResponse {
     let start = Instant::now();
-    match builder.send().await {
+    match builder(client, req, authorization).send().await {
         Ok(resp) => {
             let status = resp.status();
             let headers: Vec<(String, String)> = resp
@@ -98,6 +126,7 @@ async fn execute(client: &reqwest::Client, req: &HttpRequest) -> HttpResponse {
                 truncated,
                 error: None,
                 cause: None,
+                digest: None,
             }
         }
         Err(e) => HttpResponse {
@@ -111,7 +140,56 @@ async fn execute(client: &reqwest::Client, req: &HttpRequest) -> HttpResponse {
             truncated: false,
             error: Some(transport::chain(&e)),
             cause: Some(transport::of_reqwest(&e)),
+            digest: None,
         },
+    }
+}
+
+/// The request target a Digest answer hashes: the URL's path and query.
+fn request_target(url: &str) -> String {
+    match reqwest::Url::parse(url) {
+        Ok(url) => match url.query() {
+            Some(query) => format!("{}?{query}", url.path()),
+            None => url.path().to_string(),
+        },
+        Err(_) => "/".into(),
+    }
+}
+
+/// Send `req` with its authentication. Digest answers the server's 401
+/// challenge and sends again — or, when `memory` holds a challenge from an
+/// earlier request, answers it at once; a stale or new challenge is answered
+/// once more. The latency is all of it: what a client waits.
+async fn execute(client: &reqwest::Client, req: &HttpRequest, memory: &DigestMemory) -> HttpResponse {
+    match &req.auth {
+        Auth::None => exchange(client, req, None).await,
+        Auth::Basic { username, password } => exchange(client, req, Some(&http_auth::basic(username, password))).await,
+        Auth::Bearer { token } => exchange(client, req, Some(&format!("Bearer {token}"))).await,
+        Auth::Digest { username, password } => {
+            let method = req.method.to_uppercase();
+            let uri = request_target(&req.url);
+            let body = req.body.as_deref().unwrap_or_default().as_bytes();
+            let answer = |challenge: &http_auth::Challenge, nc: u32| http_auth::authorization(challenge, username, password, &method, &uri, nc, &http_auth::cnonce(), body);
+            let remembered = memory.next().map(|(challenge, nc)| answer(&challenge, nc));
+            let first = exchange(client, req, remembered.as_deref()).await;
+            if first.status != 401 {
+                let digest = remembered.is_some().then_some(DigestOutcome { challenged: false, error: None });
+                return HttpResponse { digest, ..first };
+            }
+            let offered = first.headers.iter().filter(|(name, _)| name.eq_ignore_ascii_case("www-authenticate")).map(|(_, value)| value.as_str());
+            match http_auth::digest_challenge(offered) {
+                Ok(Some(challenge)) => {
+                    let nc = memory.remember(challenge.clone());
+                    let second = exchange(client, req, Some(&answer(&challenge, nc))).await;
+                    if second.status == 401 {
+                        memory.forget();
+                    }
+                    HttpResponse { latency_ms: first.latency_ms + second.latency_ms, digest: Some(DigestOutcome { challenged: true, error: None }), ..second }
+                }
+                Ok(None) => HttpResponse { digest: Some(DigestOutcome { challenged: false, error: Some(EngineError::new("http.digest_not_offered")) }), ..first },
+                Err(error) => HttpResponse { digest: Some(DigestOutcome { challenged: false, error: Some(error) }), ..first },
+            }
+        }
     }
 }
 
@@ -145,9 +223,10 @@ fn exchange_frame(req: &HttpRequest, resp: &HttpResponse, job_id: Option<u64>) -
         .size(resp.body_bytes)
         .summary(summary)
         .detail(detail)
-        .verdict(match &resp.error {
-            Some(_) => "failed".to_string(),
-            None => format!("{} {}", resp.status, resp.status_text),
+        .verdict(match (&resp.error, &resp.digest) {
+            (Some(_), _) => "failed".to_string(),
+            (None, Some(DigestOutcome { challenged: true, .. })) => format!("{} {} · digest after 401", resp.status, resp.status_text),
+            (None, _) => format!("{} {}", resp.status, resp.status_text),
         });
     if let Some(id) = job_id {
         frame = frame.job(id);
@@ -158,9 +237,9 @@ fn exchange_frame(req: &HttpRequest, resp: &HttpResponse, job_id: Option<u64>) -
 /// Fire a single request and return the full response for the inspector.
 /// A failure to connect or to get an answer is in the response (`error`,
 /// `cause`); the error is only for a client that could not be built.
-pub async fn request_once(host: Host, req: HttpRequest) -> EngineResult<HttpResponse> {
-    let client = build_client(req.timeout_ms)?;
-    let resp = execute(&client, &req).await;
+pub async fn request_once(host: Host, req: HttpRequest, jar: Option<Arc<CookieJar>>) -> EngineResult<HttpResponse> {
+    let client = build_client(req.timeout_ms, jar)?;
+    let resp = execute(&client, &req, &DigestMemory::default()).await;
     if inspect::armed(&host) {
         inspect::publish(&host, exchange_frame(&req, &resp, None));
     }
@@ -175,7 +254,7 @@ pub async fn request_once(host: Host, req: HttpRequest) -> EngineResult<HttpResp
 pub struct BurstConfig {
     #[serde(flatten)]
     pub request: HttpRequest,
-    /// Number of concurrent workers.
+    /// At most this many requests in flight at once.
     pub concurrency: u32,
     /// Total requests to send (0 = run for duration_s).
     #[serde(default)]
@@ -183,167 +262,206 @@ pub struct BurstConfig {
     /// Optional time limit in seconds (0 = until total reached / stopped).
     #[serde(default)]
     pub duration_s: f64,
+    /// Requests started per second, on a fixed schedule (an open model): the
+    /// n-th is due at n / rate, however slow the answers. 0 = a closed model,
+    /// each worker sending again as soon as it has an answer.
+    #[serde(default)]
+    pub rate: f64,
+    /// Use the HTTP screen's cookie jar, as its single requests do.
+    #[serde(default)]
+    pub cookies: bool,
 }
+
+/// A paced burst slower than this is a probe, not a load; faster, one pacer is
+/// not a measurement any more.
+pub const MIN_BURST_RATE: f64 = 0.1;
+pub const MAX_BURST_RATE: f64 = 100_000.0;
+const MAX_CONCURRENCY: u32 = 512;
+/// A request still waiting for a free worker this long after its moment is
+/// skipped and counted as missed. Sending it late would bunch the load up and
+/// hide that the workers could not keep the rate; the margin is wider than a
+/// timer tick on any system, so the pacer's own wake-ups never count.
+const MISS_AFTER: Duration = Duration::from_millis(50);
 
 #[derive(Clone, Serialize)]
 struct BurstProgress {
     job_id: u64,
     ts: u64,
+    /// Answered or failed so far.
     sent: u64,
     ok: u64,
     failed: u64,
-    /// Rolling requests-per-second over the last window.
+    /// Due while every worker was busy, and skipped (a paced burst only).
+    missed: u64,
+    /// Requests per second over the last report's window; in the last report,
+    /// over the whole burst.
     rps: f64,
     last_latency_ms: f64,
     min_latency_ms: f64,
     max_latency_ms: f64,
     avg_latency_ms: f64,
+    /// Over every request so far, failures included.
+    #[serde(flatten)]
+    percentiles: Percentiles,
+    /// The last report: the burst has ended.
+    done: bool,
+}
+
+/// What every request of a burst adds to; read by the reporter.
+#[derive(Default)]
+struct BurstStats {
+    sent: AtomicU64,
+    ok: AtomicU64,
+    failed: AtomicU64,
+    missed: AtomicU64,
+    last_us: AtomicU64,
+    latency: LatencyHistogram,
+}
+
+impl BurstStats {
+    fn record(&self, resp: &HttpResponse) {
+        let micros = (resp.latency_ms * 1000.0) as u64;
+        self.latency.record(micros);
+        self.last_us.store(micros, Ordering::Relaxed);
+        if resp.error.is_none() && resp.ok {
+            self.ok.fetch_add(1, Ordering::Relaxed);
+        } else {
+            self.failed.fetch_add(1, Ordering::Relaxed);
+        }
+        self.sent.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn report(&self, job_id: u64, rps: f64, done: bool) -> BurstProgress {
+        BurstProgress {
+            job_id,
+            ts: now_ms(),
+            sent: self.sent.load(Ordering::Relaxed),
+            ok: self.ok.load(Ordering::Relaxed),
+            failed: self.failed.load(Ordering::Relaxed),
+            missed: self.missed.load(Ordering::Relaxed),
+            rps,
+            last_latency_ms: self.last_us.load(Ordering::Relaxed) as f64 / 1000.0,
+            min_latency_ms: self.latency.min_ms(),
+            max_latency_ms: self.latency.max_ms(),
+            avg_latency_ms: self.latency.mean_ms(),
+            percentiles: self.latency.percentiles(),
+            done,
+        }
+    }
+}
+
+/// Refuses a burst that cannot run as asked, before anything is sent.
+fn check_burst(cfg: &BurstConfig) -> EngineResult<()> {
+    let rate = cfg.rate;
+    if !rate.is_finite() || rate < 0.0 || (rate > 0.0 && rate < MIN_BURST_RATE) || rate > MAX_BURST_RATE {
+        return Err(EngineError::new("http.rate_invalid")
+            .with("min", MIN_BURST_RATE)
+            .with("max", MAX_BURST_RATE)
+            .in_field(Field::new("rate")));
+    }
+    if !cfg.duration_s.is_finite() || cfg.duration_s < 0.0 {
+        return Err(EngineError::new("http.duration_invalid").in_field(Field::new("duration_s")));
+    }
+    Ok(())
 }
 
 pub async fn start_burst(
     host: Host,
     jobs: JobRegistry,
     cfg: BurstConfig,
+    jar: Option<Arc<CookieJar>>,
 ) -> EngineResult<JobInfo> {
-    let client = build_client(cfg.request.timeout_ms)?;
-    let concurrency = cfg.concurrency.clamp(1, 512);
+    check_burst(&cfg)?;
+    let client = build_client(cfg.request.timeout_ms, jar.filter(|_| cfg.cookies))?;
+    let concurrency = cfg.concurrency.clamp(1, MAX_CONCURRENCY);
 
     let id = jobs.next_id();
-    let info = JobInfo::new(id, "http-burst", format!("HTTP burst {} {}", cfg.request.method, cfg.request.url))
+    let mut info = JobInfo::new(id, "http-burst", format!("HTTP burst {} {}", cfg.request.method, cfg.request.url))
         .with("method", &cfg.request.method)
         .with("url", &cfg.request.url);
+    if cfg.rate > 0.0 {
+        info = info.with("rate", cfg.rate);
+    }
 
     let host_cl = host.clone();
     let jobs_cl = jobs.clone();
     let handle = tokio::spawn(async move {
-        let sent = Arc::new(AtomicU64::new(0));
-        let ok = Arc::new(AtomicU64::new(0));
-        let failed = Arc::new(AtomicU64::new(0));
-        let lat_sum = Arc::new(AtomicU64::new(0)); // microseconds
-        let lat_min = Arc::new(AtomicU64::new(u64::MAX));
-        let lat_max = Arc::new(AtomicU64::new(0));
-        let last_lat = Arc::new(AtomicU64::new(0)); // microseconds
-        let stop = Arc::new(AtomicBool::new(false));
-
+        let stats = Arc::new(BurstStats::default());
+        // One Digest challenge for every request: answered once, then sent with each.
+        let memory = Arc::new(DigestMemory::default());
         let request = Arc::new(cfg.request.clone());
         let client = Arc::new(client);
-        let total = cfg.total;
-        let claimed = Arc::new(AtomicU64::new(0));
         let start = Instant::now();
-        // Stopping the burst must stop its workers and reporter; the guard
-        // aborts them all when this task's future is dropped on cancel.
-        let mut guard = TaskGuard::new();
 
-        // Reporter task: emits progress ~10 Hz.
+        // Reporter: progress ~10 Hz while the burst runs. Stopping the burst
+        // drops this task's future, and the guard aborts the reporter with it.
+        let mut guard = TaskGuard::new();
         let reporter = {
-            let (host_r, sent_r, ok_r, failed_r) =
-                (host_cl.clone(), sent.clone(), ok.clone(), failed.clone());
-            let (sum_r, min_r, max_r, last_r, stop_r) = (
-                lat_sum.clone(),
-                lat_min.clone(),
-                lat_max.clone(),
-                last_lat.clone(),
-                stop.clone(),
-            );
+            let (host_r, stats_r) = (host_cl.clone(), stats.clone());
             tokio::spawn(async move {
-                let mut prev_sent = 0u64;
-                let mut prev = Instant::now();
+                let (mut prev_sent, mut prev) = (0u64, Instant::now());
                 loop {
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                    let s = sent_r.load(Ordering::Relaxed);
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    let sent = stats_r.sent.load(Ordering::Relaxed);
                     let now = Instant::now();
-                    let dt = now.duration_since(prev).as_secs_f64().max(1e-6);
-                    let rps = (s - prev_sent) as f64 / dt;
-                    prev_sent = s;
-                    prev = now;
-                    let done = ok_r.load(Ordering::Relaxed) + failed_r.load(Ordering::Relaxed);
-                    let sum = sum_r.load(Ordering::Relaxed);
-                    let avg = if done > 0 {
-                        (sum as f64 / done as f64) / 1000.0
-                    } else {
-                        0.0
-                    };
-                    let minv = min_r.load(Ordering::Relaxed);
-                    host_r.emit(
-                        "http://burst-progress",
-                        BurstProgress {
-                            job_id: id,
-                            ts: now_ms(),
-                            sent: s,
-                            ok: ok_r.load(Ordering::Relaxed),
-                            failed: failed_r.load(Ordering::Relaxed),
-                            rps,
-                            last_latency_ms: last_r.load(Ordering::Relaxed) as f64 / 1000.0,
-                            min_latency_ms: if minv == u64::MAX {
-                                0.0
-                            } else {
-                                minv as f64 / 1000.0
-                            },
-                            max_latency_ms: max_r.load(Ordering::Relaxed) as f64 / 1000.0,
-                            avg_latency_ms: avg,
-                        },
-                    );
-                    if stop_r.load(Ordering::Relaxed) {
-                        break;
-                    }
+                    let rps = (sent - prev_sent) as f64 / now.duration_since(prev).as_secs_f64().max(1e-6);
+                    (prev_sent, prev) = (sent, now);
+                    host_r.emit("http://burst-progress", stats_r.report(id, rps, false));
                 }
             })
         };
         guard.watch(reporter.abort_handle());
 
-        // Worker pool. A burst can push thousands of requests per second, so the
-        // pool shares one sampling gate into the Inspector.
+        // One pacer hands out the requests, each its own task holding one of
+        // `concurrency` permits; dropping the set (a stop) aborts those in
+        // flight. A burst can push thousands of requests per second, so they
+        // share one sampling gate into the Inspector.
         let gate = Arc::new(Gate::new(100));
-        let mut workers = Vec::with_capacity(concurrency as usize);
-        for _ in 0..concurrency {
-            let client = client.clone();
-            let request = request.clone();
-            let claimed = claimed.clone();
-            let gate = gate.clone();
-            let host_w = host_cl.clone();
-            let (sent, ok, failed) = (sent.clone(), ok.clone(), failed.clone());
-            let (lat_sum, lat_min, lat_max, last_lat) = (
-                lat_sum.clone(),
-                lat_min.clone(),
-                lat_max.clone(),
-                last_lat.clone(),
-            );
-            let duration_s = cfg.duration_s;
-            workers.push(tokio::spawn(async move {
-                loop {
-                    if duration_s > 0.0 && start.elapsed().as_secs_f64() >= duration_s {
-                        break;
-                    }
-                    if total > 0 && claimed.fetch_add(1, Ordering::Relaxed) >= total {
-                        break;
-                    }
-                    let resp = execute(&client, &request).await;
-                    if inspect::armed(&host_w) && gate.allow() {
-                        inspect::publish(&host_w, exchange_frame(&request, &resp, Some(id)));
-                    }
-                    sent.fetch_add(1, Ordering::Relaxed);
-                    let micros = (resp.latency_ms * 1000.0) as u64;
-                    last_lat.store(micros, Ordering::Relaxed);
-                    lat_sum.fetch_add(micros, Ordering::Relaxed);
-                    lat_min.fetch_min(micros, Ordering::Relaxed);
-                    lat_max.fetch_max(micros, Ordering::Relaxed);
-                    if resp.error.is_none() && resp.ok {
-                        ok.fetch_add(1, Ordering::Relaxed);
-                    } else {
-                        failed.fetch_add(1, Ordering::Relaxed);
+        let permits = Arc::new(Semaphore::new(concurrency as usize));
+        let mut flights = JoinSet::new();
+        let pace = Pace::new(cfg.rate, cfg.total, cfg.duration_s);
+        let mut n = 0u64;
+        while let Some(due) = pace.due(n, start) {
+            if due > Instant::now() {
+                tokio::time::sleep_until(due.into()).await;
+            }
+            let Ok(permit) = permits.clone().acquire_owned().await else { break };
+            if pace.paced() {
+                // Waited past the margin for a worker: skip to the first request
+                // whose moment is still within it.
+                if Instant::now().saturating_duration_since(due) > MISS_AFTER {
+                    let caught_up = pace.catch_up(start);
+                    stats.missed.fetch_add(caught_up - n, Ordering::Relaxed);
+                    n = caught_up;
+                    let Some(due) = pace.due(n, start) else { break };
+                    if due > Instant::now() {
+                        tokio::time::sleep_until(due.into()).await;
                     }
                 }
-            }));
+            } else if cfg.duration_s > 0.0 && start.elapsed().as_secs_f64() >= cfg.duration_s {
+                break;
+            }
+            let (client, request, stats, gate, host_w, memory) = (client.clone(), request.clone(), stats.clone(), gate.clone(), host_cl.clone(), memory.clone());
+            flights.spawn(async move {
+                let resp = execute(&client, &request, &memory).await;
+                if inspect::armed(&host_w) && gate.allow() {
+                    inspect::publish(&host_w, exchange_frame(&request, &resp, Some(id)));
+                }
+                stats.record(&resp);
+                drop(permit);
+            });
+            n += 1;
+            while flights.try_join_next().is_some() {}
         }
+        while flights.join_next().await.is_some() {}
 
-        for w in &workers {
-            guard.watch(w.abort_handle());
-        }
-        for w in workers {
-            let _ = w.await;
-        }
-        stop.store(true, Ordering::Relaxed);
+        // The last report waits for no tick: the reporter is gone before it is
+        // sent, so nothing older arrives after it, and it rates the whole burst.
+        reporter.abort();
         let _ = reporter.await;
+        let elapsed = start.elapsed().as_secs_f64().max(1e-6);
+        host_cl.emit("http://burst-progress", stats.report(id, stats.sent.load(Ordering::Relaxed) as f64 / elapsed, true));
+        drop(guard);
 
         host_cl.emit(
             "job://ended",
@@ -358,4 +476,95 @@ pub async fn start_burst(
 
     jobs.insert(info.clone(), handle);
     Ok(info)
+}
+
+/// When each request of a burst is due. Paced: the n-th at n / rate from the
+/// start, so a late wake-up never shifts the ones after it. Closed: now — the
+/// permits are what holds it back.
+struct Pace {
+    rate: f64,
+    total: u64,
+    duration_s: f64,
+}
+
+impl Pace {
+    fn new(rate: f64, total: u64, duration_s: f64) -> Self {
+        Pace { rate, total, duration_s }
+    }
+
+    fn paced(&self) -> bool {
+        self.rate > 0.0
+    }
+
+    /// The n-th request's moment, or None past the total or the duration.
+    fn due(&self, n: u64, start: Instant) -> Option<Instant> {
+        if self.total > 0 && n >= self.total {
+            return None;
+        }
+        if !self.paced() {
+            return Some(Instant::now());
+        }
+        let at = n as f64 / self.rate;
+        (self.duration_s <= 0.0 || at < self.duration_s).then(|| start + Duration::from_secs_f64(at))
+    }
+
+    /// The first request whose moment is less than `MISS_AFTER` ago — every
+    /// one before it is missed. Bounded by the total and the duration.
+    fn catch_up(&self, start: Instant) -> u64 {
+        let behind = Instant::now().saturating_duration_since(start).saturating_sub(MISS_AFTER).as_secs_f64();
+        let mut first = (behind * self.rate).ceil() as u64;
+        if self.total > 0 {
+            first = first.min(self.total);
+        }
+        if self.duration_s > 0.0 {
+            first = first.min((self.duration_s * self.rate).ceil() as u64);
+        }
+        first
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn burst(rate: f64, duration_s: f64) -> BurstConfig {
+        BurstConfig {
+            request: HttpRequest { method: "GET".into(), url: "http://127.0.0.1:9/".into(), headers: Vec::new(), body: None, timeout_ms: 1000, auth: Auth::None },
+            concurrency: 1,
+            total: 1,
+            duration_s,
+            rate,
+            cookies: false,
+        }
+    }
+
+    #[test]
+    fn a_rate_is_zero_or_within_the_limits() {
+        for rate in [0.0, MIN_BURST_RATE, 250.0, MAX_BURST_RATE] {
+            assert!(check_burst(&burst(rate, 0.0)).is_ok(), "{rate}");
+        }
+        for rate in [-1.0, 0.05, MAX_BURST_RATE + 1.0, f64::NAN, f64::INFINITY] {
+            let refused = check_burst(&burst(rate, 0.0)).unwrap_err();
+            assert_eq!((refused.code.as_str(), refused.params["max"].as_str()), ("http.rate_invalid", "100000"), "{rate}");
+        }
+        assert!(check_burst(&burst(0.0, -1.0)).unwrap_err().is("http.duration_invalid"));
+    }
+
+    #[test]
+    fn a_paced_burst_is_due_on_its_own_schedule() {
+        let start = Instant::now();
+        let pace = Pace::new(100.0, 0, 1.0);
+        assert_eq!(pace.due(0, start), Some(start));
+        assert_eq!(pace.due(50, start), Some(start + Duration::from_millis(500)));
+        assert_eq!(pace.due(99, start).map(|due| due - start), Some(Duration::from_millis(990)));
+        assert_eq!(pace.due(100, start), None, "a second at 100/s is 100 requests");
+        assert_eq!(Pace::new(100.0, 10, 0.0).due(10, start), None, "the total ends it as well");
+        assert!(Pace::new(0.0, 10, 0.0).due(9, start).is_some() && !Pace::new(0.0, 10, 0.0).paced());
+        // Caught up a second in: what was due before 950 ms is missed.
+        let earlier = Instant::now() - Duration::from_secs(1);
+        let first = Pace::new(100.0, 0, 0.0).catch_up(earlier);
+        assert!((95..=97).contains(&first), "{first}");
+        assert_eq!(Pace::new(100.0, 40, 0.0).catch_up(earlier), 40, "never past the total");
+        assert_eq!(Pace::new(100.0, 0, 0.5).catch_up(earlier), 50, "nor past the duration");
+    }
 }

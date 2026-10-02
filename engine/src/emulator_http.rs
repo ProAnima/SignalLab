@@ -25,7 +25,7 @@ use tokio::task::JoinSet;
 use super::emulator::{DownFault, Fault, Response, HOLD};
 use super::emulator_match::percent_decode;
 use super::emulator_rules::Rules;
-use super::emulator_state::{kept, Context, Exchange};
+use super::emulator_state::{kept, Context, Down, Exchange};
 use super::error::{EngineError, EngineResult, Field};
 use super::inspect::Frame;
 use super::matching::{shorten, Datagram};
@@ -265,9 +265,9 @@ fn heard(context: &Context, peer: SocketAddr, started: Instant, body: &[u8], fra
     }
 }
 
-/// A request that arrived while the emulator is down: the outage's fault, no route.
-async fn down(context: &Context, peer: SocketAddr, started: Instant, line: &str, body: &[u8], request: &Value, back: Duration) -> Answer {
-    let fault = context.compiled.outage.as_ref().map(|outage| outage.fault).unwrap_or_default();
+/// A request that arrived while the emulator is down: what it meets then, no route.
+async fn down(context: &Context, peer: SocketAddr, started: Instant, line: &str, body: &[u8], request: &Value, state: Down) -> Answer {
+    let Down { fault, back } = state;
     let verdict = match fault {
         DownFault::Unavailable => "down → 503",
         DownFault::Reset => "down → reset",
@@ -285,8 +285,11 @@ async fn down(context: &Context, peer: SocketAddr, started: Instant, line: &str,
             let body = json!({ "error": "unavailable" });
             let size = body.to_string().len();
             let mut response = plain(StatusCode::SERVICE_UNAVAILABLE, body);
-            // Whole seconds, at least one: when a client that honours it may try again.
-            response.headers_mut().insert(RETRY_AFTER, HeaderValue::from(back.as_secs() + u64::from(back.subsec_nanos() > 0)));
+            // Whole seconds, at least one: when a client that honours it may try again —
+            // known for an outage's schedule, not for one a step or a person caused.
+            if let Some(back) = back {
+                response.headers_mut().insert(RETRY_AFTER, HeaderValue::from(back.as_secs() + u64::from(back.subsec_nanos() > 0)));
+            }
             exchange.status = Some(503);
             exchange.reply = status_line(&response, size);
             exchange.ms = started.elapsed().as_millis() as u64;
@@ -326,8 +329,8 @@ async fn answer(context: &Context, peer: SocketAddr, request: Request<Incoming>)
         }
     };
     let mut request = request_value(&parts, &body, peer);
-    if let Some(back) = context.down_for() {
-        return down(context, peer, started, &line, &body, &request, back).await;
+    if let Some(state) = context.down() {
+        return down(context, peer, started, &line, &body, &request, state).await;
     }
     let Rules::Http { routes, fallback } = &context.compiled.rules else { return Err(Closed) };
     let found = routes.iter().enumerate().find_map(|(index, route)| route.matcher.accepts(&request).map(|params| (index, params)));

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useImperativeHandle, useRef, useState, type CSSProperties, type Ref } from "react";
 import type { Experiment, ExperimentNode, SignalBody } from "../lib/api";
-import { addAfter, addBranch, anchorAfter, arrangeNodes, createNode, duplicateNode, placeAfter, removeNode, NODE_HEIGHT as NODE_H, type Anchor, type NodeType, type Port } from "../lib/experimentGraph";
+import { addAfter, addBranch, anchorAfter, arrangeNodes, createNode, createNodeIn, duplicateNode, placeAfter, removeNode, NODE_HEIGHT as NODE_H, type Anchor, type NodeType, type Port } from "../lib/experimentGraph";
 import { useExperimentDocument } from "../lib/useExperimentDocument";
 import { useExperimentViewport } from "../lib/useExperimentViewport";
 import { useExperimentRun } from "../lib/useExperimentRun";
@@ -207,7 +207,7 @@ export function ExperimentView({ active, focusMode, setFocusMode, onShowFrame, o
 
   const addFromMenu = (item: MenuItem) => {
     if (!menu || !doc) return;
-    const node = item.kind === "node" ? createNode(item.type, menu.x, menu.y) : nodeFromSignal(item.signal.body, menu.x, menu.y);
+    const node = item.kind === "node" ? createNodeIn(doc, item.type, menu.x, menu.y) : nodeFromSignal(item.signal.body, menu.x, menu.y);
     if (!node) return;
     commitEdit();
     edit((current) => (menu.branch ? addBranch : addAfter)(current, menu.anchor ?? null, node));

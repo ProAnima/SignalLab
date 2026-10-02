@@ -14,7 +14,7 @@ const RENDER_LIMIT = 300;
 /** A captured frame, plus a marker for frames that never made it to the UI. */
 type Row = Frame & { gap?: number };
 
-const PROTOS = ["osc", "udp", "tcp", "http"];
+const PROTOS = ["osc", "udp", "tcp", "http", "mqtt", "ws"];
 
 function verdictClass(v: string | null): string {
   if (!v) return "verdict-ok";

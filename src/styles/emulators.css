@@ -8,6 +8,7 @@
 .emu-controls { margin-top: 0; margin-bottom: 14px; flex-wrap: wrap; align-items: center; }
 .emu-state { font: 11px var(--mono); color: var(--text-faint); }
 .emu-state.on { color: var(--accent); }
+.emu-state.down { color: var(--amber); }
 .emu-problem { margin-bottom: 12px; }
 .emu-editor .row > .emu-protocol { flex: 0 0 auto; align-self: center; margin-top: 10px; }
 .emu-rules-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 6px 0 8px; }

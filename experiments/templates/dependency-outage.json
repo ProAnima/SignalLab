@@ -1,0 +1,56 @@
+{
+  "version": 8,
+  "name": "Dependency outage",
+  "params": [
+    { "name": "api", "value": "http://127.0.0.1:18090" }
+  ],
+  "profiles": [],
+  "profile": null,
+  "seed": null,
+  "nodes": [
+    { "id": "start", "type": "start", "x": 40, "y": 270 },
+    { "id": "api_mock", "type": "emulator", "x": 260, "y": 270,
+      "emulator": {
+        "name": "Orders API", "bind": "127.0.0.1:18090", "protocol": "http",
+        "routes": [
+          { "method": "GET", "path": "/orders/:id", "when": [], "order": "sequence", "responses": [
+            { "status": 200, "headers": [], "body": "{\"order\":\"{{request.params.id}}\"}", "delay_ms": 0, "jitter_ms": 0, "fault": "none", "weight": 1 }
+          ] }
+        ],
+        "fallback": null
+      } },
+    { "id": "split", "type": "fork", "x": 490, "y": 270 },
+    { "id": "before", "type": "delay", "x": 720, "y": 400, "ms": 300 },
+    { "id": "down", "type": "emulator_state", "x": 950, "y": 400, "emulator": "api_mock", "down": true, "fault": "unavailable" },
+    { "id": "outage", "type": "delay", "x": 1180, "y": 400, "ms": 2000 },
+    { "id": "up", "type": "emulator_state", "x": 1410, "y": 400, "emulator": "api_mock", "down": false, "fault": "unavailable" },
+    { "id": "in_outage", "type": "delay", "x": 720, "y": 140, "ms": 800 },
+    { "id": "until_ok", "type": "loop", "x": 950, "y": 140, "max": 40,
+      "until": { "value": "{{status}}", "op": "eq", "expected": "200" } },
+    { "id": "get", "type": "http", "x": 1180, "y": 20,
+      "request": { "method": "GET", "url": "{{api}}/orders/42", "headers": [], "body": null, "timeout_ms": 3000 } },
+    { "id": "status", "type": "extract", "x": 1410, "y": 20, "variable": "status", "from": "status", "expr": "" },
+    { "id": "pause", "type": "delay", "x": 1640, "y": 20, "ms": 250 },
+    { "id": "answered", "type": "log", "x": 1410, "y": 140, "message": "{{api}} answers again: HTTP {{status}}" },
+    { "id": "joined", "type": "join", "x": 1870, "y": 270 },
+    { "id": "end", "type": "end", "x": 2100, "y": 270 }
+  ],
+  "edges": [
+    { "from": "start", "to": "api_mock", "port": "next" },
+    { "from": "api_mock", "to": "split", "port": "next" },
+    { "from": "split", "to": "in_outage", "port": "branch1" },
+    { "from": "split", "to": "before", "port": "branch2" },
+    { "from": "before", "to": "down", "port": "next" },
+    { "from": "down", "to": "outage", "port": "next" },
+    { "from": "outage", "to": "up", "port": "next" },
+    { "from": "in_outage", "to": "until_ok", "port": "next" },
+    { "from": "until_ok", "to": "get", "port": "body" },
+    { "from": "get", "to": "status", "port": "next" },
+    { "from": "status", "to": "pause", "port": "next" },
+    { "from": "pause", "to": "until_ok", "port": "next" },
+    { "from": "until_ok", "to": "answered", "port": "done" },
+    { "from": "answered", "to": "joined", "port": "next" },
+    { "from": "up", "to": "joined", "port": "next" },
+    { "from": "joined", "to": "end", "port": "next" }
+  ]
+}

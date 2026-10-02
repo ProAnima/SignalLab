@@ -72,7 +72,7 @@ async fn osc_device() -> (SocketAddr, Arc<AtomicUsize>) {
 
 fn doc(nodes: Vec<Value>, chain: &[&str]) -> Value {
     let edges: Vec<Value> = chain.windows(2).map(|pair| json!({ "from": pair[0], "to": pair[1], "port": "next" })).collect();
-    json!({ "version": 6, "name": "Repeat", "params": [], "profiles": [], "profile": null, "seed": 7, "nodes": nodes, "edges": edges })
+    json!({ "version": 8, "name": "Repeat", "params": [], "profiles": [], "profile": null, "seed": 7, "nodes": nodes, "edges": edges })
 }
 
 fn ends() -> [Value; 2] {
@@ -239,7 +239,7 @@ async fn status_device(busy: usize) -> (SocketAddr, Arc<AtomicUsize>) {
 
 fn graph(nodes: Vec<Value>, edges: &[(&str, &str, &str)]) -> Value {
     let edges: Vec<Value> = edges.iter().map(|(from, port, to)| json!({ "from": from, "to": to, "port": port })).collect();
-    json!({ "version": 6, "name": "Loop", "params": [], "profiles": [], "profile": null, "seed": 7, "nodes": nodes, "edges": edges })
+    json!({ "version": 8, "name": "Loop", "params": [], "profiles": [], "profile": null, "seed": 7, "nodes": nodes, "edges": edges })
 }
 
 /// Start → Loop (≤ max, until `{{status.args[0]}} = ready`) → body: poll the device → back;

@@ -37,8 +37,9 @@ choice. See [Interface & localization](#interface--localization).
 | **MQTT** | Connect to a broker, subscribe to `#` and watch every topic it holds build up as a live tree — last value, retain flag, QoS, message count. Publish at QoS 0/1/2, announce a last will, and **clear a retained value** (the empty-payload trick), which is the one thing a stuck broker needs and no other tool makes easy. MQTT 3.1.1, hand-written, plain TCP. |
 | **Broadcast** | Fan a payload — OSC, text, or raw hex — out to a **list** of hosts, a **broadcast** address (`SO_BROADCAST`), a **multicast** group, or every host in a **CIDR sweep**. One-shot or as a repeating beacon. The paired **discovery listener** joins multicast groups, tables every peer that answers, and can auto-reply to impersonate a device. |
 | **Inspector** | One timeline for every module, in the bottom panel next to the console so it is there on every screen: each OSC send, monitor packet, beacon, discovery probe and impaired relay frame, decoded, with a hex dump and the relay's verdict on it. Its tab shows when capture is on and how many frames it holds; the panel can be maximised. Filter by protocol / direction / text, then export the buffer to `.jsonl` or `.txt`. |
-| **HTTP** | Inspect a single request/response (status, latency, headers, body), then run a concurrent **load burst** with live RPS and min/avg/max latency (percentiles and rate profiles are planned in [ROADMAP.md](ROADMAP.md)). |
-| **Impairment** | A UDP relay that sits between a client and a target and injects **latency, jitter, packet loss, duplication and corruption** — a software network conditioner. |
+| **WebSocket** | Connect to a `ws://` or `wss://` service with the **headers and subprotocols** it expects, send text or bytes, and read every message as it comes, newest last, JSON formatted; the close handshake and who closed, with what code. In experiments: **WebSocket connect**, **send**, **Wait for WebSocket** and **close** — a token extracted earlier can be in the URL or a header. |
+| **HTTP** | Inspect a single request/response (status, latency, headers, body) — with **Basic, Bearer or Digest** authentication (the server's 401 challenge answered, MD5 or SHA-256) and a **cookie jar** that sends back what servers set, as a browser does — then run a concurrent **load burst** — as fast as its workers go, or at a fixed **rate** where a request that finds every worker busy is counted as *missed* rather than sent late — with live RPS, **p50/p90/p95/p99** and min/avg/max latency (ramps and thresholds are planned in [ROADMAP.md](ROADMAP.md)). |
+| **Impairment** | A UDP relay that sits between a client and a target and injects **latency, jitter, packet loss, bursts of loss, duplication, corruption, reordering and a bandwidth limit**, or lets nothing through — a software network conditioner. Presets (*LAN*, *Busy Wi-Fi*, *4G*, *Satellite*, *Intermittent*, *Offline*) set it in one click, and an edit applies while it runs, without dropping the port. Every decision is seeded: the same traffic meets the same fate. |
 | **Storm** | A controlled **UDP/TCP traffic generator** for stress-testing your own servers, with live pps / Mbps metering and a bounded duration. |
 | **Scanner** | Concurrency-bounded **TCP connect port scan** with best-effort service banners and progress. |
 
@@ -117,6 +118,17 @@ conditions — and later steps read `{{request.json.…}}`; on an address withou
 emulator, the run's own listener answers 204. An OSC or UDP emulator shares its port
 with the run's waits, and an MQTT broker emulator is what *Wait for MQTT* and the MQTT
 node talk to — gear tested against a broker of the run's own.
+
+**Faults on a schedule.** An **Impairment** node puts an impairment relay in front of a
+device for the whole run (*Route through impairment* on an OSC or UDP node inserts one
+and points the node at it); **Change impairment** switches it to another profile from
+that step on, and **Emulator down/up** takes one of the run's emulators down — HTTP meets
+503, a closed connection or no answer — and brings it back. A branch of Delays and
+switches next to the traffic reads as a schedule: clean, lossy, offline, clean again
+(the template *Fault phases*; *Dependency outage* does the same to an API). The relay
+draws from the run's seed, so the same seed drops the same packets; the report counts
+each phase apart, and the run's end — passed, failed or stopped — closes the relay, so
+nothing stays impaired.
 
 The OSC and HTTP screens have **Add to experiment**, which appends the message or
 request you just tried as the next step. Their fields are kept across screens and
@@ -203,11 +215,16 @@ engine/src/              the Rust engine (crate signal-lab-engine, no Tauri)
   template.rs            the {{template}} language and seeded generators
   secrets.rs             secrets: OS credential store or read-only files, masking, redaction
   experiment_files.rs    JSON parsing, atomic working-file replacement and exports
-  http.rs                request runner + concurrent burst
-  netsim.rs              UDP impairment relay
+  http.rs                request runner + concurrent burst: closed or at a rate
+  http_auth.rs           Basic, Bearer and Digest (RFC 7616): challenges read, answers made
+  cookies.rs             cookie jars: the HTTP screen's and a run's, listed and cleared
+  latency.rs             latency percentiles in constant memory
+  netsim.rs              UDP impairment relay: profiles, seeded decisions, phases
+  netsim_run.rs          a run's relays, opened before the first step
   storm.rs               UDP/TCP load generator
   mqtt_codec.rs          self-contained MQTT 3.1.1 codec (no deps)
   mqtt.rs                one live broker connection as a job + one-shot publish
+  ws.rs                  WebSocket client: the screen's connection as a job, a run's connections, one exchange
   scan.rs                TCP connect scanner
   signals.rs             signal library file + starter set (storage only)
   jobs.rs                job registry (start / list / stop)
@@ -428,6 +445,7 @@ job or a deploy script — and exits with a code a pipeline understands:
 
 ```bash
 signallab run tests/smoke.json --param api=http://127.0.0.1:8080 --junit junit.xml
+signallab run tests/smoke.json --matrix api=http://a:8080,http://b:8080 --matrix user=admin,guest --fail-fast
 signallab run tests/stage.json --server http://lab-pc:1430 --token-file token.txt
 signallab send osc 127.0.0.1:9000 /cue/go f:0.75
 signallab emulate tests/payments-mock.json --for 120 &   # the dependency, while the app is tested
@@ -536,8 +554,8 @@ Issues and pull requests are welcome. A few things worth knowing:
 ### Experiment node catalogue
 
 The editor supports Start/End, HTTP requests, OSC messages, UDP datagrams, TCP,
-MQTT publishing, Log, Delay, **Wait for OSC**, **Wait for UDP**, **Wait for MQTT** and
-**Wait for HTTP request**, the **Emulator**, Extract, value checks and branches, status
+MQTT publishing, **WebSocket connect / send / close**, Log, Delay, **Wait for OSC**,
+**Wait for UDP**, **Wait for MQTT**, **Wait for WebSocket** and **Wait for HTTP request**, the **Emulator**, Extract, value checks and branches, status
 branching, parallel branch/join, **Loop**, and HTTP status/body/header/latency checks.
 The palette groups actions, waits (*Observe*), *Emulate*, data, checks and flow; search
 supports Russian/English labels and protocol names,

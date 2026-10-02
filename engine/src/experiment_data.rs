@@ -13,6 +13,7 @@ use super::error::{EngineError, EngineResult, Field};
 use super::experiment::{Experiment, Node, NodeKind, Until};
 use super::experiment_validate::LoopShape;
 use super::http::HttpResponse;
+use super::http_auth::Auth;
 use super::matching::{self, UdpMode};
 pub use super::matching::{compare, CompareOp};
 use super::osc_codec::OscArg;
@@ -164,6 +165,15 @@ fn texts_mut(kind: &mut NodeKind) -> Vec<(Field, &mut String)> {
             if let Some(body) = &mut request.body {
                 fields.push((Field::new("body"), body));
             }
+            // Credentials are templates too: a password is usually {{secret.NAME}}.
+            match &mut request.auth {
+                Auth::Basic { username, password } | Auth::Digest { username, password } => {
+                    fields.push((Field::new("username"), username));
+                    fields.push((Field::new("password"), password));
+                }
+                Auth::Bearer { token } => fields.push((Field::new("token"), token)),
+                Auth::None => {}
+            }
         }
         NodeKind::Osc { target, address, args, reply } => {
             fields.push((Field::new("target"), target));
@@ -233,6 +243,22 @@ fn texts_mut(kind: &mut NodeKind) -> Vec<(Field, &mut String)> {
                 fields.push((Field::nth("condition", index + 1), &mut condition.value));
             }
         }
+        // Opened before the first step: parameters only (validation allows nothing else).
+        NodeKind::Impairment { listen, target, .. } => {
+            fields.push((Field::new("listen"), listen));
+            fields.push((Field::new("target"), target));
+        }
+        // Opened when the step runs, so a token extracted earlier can be in the URL or a header.
+        NodeKind::WsConnect { url, headers, .. } => {
+            fields.push((Field::new("url"), url));
+            for (index, (name, value)) in headers.iter_mut().enumerate() {
+                fields.push((Field::nth("header_name", index + 1), name));
+                fields.push((Field::nth("header_value", index + 1), value));
+            }
+        }
+        NodeKind::WsSend { text, .. } => fields.push((Field::new("payload"), text)),
+        NodeKind::WaitWs { mode, pattern, .. } if *mode != UdpMode::Any => fields.push((Field::new("pattern"), pattern)),
+        NodeKind::WsClose { reason, .. } => fields.push((Field::new("reason"), reason)),
         // An emulator renders its replies itself, with what arrived (`emulator.rs`).
         _ => {}
     }
@@ -258,7 +284,7 @@ pub fn written_var(kind: &NodeKind) -> Option<(&str, &'static str)> {
     match kind {
         NodeKind::Extract { variable, .. } => Some((variable, "next")),
         // A timeout has no reply, so the variable exists on Matched only.
-        NodeKind::WaitOsc { variable, .. } | NodeKind::WaitUdp { variable, .. } | NodeKind::WaitMqtt { variable, .. } | NodeKind::WaitHttp { variable, .. } => Some((variable, "matched")),
+        NodeKind::WaitOsc { variable, .. } | NodeKind::WaitUdp { variable, .. } | NodeKind::WaitMqtt { variable, .. } | NodeKind::WaitHttp { variable, .. } | NodeKind::WaitWs { variable, .. } => Some((variable, "matched")),
         // A send that expects a reply passes only with one.
         NodeKind::Osc { reply: Some(reply), .. } => Some((&reply.variable, "next")),
         NodeKind::Udp { reply: Some(reply), .. } => Some((&reply.variable, "next")),
@@ -637,6 +663,7 @@ mod tests {
             truncated: false,
             error: None,
             cause: None,
+            digest: None,
         }
     }
 

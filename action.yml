@@ -30,6 +30,18 @@ inputs:
     description: Run with this profile of the experiments.
     required: false
     default: ""
+  matrix:
+    description: Run once per combination, NAME=V1,V2, one name per line (every combination runs; each is a test suite of the JUnit report).
+    required: false
+    default: ""
+  matrix-file:
+    description: Combinations from a JSON file, {"NAME":[values]} or [{"NAME":value}], relative to the working directory.
+    required: false
+    default: ""
+  fail-fast:
+    description: Stop at the first run that does not pass ("true").
+    required: false
+    default: "false"
   server:
     description: Run on this Signal Lab server (http://lab-pc:1430) instead of in the job — for gear only the lab can reach.
     required: false
@@ -80,6 +92,9 @@ runs:
         INPUT_EXPERIMENTS: ${{ inputs.experiments }}
         INPUT_PARAMS: ${{ inputs.params }}
         INPUT_PROFILE: ${{ inputs.profile }}
+        INPUT_MATRIX: ${{ inputs.matrix }}
+        INPUT_MATRIX_FILE: ${{ inputs.matrix-file }}
+        INPUT_FAIL_FAST: ${{ inputs.fail-fast }}
         INPUT_SERVER: ${{ inputs.server }}
         INPUT_TOKEN: ${{ inputs.token }}
         INPUT_JUNIT: ${{ inputs.junit }}
@@ -100,6 +115,12 @@ runs:
           [ -n "$pair" ] && args+=(--param "$pair")
         done <<< "$INPUT_PARAMS"
         [ -n "$INPUT_PROFILE" ] && args+=(--profile "$INPUT_PROFILE")
+        while IFS= read -r axis; do
+          axis="${axis#"${axis%%[![:space:]]*}"}"
+          [ -n "$axis" ] && args+=(--matrix "$axis")
+        done <<< "$INPUT_MATRIX"
+        [ -n "$INPUT_MATRIX_FILE" ] && args+=(--matrix-file "$INPUT_MATRIX_FILE")
+        [ "$INPUT_FAIL_FAST" = "true" ] && args+=(--fail-fast)
         [ -n "$INPUT_SERVER" ] && args+=(--server "$INPUT_SERVER")
         [ -n "$INPUT_TIMEOUT" ] && args+=(--timeout "$INPUT_TIMEOUT")
         args+=(--junit "$INPUT_JUNIT")

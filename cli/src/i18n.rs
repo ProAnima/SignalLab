@@ -462,7 +462,8 @@ impl Texts {
         }
     }
 
-    /// Values for an engine message, with a comparison operator (`op`) in words.
+    /// Values for an engine message, with a comparison operator (`op`) and an
+    /// impairment preset (`profile`, `before`: `4g`) in words.
     pub fn message_params(&self, params: &Value) -> Params {
         let mut out = Params::new();
         if let Value::Object(map) = params {
@@ -474,6 +475,14 @@ impl Texts {
             let key = format!("exp.op.{op}");
             if self.has(&key) {
                 out.insert("op".into(), Arg::Text(self.plain(&key)));
+            }
+        }
+        for name in ["profile", "before"] {
+            if let Some(Arg::Text(preset)) = out.get(name).cloned() {
+                let key = format!("ns.preset.{preset}");
+                if self.has(&key) {
+                    out.insert(name.into(), Arg::Text(self.plain(&key)));
+                }
             }
         }
         out

@@ -2,16 +2,18 @@
 //! `experiment_run` decides which step runs next and reports it; this module
 //! decides what a step does with its branch's state.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 use crate::host::Host;
 
+use super::cookies::CookieJar;
 use super::emulator_match::RequestMatcher;
 use super::emulator_run::{HttpListener, HttpListeners};
+use super::emulator_state::Emulation;
 use super::error::{EngineError, EngineResult, Field};
 use super::experiment::{NodeKind, Until};
 use super::experiment_actions as actions;
@@ -19,7 +21,13 @@ use super::experiment_data as data;
 use super::http::HttpResponse;
 use super::listen::{Inbox, Listener, Listeners, WaitOutcome};
 use super::matching::{self, Datagram, Matcher, OscMatcher, UdpMatcher};
+use super::netsim::Relay;
 use super::subscribe::{self, Subscription, Subscriptions};
+use super::ws::{self, By, Outgoing, RunSocket, WsConfig, WsMatcher};
+
+/// A run's WebSocket connections, by the id of the *WebSocket connect* that opened
+/// each. Dropped with the run, which closes them.
+pub type RunSockets = Arc<Mutex<HashMap<String, Arc<RunSocket>>>>;
 
 /// The state a branch carries from step to step. A Join merges the states of
 /// its inputs.
@@ -95,6 +103,13 @@ pub struct StepEnv<'a> {
     pub subscriptions: Subscriptions,
     /// The HTTP listeners of the run's *Wait for HTTP request* steps.
     pub http: HttpListeners,
+    /// The run's impairment relays and emulators, by node id.
+    pub relays: HashMap<String, Arc<Relay>>,
+    pub emulators: HashMap<String, Arc<Emulation>>,
+    /// The connections the run's *WebSocket connect* steps opened so far.
+    pub websockets: RunSockets,
+    /// The run's cookie jar, when the experiment keeps cookies between requests.
+    pub cookies: Option<Arc<CookieJar>>,
     /// The node's Timeout output is connected.
     pub has_timeout: bool,
     /// A Loop's Limit output is connected.
@@ -188,6 +203,7 @@ fn matcher(kind: &NodeKind) -> EngineResult<Box<dyn Matcher>> {
     match kind {
         NodeKind::WaitOsc { address, args, .. } => Ok(Box::new(OscMatcher::new(address, args)?)),
         NodeKind::WaitUdp { mode, pattern, .. } | NodeKind::WaitMqtt { mode, pattern, .. } => Ok(Box::new(UdpMatcher::new(*mode, pattern)?)),
+        NodeKind::WaitWs { mode, pattern, .. } => Ok(Box::new(WsMatcher(UdpMatcher::new(*mode, pattern)?))),
         NodeKind::WaitHttp { method, path, when, .. } => Ok(Box::new(RequestMatcher::new(method, path, when)?)),
         _ => Err(EngineError::new("run.not_a_wait")),
     }
@@ -202,11 +218,13 @@ fn listener_for(listeners: &Listeners, bind: &str, field: &'static str) -> Engin
         .ok_or_else(|| EngineError::new("wait.not_listening").with("target", bind).in_field(Field::new(field)))
 }
 
-/// What a wait listens to: one of the run's UDP sockets, MQTT subscriptions or HTTP listeners.
+/// What a wait listens to: one of the run's UDP sockets, MQTT subscriptions,
+/// HTTP listeners or WebSocket connections.
 enum Source {
     Socket(Arc<Listener>),
     Broker(Arc<Subscription>),
     Http(Arc<HttpListener>),
+    Ws(Arc<RunSocket>),
 }
 
 impl Source {
@@ -215,6 +233,7 @@ impl Source {
             Source::Socket(listener) => listener.inbox(),
             Source::Broker(subscription) => subscription.inbox(),
             Source::Http(listener) => &listener.inbox,
+            Source::Ws(socket) => &socket.sink.inbox,
         }
     }
 
@@ -223,7 +242,57 @@ impl Source {
             Source::Socket(listener) => listener.local().to_string(),
             Source::Broker(subscription) => subscription.broker().to_string(),
             Source::Http(listener) => listener.local.to_string(),
+            Source::Ws(socket) => socket.connection.handshake.url.clone(),
         }
+    }
+}
+
+/// The connection a *WebSocket connect* (`connection`, its id) opened in this run.
+fn run_socket(env: &StepEnv<'_>, connection: &str) -> EngineResult<Arc<RunSocket>> {
+    env.websockets
+        .lock()
+        .unwrap()
+        .get(connection)
+        .cloned()
+        .ok_or_else(|| EngineError::new("ws.not_connected").with("id", connection).in_field(Field::new("connection")))
+}
+
+/// *WebSocket connect*, *send* and *close*.
+async fn websocket(env: &StepEnv<'_>, kind: &NodeKind, context: &mut BranchContext) -> EngineResult<StepOutcome> {
+    match kind {
+        NodeKind::WsConnect { url, headers, protocols, timeout_ms } => {
+            let config = WsConfig { url: url.clone(), headers: headers.clone(), protocols: protocols.clone(), timeout_ms: *timeout_ms };
+            // Before connecting: a greeting can arrive the moment the upgrade is done.
+            context.last_action = Some(Instant::now());
+            let socket = ws::open(env.host, &config, "experiment", None).await?;
+            let handshake = socket.connection.handshake.clone();
+            // Run again (a Loop), it replaces its connection; the old one closes.
+            env.websockets.lock().unwrap().insert(env.node_id.to_string(), Arc::new(socket));
+            Ok(match &handshake.protocol {
+                Some(protocol) => StepOutcome::next(format!("{} ({protocol}) · {} ms", handshake.url, handshake.ms))
+                    .said("exp.step.wsConnectedAs", json!({ "url": handshake.url, "ms": handshake.ms, "protocol": protocol })),
+                None => StepOutcome::next(format!("{} · {} ms", handshake.url, handshake.ms)).said("exp.step.wsConnected", json!({ "url": handshake.url, "ms": handshake.ms })),
+            })
+        }
+        NodeKind::WsSend { connection, text, binary } => {
+            let socket = run_socket(env, connection)?;
+            let message = Outgoing::of(text, *binary).map_err(|error| error.in_field(Field::new("payload")))?;
+            context.last_action = Some(Instant::now());
+            let bytes = socket.connection.send(message).await?;
+            Ok(StepOutcome::next(format!("Sent {bytes} B")).said("exp.step.wsSent", json!({ "bytes": bytes })))
+        }
+        NodeKind::WsClose { connection, code, reason } => {
+            let socket = env.websockets.lock().unwrap().remove(connection);
+            let socket = socket.ok_or_else(|| EngineError::new("ws.not_connected").with("id", connection).in_field(Field::new("connection")))?;
+            let closed = socket.connection.close(*code, reason).await;
+            let by = match closed.by {
+                By::Client => "client",
+                By::Server => "server",
+                By::Lost => "lost",
+            };
+            Ok(StepOutcome::next(format!("Closed {} by the {by}", closed.code)).said("exp.step.wsClosed", json!({ "code": closed.code, "by": by })))
+        }
+        _ => Err(EngineError::new("run.not_an_action")),
     }
 }
 
@@ -262,6 +331,9 @@ fn source_of(env: &StepEnv<'_>, kind: &NodeKind) -> EngineResult<Source> {
             EngineError::new("wait.not_listening").with("target", format!("{} {}", key.0, key.1)).in_field(Field::new("topic"))
         });
     }
+    if let NodeKind::WaitWs { connection, .. } = kind {
+        return run_socket(env, connection).map(Source::Ws);
+    }
     if let NodeKind::WaitHttp { bind, .. } = kind {
         let listener = bind.trim().parse::<SocketAddr>().ok().and_then(|address| env.http.get(&address).cloned());
         return listener.map(Source::Http).ok_or_else(|| EngineError::new("wait.not_listening").with("target", bind).in_field(Field::new("bind")));
@@ -274,7 +346,8 @@ async fn wait(env: &StepEnv<'_>, kind: &NodeKind, context: &BranchContext) -> En
     let (NodeKind::WaitOsc { timeout_ms, variable, .. }
     | NodeKind::WaitUdp { timeout_ms, variable, .. }
     | NodeKind::WaitMqtt { timeout_ms, variable, .. }
-    | NodeKind::WaitHttp { timeout_ms, variable, .. }) = kind
+    | NodeKind::WaitHttp { timeout_ms, variable, .. }
+    | NodeKind::WaitWs { timeout_ms, variable, .. }) = kind
     else {
         return Err(EngineError::new("run.not_a_wait"));
     };
@@ -348,10 +421,11 @@ pub async fn execute(env: &StepEnv<'_>, kind: &NodeKind, context: &mut BranchCon
         NodeKind::Join => Ok(StepOutcome::next("Synchronized branches").said("exp.step.joined", json!({ "count": env.inputs }))),
         NodeKind::Log { message } => Ok(StepOutcome::next(message.clone())),
         kind if kind.expects_reply() => send_and_wait(env, kind, context).await,
+        NodeKind::WsConnect { .. } | NodeKind::WsSend { .. } | NodeKind::WsClose { .. } => websocket(env, kind, context).await,
         kind if kind.is_action() => {
             // Before sending: a reply can arrive while the send is still being reported.
             context.last_action = Some(Instant::now());
-            let outcome = actions::execute(env.host, env.client_id.clone(), kind).await?;
+            let outcome = actions::execute(env.host, env.client_id.clone(), kind, env.cookies.clone()).await?;
             if let Some(response) = outcome.response {
                 context.last_status = Some(response.status);
                 context.last_response = Some(response);
@@ -405,6 +479,26 @@ pub async fn execute(env: &StepEnv<'_>, kind: &NodeKind, context: &mut BranchCon
             let (name, local) = (emulator.name.trim(), emulator.bind.trim());
             Ok(StepOutcome::next(format!("{name} on {local}")).said("exp.step.emulating", json!({ "name": name, "local": local })))
         }
+        // Impairing since before the first step, too.
+        NodeKind::Impairment { profile, .. } => {
+            let relay = env.relays.get(env.node_id).ok_or_else(|| EngineError::new("impair.not_running").with("id", env.node_id))?;
+            let (listen, target, label) = (relay.listen.to_string(), relay.target.to_string(), profile.label());
+            Ok(StepOutcome::next(format!("{listen} → {target}: {label}")).said("exp.step.impairing", json!({ "listen": listen, "target": target, "profile": label })))
+        }
+        NodeKind::ImpairmentChange { relay, profile } => {
+            let running = env.relays.get(relay).ok_or_else(|| EngineError::new("impair.not_running").with("id", relay).in_field(Field::new("relay")))?;
+            let before = running.profile().label();
+            running.set(profile.clone());
+            let label = profile.label();
+            Ok(StepOutcome::next(format!("{before} → {label}")).said("exp.step.impaired", json!({ "profile": label, "before": before })))
+        }
+        NodeKind::EmulatorState { emulator, down, fault } => {
+            let emulation = env.emulators.get(emulator).ok_or_else(|| EngineError::new("emulator.not_in_run").with("id", emulator).in_field(Field::new("emulator")))?;
+            emulation.force(down.then_some(*fault));
+            let name = emulation.name.clone();
+            let (detail, key) = if *down { (format!("{name} down"), "exp.step.emulatorDown") } else { (format!("{name} up"), "exp.step.emulatorUp") };
+            Ok(StepOutcome::next(detail).said(key, json!({ "name": name })))
+        }
         kind if kind.is_wait() => {
             let outcome = wait(env, kind, context).await?;
             if let Some(written) = &outcome.written {
@@ -433,6 +527,7 @@ mod tests {
             truncated: false,
             error: None,
             cause: None,
+            digest: None,
         }
     }
 
@@ -487,7 +582,23 @@ mod tests {
     }
 
     fn env<'a>(host: &'a Host, listeners: &Listeners, has_timeout: bool, started: Instant) -> StepEnv<'a> {
-        StepEnv { host, node_id: "wait", client_id: "test".into(), seed: 0, listeners: listeners.clone(), subscriptions: Subscriptions::new(), http: HttpListeners::new(), has_timeout, has_limit: false, inputs: 1, run_started: started }
+        StepEnv {
+            host,
+            node_id: "wait",
+            client_id: "test".into(),
+            seed: 0,
+            listeners: listeners.clone(),
+            subscriptions: Subscriptions::new(),
+            http: HttpListeners::new(),
+            relays: HashMap::new(),
+            emulators: HashMap::new(),
+            websockets: RunSockets::default(),
+            cookies: None,
+            has_timeout,
+            has_limit: false,
+            inputs: 1,
+            run_started: started,
+        }
     }
 
     /// `wait` as the old signature read, for the tests below.

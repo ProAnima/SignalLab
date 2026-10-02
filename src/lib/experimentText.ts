@@ -8,15 +8,16 @@ import { portOf, validPortsFor, type Anchor, type NodeType, type Port } from "./
 import { NODE_CATALOG, type NodeGroup } from "./experimentCatalog.ts";
 import { describeError, messageParams } from "./errors.ts";
 import type { Translate } from "./i18n";
+import { impairNotation, profileLabel } from "./impairments.ts";
 
-export const GROUP_GLYPH: Record<NodeGroup, string> = { action: "↗", observe: "⇠", emulate: "⧉", data: "{}", check: "✓", flow: "◇" };
+export const GROUP_GLYPH: Record<NodeGroup, string> = { action: "↗", observe: "⇠", emulate: "⧉", fault: "⚡", data: "{}", check: "✓", flow: "◇" };
 /** `:9001` from `127.0.0.1:9001`: the port is what tells waits apart on the canvas. */
 const bindPort = (bind: string) => { const at = bind.lastIndexOf(":"); return at >= 0 ? bind.slice(at) : bind; };
-export const isWait = (node: ExperimentNode) => node.type === "wait_osc" || node.type === "wait_udp" || node.type === "wait_mqtt" || node.type === "wait_http";
+export const isWait = (node: ExperimentNode) => node.type === "wait_osc" || node.type === "wait_udp" || node.type === "wait_mqtt" || node.type === "wait_http" || node.type === "wait_ws";
 const anyMethod = (method: string) => method.toUpperCase() === "ANY" ? "*" : method.toUpperCase();
 /** A node heading's tooltip: what the node does; for the parallel nodes, how they are wired. */
 export const nodeHelp = (type: NodeType) => type === "fork" ? "exp.forkHint" as const : type === "join" ? "exp.joinHint" as const : type === "loop" ? "exp.loopHint" as const
-  : type === "emulator" ? "exp.emulatorHint" as const : NODE_CATALOG[type].description;
+  : type === "emulator" ? "exp.emulatorHint" as const : type === "impairment" ? "exp.impairmentHint" as const : NODE_CATALOG[type].description;
 const OP_TEXT: Record<string, string> = { eq: "=", ne: "≠", lt: "<", le: "≤", gt: ">", ge: "≥", contains: "⊃", matches: "~", empty: "= ∅", not_empty: "≠ ∅" };
 
 /** What a node will put on the wire, one line per part, for the resolved preview. */
@@ -37,6 +38,12 @@ export function previewLines(node: ExperimentNode): string[] {
     case "wait_udp": return [`${node.mode === "any" ? "*" : node.pattern} ⇠ ${node.bind}`];
     case "wait_mqtt": return [`${node.topic} ⇠ ${node.host}:${node.port}`, ...(node.mode === "any" ? [] : [node.pattern])];
     case "wait_http": return [`${anyMethod(node.method)} ${node.path} ⇠ ${node.bind}`, ...node.when.map((condition) => `${condition.on}${condition.name ? ` ${condition.name}` : ""} ${OP_TEXT[condition.op]} ${condition.op === "empty" || condition.op === "not_empty" ? "" : condition.value}`.trim())];
+    case "impairment": return [`${node.listen} → ${node.target}`, impairNotation(node.profile)];
+    case "impairment_change": return [impairNotation(node.profile)];
+    case "ws_connect": return [node.url, ...node.headers.filter(([name]) => name).map(([name, value]) => `${name}: ${value}`), ...(node.protocols.length ? [`Sec-WebSocket-Protocol: ${node.protocols.join(", ")}`] : [])];
+    case "ws_send": return [`→ ${node.connection || "?"}${node.binary ? " (hex)" : ""}`, clip(node.text)];
+    case "wait_ws": return [`${node.mode === "any" ? "*" : node.pattern} ⇠ ${node.connection || "?"}`];
+    case "ws_close": return [`${node.code}${node.reason ? ` ${node.reason}` : ""} → ${node.connection || "?"}`];
     default: return [];
   }
 }
@@ -68,9 +75,19 @@ function summary(node: ExperimentNode, t: Translate): string {
     case "wait_mqtt": return `${node.topic} ⇠ ${node.host}:${node.port} · ${node.timeout_ms} ms`;
     case "wait_http": return `${anyMethod(node.method)} ${node.path} ⇠ ${bindPort(node.bind)} · ${node.timeout_ms} ms`;
     case "emulator": return `${node.emulator.protocol.toUpperCase()} ${bindPort(node.emulator.bind)} · ${node.emulator.name}`;
+    case "impairment": return `${bindPort(node.listen)} → ${node.target} · ${presetLabel(node.profile, t)}`;
+    case "impairment_change": return `${node.relay || "?"} → ${presetLabel(node.profile, t)}`;
+    case "emulator_state": return t(node.down ? "exp.emulatorDownSummary" : "exp.emulatorUpSummary", { name: node.emulator || "?" });
+    case "ws_connect": return node.url;
+    case "ws_send": return `${node.binary ? "hex " : ""}${node.text || "∅"} → ${node.connection || "?"}`;
+    case "wait_ws": return `${node.mode === "any" ? "*" : node.pattern || "∅"} ⇠ ${node.connection || "?"} · ${node.timeout_ms} ms`;
+    case "ws_close": return `${node.code} → ${node.connection || "?"}`;
     default: return "";
   }
 }
+
+/** An impairment profile as the canvas names it: a preset in the reader's language, else what it does. */
+const presetLabel = (profile: Parameters<typeof profileLabel>[0], t: Translate) => profileLabel(profile, (preset) => t(`ns.preset.${preset}`));
 
 /** A node as the reader knows it: its type. */
 export const nodeLabel = (type: NodeType, t: Translate): string => t(NODE_CATALOG[type].title);

@@ -10,7 +10,7 @@ import {
 import { watchConnection, type ConnectionState } from "./transport";
 import { fireSignal } from "./signals";
 import { ingestTopic, makeTopicRoot, type TopicNode } from "./topics";
-import { describeError, type Failure } from "./errors";
+import { describeError, messageParams, type Failure } from "./errors";
 import { useI18n, type TextKey, type Translate } from "./i18n";
 import { en } from "./locales/en";
 
@@ -48,10 +48,10 @@ type PushError = (
   params?: Record<string, string | number>
 ) => void;
 
-/** The text of a console line in the current language. */
+/** The text of a console line in the current language (an impairment preset's name too). */
 export function logText(entry: LogEntry, t: Translate): string {
   const params = entry.error === undefined ? entry.params : { ...entry.params, error: describeError(entry.error, t).text };
-  return t(entry.key, params);
+  return t(entry.key, messageParams(params, t));
 }
 
 /** Where the library file stands right now, for the header line in the view. */

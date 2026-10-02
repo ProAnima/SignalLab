@@ -120,6 +120,10 @@ export function ExperimentParams({ doc, issues, disabled, anchor, describe, onEd
               if (/^\d+$/.test(text) && Number(text) <= MAX_SEED) onEdit((current) => ({ ...current, seed: Number(text) }));
             }} />
         </label>
+        <label className="checkbox experiment-check" data-tip={t("exp.cookiesHint")}>
+          <input type="checkbox" checked={doc.cookies ?? true} onChange={(event) => { const cookies = event.target.checked; onEdit((current) => ({ ...current, cookies })); }} />
+          {t("exp.cookies")}
+        </label>
       </fieldset>
       <ExperimentSecrets doc={doc} onChanged={onSecretsChanged} />
     </div>

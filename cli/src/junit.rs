@@ -91,22 +91,27 @@ pub fn write(texts: &Texts, records: &[Record], remote: bool) -> String {
     let mut suites = String::new();
     let (mut total, mut failures, mut errors, mut time) = (0usize, 0usize, 0usize, 0u64);
     for record in records {
-        let name = escape(match &record.outcome {
-            Ok(ended) => &ended.experiment,
-            Err(_) => &record.document.name,
-        });
-        let mut properties = vec![("file", record.label.clone())];
+        // A combination of the matrix is a suite of its own: its values are in its name.
+        let name = escape(&crate::run::run_name(
+            match &record.outcome {
+                Ok(ended) => &ended.experiment,
+                Err(_) => &record.document.name,
+            },
+            &record.matrix,
+        ));
+        let mut properties = vec![("file".to_string(), record.label.clone())];
+        properties.extend(record.matrix.iter().map(|(param, value)| (format!("param.{param}"), value.clone())));
         let mut body = String::new();
         let (mut tests, mut failed, mut broken, mut skipped, mut suite_time, mut stamp) = (0usize, 0usize, 0usize, 0usize, 0u64, None);
         match &record.outcome {
             Ok(ended) => {
-                properties.push(("seed", ended.seed.to_string()));
-                properties.push(("outcome", ended.outcome.clone()));
+                properties.push(("seed".into(), ended.seed.to_string()));
+                properties.push(("outcome".into(), ended.outcome.clone()));
                 if let Some(profile) = &ended.profile {
-                    properties.push(("profile", profile.clone()));
+                    properties.push(("profile".into(), profile.clone()));
                 }
                 if let Some(report) = &record.report {
-                    properties.push(("report", report.clone()));
+                    properties.push(("report".into(), report.clone()));
                 }
                 suite_time = ended.ended_ms.saturating_sub(ended.started_ms);
                 stamp = Some(timestamp(ended.started_ms));
@@ -205,7 +210,7 @@ pub fn write(texts: &Texts, records: &[Record], remote: bool) -> String {
         );
         suites.push_str("    <properties>\n");
         for (key, value) in properties {
-            let _ = writeln!(suites, "      <property name=\"{key}\" value=\"{}\" />", escape(&value));
+            let _ = writeln!(suites, "      <property name=\"{}\" value=\"{}\" />", escape(&key), escape(&value));
         }
         suites.push_str("    </properties>\n");
         suites.push_str(&body);
@@ -260,12 +265,13 @@ mod tests {
             error: Some(error.clone()),
             steps: vec![step(1_790_000_000_000, start, "running", None), step(1_790_000_000_001, start, "passed", None), step(1_790_000_000_010, failing, "running", None), step(1_790_000_000_200, failing, "failed", Some(error))],
             emulators: Vec::new(),
+            impairments: Vec::new(),
             report_path: None,
             report_error: None,
         };
         let records = vec![
-            Record { label: "a.json".into(), document: doc.clone(), outcome: Ok(ended), report: Some("runs/r.json".into()) },
-            Record { label: "b.json".into(), document: doc.clone(), outcome: Err(Failure::invalid(EngineError::new("run.override_unknown").with("name", "x"))), report: None },
+            Record { label: "a.json".into(), matrix: Vec::new(), document: doc.clone(), outcome: Ok(ended), report: Some("runs/r.json".into()) },
+            Record { label: "b.json".into(), matrix: Vec::new(), document: doc.clone(), outcome: Err(Failure::invalid(EngineError::new("run.override_unknown").with("name", "x"))), report: None },
         ];
         let xml = write(&texts, &records, false);
         assert!(xml.starts_with("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<testsuites name=\"Signal Lab\""));

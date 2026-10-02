@@ -5,6 +5,7 @@
 //! to deliver events to their interface.
 
 pub mod broadcast;
+pub mod cookies;
 pub mod discovery;
 pub mod emulator;
 pub mod emulator_files;
@@ -30,8 +31,10 @@ pub mod experiment_validate;
 pub mod firewall;
 pub mod host;
 pub mod http;
+pub mod http_auth;
 pub mod inspect;
 pub mod jobs;
+pub mod latency;
 pub mod listen;
 pub mod matching;
 pub mod mqtt;
@@ -39,6 +42,7 @@ pub mod mqtt_codec;
 pub mod mqtt_dial;
 pub mod net;
 pub mod netsim;
+pub mod netsim_run;
 pub mod osc;
 pub mod osc_codec;
 pub mod paths;
@@ -50,6 +54,7 @@ pub mod storm;
 pub mod subscribe;
 pub mod template;
 pub mod transport;
+pub mod ws;
 
 pub use host::{EventSink, Host};
 pub use inspect::Capture;

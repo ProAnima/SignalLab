@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use super::error::{EngineError, EngineResult};
 use super::http::HttpRequest;
+use super::http_auth::Auth;
 use super::osc_codec::OscArg;
 
 /// The library file, in the data folder (`paths::data_dir`).
@@ -229,6 +230,7 @@ pub fn seed() -> Library {
                         headers: Vec::new(),
                         body: None,
                         timeout_ms: 4_000,
+                        auth: Auth::None,
                     },
                 },
             ),

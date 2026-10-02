@@ -1,5 +1,5 @@
 {
-  "version": 6,
+  "version": 8,
   "name": "OSC ping → reply",
   "params": [
     { "name": "device", "value": "127.0.0.1:9000" }
