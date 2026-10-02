@@ -19,7 +19,7 @@ use crate::error::EngineError;
 use crate::experiment::{Experiment, Node};
 use crate::experiment_data;
 use crate::experiment_files;
-use crate::experiment_run;
+use crate::experiment_run::{self, RunHandle, RunOptions};
 use crate::experiment_validate;
 use crate::host::Host;
 use crate::http::{self, BurstConfig, HttpRequest};
@@ -133,6 +133,15 @@ impl Service {
 
     fn capture(&self) -> &Capture {
         self.host.capture()
+    }
+
+    /// Start a run and follow it to its end: the run `experiment_start` starts
+    /// — the same job, events and report — with a handle that hands over each
+    /// step and then the result. For front doors that wait for a run (the
+    /// server's `/api/run`, the command line); not a command, since a handle
+    /// is not JSON.
+    pub async fn run(&self, document: Experiment, options: RunOptions) -> Result<RunHandle, EngineError> {
+        experiment_run::start_followed(self.host.clone(), self.jobs.clone(), document, options, self.secrets.as_ref()).await
     }
 
     pub fn info(&self) -> AppInfo {

@@ -4,6 +4,8 @@
 //! | --- | --- |
 //! | `GET /api/health` | liveness and version, open to all (container health checks) |
 //! | `POST /api/invoke/<command>` | one engine command, JSON arguments in, JSON result out |
+//! | `POST /api/run` | an experiment run to its end: the result, or its steps as lines (`run.rs`) |
+//! | `GET /api/openapi.json` | this API, described (`docs/api/openapi.json`) |
 //! | `GET /api/events` | WebSocket of engine events |
 //! | `GET /api/files?path=` | a file from the data folder (exports, reports), as a download |
 //! | `GET/POST /login`, `POST /logout` | the session cookie for browsers |
@@ -34,6 +36,7 @@ use tower_http::services::{ServeDir, ServeFile};
 
 use crate::auth::Auth;
 use crate::events;
+use crate::run;
 
 /// What every handler can reach.
 pub struct Inner {
@@ -56,7 +59,7 @@ const WRONG_TOKEN_DELAY: Duration = Duration::from_secs(1);
 const CSP: &str = "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; \
     script-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
 
-fn failure(status: StatusCode, error: EngineError) -> Response {
+pub(crate) fn failure(status: StatusCode, error: EngineError) -> Response {
     (status, Json(Failure::Engine(error))).into_response()
 }
 
@@ -64,6 +67,8 @@ pub fn router(state: AppState) -> Router {
     let api = Router::new()
         .route("/health", get(health))
         .route("/invoke/{command}", post(invoke))
+        .route("/run", post(run::run))
+        .route("/openapi.json", get(openapi))
         .route("/events", get(events))
         .route("/files", get(download))
         .fallback(api_not_found);
@@ -132,6 +137,14 @@ async fn health(State(app): State<AppState>) -> Json<Value> {
     Json(json!({ "status": "ok", "version": VERSION, "auth": app.auth.required() }))
 }
 
+/// The API described for tools and people: the stable endpoints, the
+/// commands, the run request and result (OpenAPI 3.1, written by hand).
+pub const OPENAPI: &str = include_str!("../../docs/api/openapi.json");
+
+async fn openapi() -> Response {
+    ([(header::CONTENT_TYPE, HeaderValue::from_static("application/json"))], OPENAPI).into_response()
+}
+
 async fn api_not_found() -> Response {
     failure(StatusCode::NOT_FOUND, EngineError::new("api.not_found"))
 }
@@ -140,7 +153,7 @@ async fn no_interface() -> Response {
     (StatusCode::NOT_FOUND, "This Signal Lab server has no interface folder: start it with --ui-dir pointing at the built `dist`.").into_response()
 }
 
-fn is_json(headers: &HeaderMap) -> bool {
+pub(crate) fn is_json(headers: &HeaderMap) -> bool {
     headers
         .get(header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())

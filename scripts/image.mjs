@@ -9,8 +9,9 @@
 // The smoke test runs the container the way it is meant to run — a token from
 // a file, a read-only root filesystem, no capabilities, a named volume for
 // /data — and checks what a browser and a script rely on: the refusal without
-// a token, health, sign-in, commands, the event stream, writes to /data, and a
-// clean exit on SIGTERM.
+// a token when making one is off, a bare start that makes one and keeps it,
+// health, sign-in, commands, the event stream, writes to /data, the command
+// line `signallab` (here and against the server), and a clean exit on SIGTERM.
 
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -111,9 +112,21 @@ async function smoke(image) {
     const printed = mustDocker(["run", "--rm", image, "--version"], "--version");
     check(printed === `signal-lab-server ${version}`, `--version printed "${printed}"`);
   });
-  await step("refuses to listen on every address without a token (exit 2)", () => {
-    const result = docker(["run", "--rm", image]);
+  await step("refuses to listen on every address without a token when it may not make one (exit 2)", () => {
+    const result = docker(["run", "--rm", "--env", "SIGNALLAB_GENERATE_TOKEN=false", image]);
     check(result.status === 2 && result.stderr.includes("without a token"), `exit ${result.status}: ${result.stderr.trim()}`);
+  });
+  await step("has the command line: signallab version, validate, run (read-only, /tmp in memory)", () => {
+    const cli = (...args) => docker(["run", "--rm", "--read-only", "--tmpfs", "/tmp", "--cap-drop", "ALL", "--entrypoint", "signallab", image, ...args]);
+    const printed = cli("version");
+    check(printed.ok && printed.stdout.trim() === `signallab ${version}`, `signallab version printed "${printed.stdout.trim()}"`);
+    const valid = cli("validate", "empty", "http-check");
+    check(valid.status === 0, `validate → exit ${valid.status}: ${valid.stderr.trim()}`);
+    const ran = cli("--json", "run", "empty");
+    const summary = ran.stdout.trim().split(/\r?\n/).map((line) => JSON.parse(line)).at(-1);
+    check(ran.status === 0 && summary?.type === "summary" && summary.passed === 1, `run → exit ${ran.status}: ${ran.stdout}${ran.stderr}`);
+    const unknown = cli("run", "no-such-thing");
+    check(unknown.status === 2, `an unknown experiment → exit ${unknown.status}`);
   });
   let token = "";
   await step("generates tokens", () => {
@@ -193,6 +206,14 @@ async function smoke(image) {
         events.close();
       }
     });
+    await step("signallab runs on the server: signallab run --server, with the token", () => {
+      const remote = docker(["run", "--rm", "--network", `container:${container}`, "--env", `SIGNALLAB_TOKEN=${token}`, "--entrypoint", "signallab", image,
+        "--json", "run", "empty", "--server", "http://127.0.0.1:1430"]);
+      const summary = remote.stdout.trim().split(/\r?\n/).map((line) => JSON.parse(line)).at(-1);
+      check(remote.status === 0 && summary?.passed === 1, `exit ${remote.status}: ${remote.stdout}${remote.stderr}`);
+      const refused = docker(["run", "--rm", "--network", `container:${container}`, "--entrypoint", "signallab", image, "run", "empty", "--server", "http://127.0.0.1:1430"]);
+      check(refused.status === 3, `without the token → exit ${refused.status}`);
+    });
     await step("stops cleanly on SIGTERM (exit 0)", () => {
       const at = Date.now();
       mustDocker(["stop", "--time", "20", container], "stop");
@@ -208,6 +229,42 @@ async function smoke(image) {
     docker(["rm", "--force", container]);
     docker(["volume", "rm", "--force", volume]);
     rmSync(tokenFile, { force: true });
+  }
+
+  // Nothing set up at all: `docker run` with a volume, as the README shows it.
+  const bare = `${container}-bare`;
+  const bareVolume = `${bare}-data`;
+  try {
+    await step("a bare start makes a token, shows it once and keeps it across a restart", async () => {
+      mustDocker([
+        "run", "--detach", "--name", bare, "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
+        "--publish", "127.0.0.1::1430", "--mount", `type=volume,source=${bareVolume},target=/data`, image,
+      ], "start without a token");
+      await waitHealthy(bare);
+      const shown = /Sign in with it:\s+([0-9a-f]{64})/.exec(docker(["logs", bare]).stderr)?.[1];
+      check(!!shown, "the first start shows the token it made");
+      const kept = mustDocker(["exec", bare, "cat", "/data/token"], "cat /data/token");
+      check(kept === shown, "/data/token holds the token that was shown");
+      const mode = mustDocker(["exec", bare, "stat", "-c", "%a %u", "/data/token"], "stat");
+      check(mode === "600 10001", `/data/token is ${mode}, not 600 for uid 10001`);
+      const port = mustDocker(["port", bare, "1430/tcp"], "port").split(/\r?\n/)[0].split(":").pop();
+      const call = (headers) => fetch(`http://127.0.0.1:${port}/api/invoke/app_info`, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: "null" });
+      check((await call({})).status === 401, "a command without the token is refused");
+      check((await call({ authorization: `Bearer ${shown}` })).status === 200, "the token that was shown opens it");
+      mustDocker(["restart", "--time", "20", bare], "restart");
+      await waitHealthy(bare);
+      const logs = docker(["logs", bare]);
+      const text = `${logs.stdout}${logs.stderr}`;
+      check(text.split("Sign in with it:").length === 2, "the token is shown once, not again after the restart");
+      check(text.includes("access token from the data folder"), "the restart says where the token came from");
+      check(mustDocker(["exec", bare, "cat", "/data/token"], "cat /data/token") === shown, "the restart keeps the token");
+    });
+  } catch (error) {
+    const logs = docker(["logs", "--tail", "40", bare]);
+    throw new Error(`${error.message}${logs.ok ? `\n--- container log ---\n${`${logs.stdout}${logs.stderr}`.trim()}` : ""}`);
+  } finally {
+    docker(["rm", "--force", bare]);
+    docker(["volume", "rm", "--force", bareVolume]);
   }
   console.log(`\n✔ ${image}: ${steps.length} checks passed · ${seconds(started)}`);
 }

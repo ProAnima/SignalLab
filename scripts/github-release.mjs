@@ -3,6 +3,7 @@
 //
 //   node scripts/github-release.mjs draft v1.2.3       create (or refresh) the draft release, notes from CHANGELOG.md
 //   node scripts/github-release.mjs checksums v1.2.3   SHA256SUMS.txt of every asset, uploaded next to them
+//   node scripts/github-release.mjs upload v1.2.3 FILE…  files of a build into the draft (the command line's archives)
 //
 // publishedReleases() is used by scripts/image.mjs to tag the server image.
 //
@@ -11,7 +12,8 @@
 // publishing is a person's decision, made on the releases page.
 
 import { createHash } from "node:crypto";
-import { appendFileSync } from "node:fs";
+import { appendFileSync, readFileSync } from "node:fs";
+import { basename } from "node:path";
 import { releaseNotes } from "./changelog.mjs";
 import { fail, isMain } from "./lib.mjs";
 
@@ -113,9 +115,33 @@ async function checksums(tag) {
   summary(`\`${SUMS}\`\n\n\`\`\`\n${lines.join("\n")}\n\`\`\`\n\nReview and publish: ${release.html_url}`);
 }
 
+/** Files into the draft for `tag`, each replacing an asset of the same name (a rebuilt tag). */
+async function upload(tag, files) {
+  const release = await findRelease(tag);
+  if (!release) fail(`no release for ${tag}`);
+  if (!release.draft) fail(`${tag} is already published; its assets are not changed`);
+  const assets = await github(`${API}/releases/${release.id}/assets?per_page=100`);
+  for (const file of files) {
+    const name = basename(file);
+    const old = assets.find((asset) => asset.name === name);
+    if (old) await github(`${API}/releases/assets/${old.id}`, { method: "DELETE" });
+    const bytes = readFileSync(file);
+    await github(`${UPLOADS}/releases/${release.id}/assets?name=${encodeURIComponent(name)}`, {
+      method: "POST",
+      headers: { "Content-Type": name.endsWith(".zip") ? "application/zip" : "application/gzip" },
+      body: bytes,
+    });
+    console.log(`uploaded ${name} (${(bytes.length / 1048576).toFixed(1)} MiB) to the draft for ${tag}`);
+  }
+}
+
 if (isMain(import.meta.url)) {
-  const [command, tag] = process.argv.slice(2);
+  const [command, tag, ...files] = process.argv.slice(2);
   if (!token) fail("GITHUB_TOKEN (or GH_TOKEN) is required");
-  if (!tag || !/^v\d/.test(tag) || !["draft", "checksums"].includes(command)) fail("usage: node scripts/github-release.mjs draft|checksums vX.Y.Z");
-  (command === "draft" ? draft(tag) : checksums(tag)).catch((error) => fail(error.message ?? String(error)));
+  const known = ["draft", "checksums", "upload"];
+  if (!tag || !/^v\d/.test(tag) || !known.includes(command) || (command === "upload" && !files.length)) {
+    fail("usage: node scripts/github-release.mjs draft|checksums vX.Y.Z | upload vX.Y.Z FILE…");
+  }
+  const work = command === "draft" ? draft(tag) : command === "checksums" ? checksums(tag) : upload(tag, files);
+  work.catch((error) => fail(error.message ?? String(error)));
 }

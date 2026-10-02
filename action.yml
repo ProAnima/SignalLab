@@ -1,0 +1,120 @@
+# Signal Lab in a GitHub Actions workflow: run experiments, fail the job when
+# one fails, and leave a JUnit report. It runs the command line `signallab`
+# from the server image (Linux runners), or sends the runs to a lab server.
+#
+#   - uses: ProAnima/SignalLab@v0.4.0
+#     with:
+#       experiments: tests/signallab/smoke.json
+#       params: |
+#         api=http://127.0.0.1:8080
+#     env:
+#       SIGNALLAB_SECRET_API_TOKEN: ${{ secrets.API_TOKEN }}
+#
+# More: docs/automation.md.
+name: Signal Lab
+description: Run Signal Lab experiments — OSC, UDP, HTTP, MQTT checks — and fail the job when one fails; writes a JUnit report.
+author: ProAnimaStudio
+branding:
+  icon: activity
+  color: green
+
+inputs:
+  experiments:
+    description: Experiment files (as the app saves and exports them) or names of bundled templates; separated by spaces or lines.
+    required: true
+  params:
+    description: Parameter values for the runs, NAME=VALUE, one per line.
+    required: false
+    default: ""
+  profile:
+    description: Run with this profile of the experiments.
+    required: false
+    default: ""
+  server:
+    description: Run on this Signal Lab server (http://lab-pc:1430) instead of in the job — for gear only the lab can reach.
+    required: false
+    default: ""
+  token:
+    description: The server's access token; pass a secret.
+    required: false
+    default: ""
+  junit:
+    description: Where the JUnit report goes, relative to the working directory.
+    required: false
+    default: signallab-junit.xml
+  timeout:
+    description: Seconds a run may take, 1 to 300.
+    required: false
+    default: ""
+  version:
+    description: The image version (ghcr.io/proanima/signallab:<version>), e.g. 0.4.0.
+    required: false
+    default: latest
+  image:
+    description: Another registry or a locally built image (the version is its tag).
+    required: false
+    default: ghcr.io/proanima/signallab
+  lang:
+    description: Language of the messages, en or ru.
+    required: false
+    default: en
+
+outputs:
+  junit:
+    description: The path of the JUnit report.
+    value: ${{ steps.run.outputs.junit }}
+  exit-code:
+    description: "signallab's exit code: 0 passed, 1 an experiment failed, 2 an invalid experiment or input, 3 could not run (server, token, port)."
+    value: ${{ steps.run.outputs.exit-code }}
+
+runs:
+  using: composite
+  steps:
+    - id: run
+      shell: bash
+      env:
+        INPUT_EXPERIMENTS: ${{ inputs.experiments }}
+        INPUT_PARAMS: ${{ inputs.params }}
+        INPUT_PROFILE: ${{ inputs.profile }}
+        INPUT_SERVER: ${{ inputs.server }}
+        INPUT_TOKEN: ${{ inputs.token }}
+        INPUT_JUNIT: ${{ inputs.junit }}
+        INPUT_TIMEOUT: ${{ inputs.timeout }}
+        INPUT_VERSION: ${{ inputs.version }}
+        INPUT_IMAGE: ${{ inputs.image }}
+        INPUT_LANG: ${{ inputs.lang }}
+      run: |
+        set -uo pipefail
+        if [ "${RUNNER_OS:-Linux}" != "Linux" ]; then
+          echo "::error title=Signal Lab::this action runs the Linux image; on ${RUNNER_OS} runners download signallab from the release instead (docs/automation.md)"
+          exit 2
+        fi
+        args=(run)
+        for file in $INPUT_EXPERIMENTS; do args+=("$file"); done
+        while IFS= read -r pair; do
+          pair="${pair#"${pair%%[![:space:]]*}"}"
+          [ -n "$pair" ] && args+=(--param "$pair")
+        done <<< "$INPUT_PARAMS"
+        [ -n "$INPUT_PROFILE" ] && args+=(--profile "$INPUT_PROFILE")
+        [ -n "$INPUT_SERVER" ] && args+=(--server "$INPUT_SERVER")
+        [ -n "$INPUT_TIMEOUT" ] && args+=(--timeout "$INPUT_TIMEOUT")
+        args+=(--junit "$INPUT_JUNIT")
+        echo "junit=$INPUT_JUNIT" >> "$GITHUB_OUTPUT"
+
+        # Experiment secrets are the step's SIGNALLAB_SECRET_* variables; only their names go on the command line.
+        # Values travel in the environment, never on docker's command line.
+        export SIGNALLAB_LANG="$INPUT_LANG"
+        pass=(-e GITHUB_ACTIONS -e SIGNALLAB_LANG)
+        if [ -n "$INPUT_TOKEN" ]; then export SIGNALLAB_TOKEN="$INPUT_TOKEN"; pass+=(-e SIGNALLAB_TOKEN); fi
+        while IFS= read -r name; do
+          [ -n "$name" ] && pass+=(-e "$name")
+        done < <(env | sed -n 's/^\(SIGNALLAB_SECRET_[A-Za-z0-9_]*\)=.*/\1/p')
+
+        # As the runner's user, so the report in the workspace belongs to the job.
+        docker run --rm --network host "${pass[@]}" \
+          --user "$(id -u):$(id -g)" \
+          -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" -w "$PWD" \
+          --entrypoint signallab "$INPUT_IMAGE:$INPUT_VERSION" "${args[@]}"
+        code=$?
+        echo "exit-code=$code" >> "$GITHUB_OUTPUT"
+        exit $code

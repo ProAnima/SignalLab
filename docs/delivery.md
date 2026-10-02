@@ -71,7 +71,7 @@ the first stage of a release:
 | --- | --- | --- |
 | Checks (Windows) | `windows-latest` | Node 24, Rust stable + clippy, cached Cargo build, `npm ci`, `node scripts/check.mjs`; then the end-to-end tour (`node scripts/e2e.mjs`: the desktop app in WebView2, the server in Edge) |
 | Checks (Linux) | `ubuntu-22.04` | the same, plus WebKitGTK 4.1, librsvg, libxdo, OpenSSL, patchelf; then tooltips in WebKitGTK (`xvfb-run -a node scripts/webkit.mjs --native`) and the tour (`xvfb-run -a node scripts/e2e.mjs --native`) |
-| Server image (x64) | `ubuntu-24.04` | the `Dockerfile` built with Buildx (layers cached in GitHub's cache), `node scripts/image.mjs smoke`, then the tour of the server the image serves, in WebKitGTK |
+| Server image (x64) | `ubuntu-24.04` | the `Dockerfile` built with Buildx (layers cached in GitHub's cache), `node scripts/image.mjs smoke` (the server and `signallab` in it), `node scripts/install-test.mjs` (`deploy/install.sh` installed, updated and removed for real), the GitHub Action in `action.yml` with that image (a passing and a failing run), then the tour of the server the image serves, in WebKitGTK |
 | Server image (arm64) | `ubuntu-24.04-arm` | the same, natively on Arm |
 
 A failed tour keeps its screenshots and report as the job's artifact (`e2e-*`, seven days).
@@ -108,8 +108,10 @@ The tag starts `.github/workflows/release.yml`:
    pre-release part (`0.4.0-rc.1`) is marked pre-release. A published release is never
    touched.
 3. **Build** — in parallel, Tauri builds and uploads to the draft:
-   - Windows x64: `*-setup.exe` (NSIS, per-user or per-machine, English/Russian) and `*.msi`;
+   - Windows x64: `*-setup.exe` (NSIS) and `*.msi` (WiX);
    - Linux x64: `.deb`, `.rpm`, `.AppImage`.
+   - next to them, the command line: `signallab-X.Y.Z-windows-x64.zip` and
+     `signallab-X.Y.Z-linux-x64.tar.gz` (`node scripts/github-release.mjs upload`);
 4. **Checksums** — `SHA256SUMS.txt` over every asset, uploaded with them.
 
 Then a person reviews the draft — notes, assets, sizes, a quick install — and publishes it.
@@ -118,6 +120,32 @@ To rebuild the assets of an unpublished tag, run the workflow by hand with that 
 Publishing starts `.github/workflows/image.yml`, which puts the server image on GHCR
 (§7). Nothing goes to the registry before a person has published the release; to rebuild
 the image of a published release, run that workflow by hand with its tag.
+
+### Installers
+
+The Windows setup (`*-setup.exe`) is the one people download: the language (English or
+Russian, remembered for the next update), a welcome page, *for me* (no administrator
+rights, in `%LOCALAPPDATA%`) or *for everyone on this PC*, the folder, and a last page
+with *Run Signal Lab* and *Create a desktop shortcut*. An installed version is found and
+upgraded in place; the uninstaller is in *Apps & features*. There is no license page —
+MIT asks for no acceptance. The `.msi` is for IT deployment (Intune, Group Policy) and
+installs for every user. Both carry the brand: the sidebar and header of the setup and
+the dialog and banner of the MSI are drawn from the app icon by
+`python scripts/gen-installer-art.py` into `src-tauri/installer/` (committed;
+`tests/installer.test.mjs` checks they are there at the sizes the installers draw).
+
+| Unattended | Command |
+| --- | --- |
+| Silent, for the current user | `"Signal Lab_X.Y.Z_x64-setup.exe" /S` |
+| Silent, for every user (elevated) | `"Signal Lab_X.Y.Z_x64-setup.exe" /S /ALLUSERS` |
+| With a progress bar and no questions | `… /P` |
+| Without shortcuts / into a folder | `… /NS`, `… /D=C:\Tools\Signal Lab` (last) |
+| MSI, silent | `msiexec /i "Signal Lab_X.Y.Z_x64_en-US.msi" /qn` |
+
+Windows asks once, on the first listening port (an OSC monitor, a wait), whether Signal
+Lab may receive on the network; the installers do not change the firewall themselves.
+Until the installers are signed (§6) SmartScreen warns about an unknown publisher:
+*More info → Run anyway*.
 
 **Versions.** Semantic versioning. Pre-releases (`-rc.N`) for builds handed out for
 testing. The document format version (`experiment.rs`) is independent of the app version.
@@ -132,6 +160,8 @@ testing. The document format version (`experiment.rs`) is independent of the app
 | `npm run release`, `npm run check:linux`, `npm run build:linux` | Done |
 | Server mode: engine without Tauri, `signal-lab-server`, the UI in a browser (§7) | Done — D1–D3 |
 | Server image on GHCR, smoke-tested in CI for x64 and arm64 (§7) | Done — D4; first image with the next release |
+| Branded installers, unattended switches (§4) | Done |
+| Server in one command: `deploy/install.sh`, a token made on first start (§7) | Done — tested by `scripts/install-test.mjs` |
 | Code signing (§6) | Declared |
 
 ## 6. Code signing (declared)
@@ -148,6 +178,34 @@ release page states the installers are unsigned.
 **Goal.** Run the engine headless on a Linux machine — a rack PC next to the gear, a
 show-control VM, a shared lab box — and use the full interface from any browser on the
 network. Same engine, same experiments, same files.
+
+### In one command
+
+```
+curl -fsSL https://raw.githubusercontent.com/ProAnima/SignalLab/main/deploy/install.sh | sh
+```
+
+On any Linux machine with internet access. `deploy/install.sh` installs Docker when it is
+missing (it asks; `--yes` answers), writes `compose.yaml` to `/opt/signallab`
+(`~/signallab` without root), pulls the image, starts it with host networking, waits for
+the health check, and prints the addresses to open and the access token. Running it again
+updates the image in place — the data and the token stay. `--uninstall` removes the
+server and keeps the data; `--uninstall --purge` deletes that too.
+
+| Option | |
+| --- | --- |
+| `--version X.Y.Z` | the image version (default `latest`; 0.4.0 or later) |
+| `--port N` / `--listen IP:PORT` | where browsers connect (default `0.0.0.0:1430`) |
+| `--dir DIR` | where the compose file goes |
+| `--name NAME` | container and volume name — a second server on the same host needs its own |
+| `--image NAME` | another registry or a local build (`--image signallab:dev`) |
+| `--yes` | install Docker without asking |
+
+Settings of one's own — experiment secrets, `SIGNALLAB_ALLOWED_HOSTS`, `--secure-cookie`
+behind HTTPS — go in `compose.override.yaml` next to the compose file, which the script
+never touches. `scripts/install-test.mjs` runs the script for real (inside `docker:cli`,
+against this machine's Docker, under its own name): install, sign in with the printed
+token, update, uninstall, install again with the same token, purge.
 
 ### Architecture
 
@@ -188,6 +246,8 @@ covers fullscreen and downloads for both.
 | `POST /api/invoke/<command>` | JSON arguments, exactly the desktop command's; `200` with the result, `422` with the same `EngineError` (or text) the desktop app gets |
 | `GET /api/events` | WebSocket of `{event, payload}`; a page that falls behind is told how many events it missed (`server://lagged`) |
 | `GET /api/files?path=` | download a file the engine wrote (reports, exports) — only inside the data folder |
+| `POST /api/run` | an experiment run to its end — the result, or its steps as NDJSON lines (docs/automation.md) |
+| `GET /api/openapi.json` | the API described (OpenAPI 3.1, `docs/api/openapi.json`) |
 | `GET/POST /login`, `POST /logout` | the sign-in page (English or Russian by `Accept-Language`) |
 
 A script uses `Authorization: Bearer <token>`; a browser exchanges the token once at
@@ -199,6 +259,10 @@ A script uses `Authorization: Bearer <token>`; a browser exchanges the token onc
   and needs no token. Any other address needs a token (`--token-file`, `SIGNALLAB_TOKEN_FILE`
   or `SIGNALLAB_TOKEN`; at least 24 characters — `signal-lab-server token` prints a
   64-character one); without it the server exits with code 2 instead of starting.
+  `--generate-token` (on in the image) makes one instead, where one is needed — on an
+  address beyond loopback: `<data folder>/token`, readable by the server's user only,
+  printed once when it is made, and kept across restarts and updates — so a server
+  started with nothing set up is still never open.
 - **Sessions.** The cookie is `HttpOnly`, `SameSite=Strict`, valid 7 days, `Secure`
   with `--secure-cookie` (behind an HTTPS proxy). Sessions live in memory: a restart
   signs everyone out. A wrong token costs a one-second delay and a warning in the log.
@@ -227,6 +291,7 @@ Every option has an environment variable, for containers.
 | --- | --- | --- |
 | `--listen` | `SIGNALLAB_LISTEN` | `127.0.0.1:1430` (`0.0.0.0:1430` in the image) |
 | `--token-file` / `--token` | `SIGNALLAB_TOKEN_FILE` / `SIGNALLAB_TOKEN` | none — loopback only |
+| `--generate-token` | `SIGNALLAB_GENERATE_TOKEN` | off (on in the image): beyond loopback, make and keep `<data folder>/token` |
 | `--data-dir` | `SIGNALLAB_DATA_DIR` | `Documents/SignalLab` (`/data` in the image) |
 | `--secrets-dir` | `SIGNALLAB_SECRETS_DIR` | `/run/secrets/signallab` |
 | `--ui-dir` | `SIGNALLAB_UI_DIR` | `ui` next to the executable, else `./dist` |
@@ -266,17 +331,15 @@ exactly that): it writes only to `/data`. A named volume starts out owned by uid
 bind-mounted folder must be writable by it (`chown 10001:10001`).
 
 ```
-docker run --rm ghcr.io/proanima/signallab token > signallab_token.txt
-sudo chown 10001 signallab_token.txt && sudo chmod 400 signallab_token.txt
-docker run -d --name signallab --network host \
-  -v signallab-data:/data \
-  -v "$PWD/signallab_token.txt:/run/secrets/signallab_token:ro" \
-  -e SIGNALLAB_TOKEN_FILE=/run/secrets/signallab_token \
+docker run -d --name signallab --network host -v signallab-data:/data \
   --read-only --cap-drop ALL --security-opt no-new-privileges \
   ghcr.io/proanima/signallab:latest
+docker logs signallab                  # "Sign in with it:" and the token, on the first start
+docker exec signallab cat /data/token  # the same, any time later
 ```
 
-`deploy/compose.yaml` is the same as a Compose file with the token as a secret.
+`deploy/compose.yaml` is the same as a Compose file (`docker compose up -d`); a token of
+one's own goes in as a secret file with `SIGNALLAB_TOKEN_FILE`, as its comments show.
 
 **Smoke test** (`scripts/image.mjs smoke`, also `npm run check:image`): `--version` matches
 `package.json`; without a token the container exits 2; `token` prints 64 hex characters;

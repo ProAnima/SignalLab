@@ -6,6 +6,7 @@ pub mod auth;
 pub mod config;
 pub mod events;
 mod routes;
+mod run;
 
 use std::future::Future;
 use std::net::SocketAddr;

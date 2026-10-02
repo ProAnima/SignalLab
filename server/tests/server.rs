@@ -55,6 +55,7 @@ async fn start(token: Option<&str>) -> Running {
     let config = Config {
         listen: address,
         token: token.map(str::to_string),
+        made_token: None,
         data_dir: Some(data_dir()),
         secrets_dir: data_dir().join("secrets"),
         ui_dir: Some(ui_dir()),

@@ -186,8 +186,8 @@ mod tests {
         let code = regex::Regex::new(r#"EngineError::new\("([a-z0-9_.]+)"\)"#).unwrap();
         let field = regex::Regex::new(r#"Field::(?:new|nth)\("([a-z0-9_]+)""#).unwrap();
         let (mut codes, mut fields) = (BTreeSet::new(), BTreeSet::new());
-        // The engine and the server report EngineErrors; both are scanned.
-        for folder in [root.join("src"), root.join("../server/src")] {
+        // The engine, the server and the command line report EngineErrors; all are scanned.
+        for folder in [root.join("src"), root.join("../server/src"), root.join("../cli/src")] {
             for entry in std::fs::read_dir(&folder).unwrap() {
                 let path = entry.unwrap().path();
                 if path.extension().is_some_and(|extension| extension == "rs") {

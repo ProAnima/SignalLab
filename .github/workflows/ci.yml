@@ -137,6 +137,37 @@ jobs:
       - name: Smoke test
         run: node scripts/image.mjs smoke signallab:ci
 
+      # deploy/install.sh for real, on this runner's Docker: install, update, remove.
+      - name: Install script
+        run: node scripts/install-test.mjs --image signallab:ci
+
+      # The action in action.yml, with the image just built: a run that passes
+      # leaves its JUnit report; one that fails fails with exit code 1.
+      - name: GitHub Action, a passing run
+        id: action-pass
+        uses: ./
+        with:
+          experiments: empty
+          image: signallab
+          version: ci
+          junit: action/junit.xml
+      - name: GitHub Action, a failing run
+        id: action-fail
+        continue-on-error: true
+        uses: ./
+        with:
+          # Nothing listens on the port the template asks: the request is refused.
+          experiments: http-check
+          image: signallab
+          version: ci
+          junit: action/failed.xml
+      - name: GitHub Action, what the two runs left
+        run: |
+          grep -q 'tests="2" failures="0"' action/junit.xml
+          test "${{ steps.action-pass.outputs.exit-code }}" = 0
+          test "${{ steps.action-fail.outputs.exit-code }}" = 1
+          grep -q 'type="transport.refused"' action/failed.xml
+
       # The interface the image serves, every screen, in WebKitGTK; the
       # container shares the host's loopback with the tour's fixtures.
       - name: End-to-end tour of the image

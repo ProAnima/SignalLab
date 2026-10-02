@@ -23,6 +23,8 @@ tower-http = { version = "0.6", features = ["fs", "set-header"] }
 clap = { version = "4", features = ["derive", "env"] }
 rand = "0.8"
 reqwest = { version = "0.12", default-features = false }
+# The body of a followed run (/api/run), written as the run goes.
+futures-util = "0.3"
 
 [dev-dependencies]
 reqwest = { version = "0.12", features = ["json"] }

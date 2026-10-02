@@ -1,0 +1,304 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Signal Lab server",
+    "version": "1",
+    "summary": "The engine of Signal Lab over HTTP: commands, experiment runs, events and files.",
+    "description": "The API `signal-lab-server` serves next to its interface. Without a token the server listens only on loopback and needs no authentication; with one, every endpoint except `/api/health` needs `Authorization: Bearer <token>` (scripts) or the session cookie a browser gets at `/login`. Requests that change state must not carry an `Origin` of another site, and take JSON only. Failures are an `EngineError`: a stable `code` (its text is `err.<code>` in the interface's dictionaries), `params`, the `node` and `field` it is about and the system's own wording as `detail`. A guide with examples: docs/automation.md.",
+    "license": { "name": "MIT", "identifier": "MIT" }
+  },
+  "servers": [{ "url": "http://127.0.0.1:1430", "description": "A server on this machine (the default address)" }],
+  "security": [{ "bearer": [] }, { "session": [] }],
+  "tags": [
+    { "name": "runs", "description": "Experiments run to their end, for scripts and CI" },
+    { "name": "commands", "description": "The command table the interface uses" },
+    { "name": "server", "description": "Health, events, files, this description" }
+  ],
+  "paths": {
+    "/api/health": {
+      "get": {
+        "tags": ["server"],
+        "operationId": "health",
+        "summary": "Whether the server answers, its version, and whether it asks for a token",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "The server is up",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["status", "version", "auth"],
+                  "properties": {
+                    "status": { "const": "ok" },
+                    "version": { "type": "string", "examples": ["0.4.0"] },
+                    "auth": { "type": "boolean", "description": "Requests need a token or a session" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/run": {
+      "post": {
+        "tags": ["runs"],
+        "operationId": "run",
+        "summary": "Run an experiment to its end",
+        "description": "Starts the same run the Run button starts — a job, listed and stoppable in the interface, its events sent to every page, its report saved under `runs/` in the data folder — and answers when it ends. A run that fails is still `200` with `outcome: failed`; an HTTP error means no run was started.\n\nWith `Accept: application/x-ndjson` the answer is one JSON object per line as the run goes: `started`, a `step` per step, a `heartbeat` every 15 s, then `ended` with the result. Without it the answer is the result alone; until the run ends the body carries a space every 15 s (JSON ignores leading whitespace), so a proxy does not close a quiet connection.\n\nA client that disconnects does not stop the run: it goes on to its end and saves its report. When the server shuts down the run is stopped and the answer ends with `outcome: stopped`.",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RunRequest" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "The run ended — passed, failed or stopped",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/RunResult" } },
+              "application/x-ndjson": {
+                "schema": { "$ref": "#/components/schemas/RunLine" },
+                "description": "One `RunLine` per line, `ended` last"
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "415": { "$ref": "#/components/responses/NotJson" },
+          "422": {
+            "description": "The experiment could not start: it does not validate, a parameter is unknown, a secret is not set on the server, a port it listens on is taken, …",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/EngineError" } } }
+          }
+        }
+      }
+    },
+    "/api/invoke/{command}": {
+      "post": {
+        "tags": ["commands"],
+        "operationId": "invoke",
+        "summary": "One engine command",
+        "description": "Exactly the commands the desktop app's interface calls, with the same arguments (camelCase names, unknown ones refused) and results. `x-signallab-commands` lists each with its arguments; the types are in `src/lib/api.ts`. Commands that start a long-running job return its `JobInfo` and are logged with the client's address. `experiment_start` returns as soon as the run has started — use `/api/run` to wait for the result.",
+        "parameters": [
+          {
+            "name": "command",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "app_info", "get_host_info",
+                "jobs_list", "job_stop", "jobs_stop_all",
+                "experiment_load", "experiment_save", "experiment_parse", "experiment_export", "experiment_validate",
+                "experiment_resolve", "experiment_send_node", "experiment_start",
+                "secret_status", "secret_set", "secret_delete",
+                "osc_send", "osc_monitor_start", "osc_generator_start",
+                "http_request", "http_burst_start",
+                "netsim_start", "storm_start", "scan_start",
+                "broadcast_send", "broadcast_beacon_start", "discovery_start",
+                "inspect_set_enabled", "inspect_stats", "inspect_snapshot", "inspect_clear", "inspect_export",
+                "mqtt_connect", "mqtt_publish", "mqtt_subscribe", "mqtt_unsubscribe", "mqtt_publish_once",
+                "signals_load", "signals_save"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The command's arguments as one object; `{}` or no body for a command without any",
+          "content": { "application/json": { "schema": { "type": ["object", "null"] } } }
+        },
+        "responses": {
+          "200": { "description": "The command's result", "content": { "application/json": { "schema": {} } } },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "415": { "$ref": "#/components/responses/NotJson" },
+          "422": {
+            "description": "The command failed",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/EngineError" } } }
+          }
+        },
+        "x-signallab-commands": {
+          "app_info": { "arguments": {}, "returns": "{version, mode, secrets_writable, data_dir}" },
+          "get_host_info": { "arguments": {}, "returns": "host name and network interfaces" },
+          "jobs_list": { "arguments": {}, "returns": "JobInfo[]" },
+          "job_stop": { "arguments": { "id": "integer" }, "returns": "boolean: a job with that id existed" },
+          "jobs_stop_all": { "arguments": {}, "returns": "null" },
+          "experiment_load": { "arguments": {}, "returns": "Experiment: the working document of the data folder" },
+          "experiment_save": { "arguments": { "document": "Experiment" }, "returns": "string: the path written" },
+          "experiment_parse": { "arguments": { "text": "string" }, "returns": "Experiment, migrated from an older version" },
+          "experiment_export": { "arguments": { "document": "Experiment" }, "returns": "string: the path of the export" },
+          "experiment_validate": { "arguments": { "document": "Experiment", "overrides": "object?" }, "returns": "ProfileIssue[]: problems of the other profiles" },
+          "experiment_resolve": { "arguments": { "document": "Experiment", "nodeId": "string", "vars": "object" }, "returns": "{node, missing}: a node with its templates filled in" },
+          "experiment_send_node": { "arguments": { "document": "Experiment", "nodeId": "string", "vars": "object" }, "returns": "{detail, response, vars}" },
+          "experiment_start": { "arguments": { "document": "Experiment", "overrides": "object?", "seed": "integer?" }, "returns": "JobInfo", "job": true },
+          "secret_status": { "arguments": { "names": "string[]" }, "returns": "{name: boolean}" },
+          "secret_set": { "arguments": { "name": "string", "value": "string" }, "returns": "null; secret.read_only on a server" },
+          "secret_delete": { "arguments": { "name": "string" }, "returns": "null; secret.read_only on a server" },
+          "osc_send": { "arguments": { "target": "string", "address": "string", "args": "OscArg[]" }, "returns": "integer: bytes sent" },
+          "osc_monitor_start": { "arguments": { "bind": "string" }, "returns": "JobInfo", "job": true },
+          "osc_generator_start": { "arguments": { "config": "GenConfig" }, "returns": "JobInfo", "job": true },
+          "http_request": { "arguments": { "request": "HttpRequest" }, "returns": "HttpResponse" },
+          "http_burst_start": { "arguments": { "config": "BurstConfig" }, "returns": "JobInfo", "job": true },
+          "netsim_start": { "arguments": { "config": "ProxyConfig" }, "returns": "JobInfo", "job": true },
+          "storm_start": { "arguments": { "config": "StormConfig" }, "returns": "JobInfo", "job": true },
+          "scan_start": { "arguments": { "config": "ScanConfig" }, "returns": "JobInfo", "job": true },
+          "broadcast_send": { "arguments": { "config": "EmitConfig" }, "returns": "EmitResult" },
+          "broadcast_beacon_start": { "arguments": { "config": "EmitConfig" }, "returns": "JobInfo", "job": true },
+          "discovery_start": { "arguments": { "config": "DiscoveryConfig" }, "returns": "JobInfo", "job": true },
+          "inspect_set_enabled": { "arguments": { "enabled": "boolean" }, "returns": "CaptureStats" },
+          "inspect_stats": { "arguments": {}, "returns": "CaptureStats" },
+          "inspect_snapshot": { "arguments": { "limit": "integer" }, "returns": "Frame[]" },
+          "inspect_clear": { "arguments": {}, "returns": "CaptureStats" },
+          "inspect_export": { "arguments": { "format": "\"jsonl\" | \"txt\"" }, "returns": "string: the path written" },
+          "mqtt_connect": { "arguments": { "config": "MqttConfig" }, "returns": "JobInfo", "job": true },
+          "mqtt_publish": { "arguments": { "jobId": "integer", "topic": "string", "payload": "string", "qos": "0 | 1 | 2", "retain": "boolean" }, "returns": "null" },
+          "mqtt_subscribe": { "arguments": { "jobId": "integer", "filters": "{filter, qos}[]" }, "returns": "null" },
+          "mqtt_unsubscribe": { "arguments": { "jobId": "integer", "filters": "string[]" }, "returns": "null" },
+          "mqtt_publish_once": { "arguments": { "config": "MqttConfig", "topic": "string", "payload": "string", "qos": "0 | 1 | 2", "retain": "boolean" }, "returns": "string: what the broker answered" },
+          "signals_load": { "arguments": {}, "returns": "{path, library, seeded}" },
+          "signals_save": { "arguments": { "library": "Library" }, "returns": "string: the path written" }
+        }
+      }
+    },
+    "/api/events": {
+      "get": {
+        "tags": ["server"],
+        "operationId": "events",
+        "summary": "WebSocket of engine events",
+        "description": "Upgrade to a WebSocket (from this server's own origin, or with no Origin and the token). Each message is `{\"event\": <name>, \"payload\": <value>}`: `experiment://step`, `experiment://ended`, `job://ended`, `inspect://batch` and the modules' telemetry. A page that falls behind gets `server://lagged` with how many events it missed. The server pings every 20 s and closes the socket when it stops.",
+        "responses": {
+          "101": { "description": "Switching to the WebSocket protocol" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/api/files": {
+      "get": {
+        "tags": ["server"],
+        "operationId": "download",
+        "summary": "A file the engine wrote — a run report, an export — as a download",
+        "description": "Only files inside the server's data folder; `report_path` of a run result is such a path.",
+        "parameters": [{ "name": "path", "in": "query", "required": true, "schema": { "type": "string" }, "examples": { "report": { "value": "/data/runs/run-1759400000000-3.json" } } }],
+        "responses": {
+          "200": { "description": "The file", "content": { "application/octet-stream": { "schema": { "type": "string", "contentMediaType": "application/octet-stream" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "description": "Not a file in the data folder (`file.not_found`)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/EngineError" } } } },
+          "413": { "description": "Larger than 256 MiB (`file.too_large`)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/EngineError" } } } }
+        }
+      }
+    },
+    "/api/openapi.json": {
+      "get": {
+        "tags": ["server"],
+        "operationId": "openapi",
+        "summary": "This description",
+        "responses": {
+          "200": { "description": "OpenAPI 3.1", "content": { "application/json": { "schema": { "type": "object" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearer": { "type": "http", "scheme": "bearer", "description": "The server's token (`--token-file`, `SIGNALLAB_TOKEN`, or the one `--generate-token` keeps in the data folder)" },
+      "session": { "type": "apiKey", "in": "cookie", "name": "signallab_session", "description": "Set by signing in at `/login`; HttpOnly, SameSite=Strict" }
+    },
+    "responses": {
+      "BadRequest": { "description": "The request could not be read (`api.run_invalid`, `api.run_source`, `command.args_invalid`)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/EngineError" } } } },
+      "Unauthorized": { "description": "No token or session (`auth.required`)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/EngineError" } } } },
+      "Forbidden": { "description": "A host name the server does not answer to (`auth.host`), or a request from another site (`auth.origin`)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/EngineError" } } } },
+      "NotJson": { "description": "The body is not `application/json` (`command.json_required`)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/EngineError" } } } }
+    },
+    "schemas": {
+      "EngineError": {
+        "type": "object",
+        "required": ["code"],
+        "properties": {
+          "code": { "type": "string", "description": "Stable; the text is `err.<code>`", "examples": ["wait.timeout", "secret.missing", "auth.required"] },
+          "params": { "type": "object", "additionalProperties": { "type": "string" }, "description": "The values of the message" },
+          "node": { "type": "string", "description": "The id of the node it is about" },
+          "field": {
+            "type": "object",
+            "required": ["key"],
+            "properties": { "key": { "type": "string", "description": "The text is `field.<key>`" }, "index": { "type": "integer", "minimum": 1 } }
+          },
+          "detail": { "type": "string", "description": "The operating system's, parser's or library's own wording" }
+        }
+      },
+      "RunRequest": {
+        "type": "object",
+        "description": "One experiment: `document` or `template`, not both.",
+        "additionalProperties": false,
+        "properties": {
+          "document": { "type": "object", "description": "An experiment as the app saves and exports it; older versions are migrated" },
+          "template": { "type": "string", "enum": ["empty", "http-check", "status-branch", "parallel-flows", "osc-ping-reply", "poll-until-ready"], "description": "A bundled template by file name (`.json` optional)" },
+          "overrides": { "type": "object", "additionalProperties": { "type": ["string", "number", "boolean"] }, "description": "Parameter values for this run only; each must be a parameter of the experiment" },
+          "profile": { "type": "string", "description": "The profile to run with; an empty string runs with the defaults" },
+          "seed": { "type": "integer", "minimum": 0, "maximum": 9007199254740991, "description": "Random values repeat with the same seed" },
+          "timeout": { "type": "integer", "minimum": 1, "maximum": 300, "description": "Seconds before the run fails with `run.timeout`; default and maximum 300" }
+        },
+        "examples": [{ "template": "osc-ping-reply", "overrides": { "device": "10.0.0.20:9000" }, "timeout": 30 }]
+      },
+      "RunStarted": {
+        "type": "object",
+        "required": ["job_id", "experiment", "seed", "profile", "overridden", "started_ms"],
+        "properties": {
+          "job_id": { "type": "integer" },
+          "experiment": { "type": "string", "description": "The experiment's name" },
+          "seed": { "type": "integer" },
+          "profile": { "type": ["string", "null"] },
+          "overridden": { "type": "boolean", "description": "Some values came from `overrides`" },
+          "started_ms": { "type": "integer", "description": "Milliseconds since the Unix epoch" }
+        }
+      },
+      "RunEvent": {
+        "type": "object",
+        "description": "One step of a run, as the timeline shows it.",
+        "required": ["job_id", "ts", "node_id", "state", "detail", "message_key", "message_params"],
+        "properties": {
+          "job_id": { "type": "integer" },
+          "ts": { "type": "integer", "description": "Milliseconds since the Unix epoch" },
+          "node_id": { "type": "string" },
+          "state": { "type": "string", "enum": ["running", "passed", "failed", "retry", "repeating"] },
+          "detail": { "type": "string", "description": "An English line for logs" },
+          "message_key": { "type": ["string", "null"], "description": "The text of what the step did (`exp.step.*`)" },
+          "message_params": { "description": "Its values" },
+          "vars": { "type": "object", "description": "Variables the step wrote" },
+          "error": { "$ref": "#/components/schemas/EngineError" },
+          "frame": { "type": "integer", "description": "The Inspector frame a wait matched" }
+        }
+      },
+      "RunResult": {
+        "type": "object",
+        "required": ["job_id", "experiment", "outcome", "seed", "profile", "overridden", "params", "started_ms", "ended_ms", "steps"],
+        "properties": {
+          "job_id": { "type": "integer" },
+          "experiment": { "type": "string" },
+          "outcome": { "type": "string", "enum": ["passed", "failed", "stopped"] },
+          "seed": { "type": "integer", "description": "Give it as `seed` to repeat the run's random values" },
+          "profile": { "type": ["string", "null"] },
+          "overridden": { "type": "boolean" },
+          "params": { "type": "object", "additionalProperties": { "type": "string" }, "description": "The parameter values the run used" },
+          "started_ms": { "type": "integer" },
+          "ended_ms": { "type": "integer" },
+          "error": { "$ref": "#/components/schemas/EngineError", "description": "Why it failed (secret values masked)" },
+          "steps": { "type": "array", "items": { "$ref": "#/components/schemas/RunEvent" } },
+          "report_path": { "type": "string", "description": "The report on the server; download it from `/api/files`. A stopped run has none" },
+          "report_error": { "$ref": "#/components/schemas/EngineError" }
+        }
+      },
+      "RunLine": {
+        "description": "A line of `application/x-ndjson`.",
+        "oneOf": [
+          { "allOf": [{ "$ref": "#/components/schemas/RunStarted" }, { "type": "object", "required": ["type"], "properties": { "type": { "const": "started" } } }] },
+          { "allOf": [{ "$ref": "#/components/schemas/RunEvent" }, { "type": "object", "required": ["type"], "properties": { "type": { "const": "step" } } }] },
+          { "type": "object", "required": ["type"], "properties": { "type": { "const": "heartbeat" } } },
+          { "allOf": [{ "$ref": "#/components/schemas/RunResult" }, { "type": "object", "required": ["type"], "properties": { "type": { "const": "ended" } } }] }
+        ]
+      }
+    }
+  }
+}

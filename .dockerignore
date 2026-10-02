@@ -5,6 +5,8 @@
 !Cargo.lock
 !engine/**
 !server/**
+!cli/**
+!docs/api/**
 !src-tauri/Cargo.toml
 !experiments/**
 !src/**

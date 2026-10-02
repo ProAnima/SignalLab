@@ -4,7 +4,7 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use clap::Parser;
-use signal_lab_server::config::{new_token, LogFormat};
+use signal_lab_server::config::{new_token, LogFormat, MadeToken};
 use signal_lab_server::{serve, Cli, Command};
 use tokio::net::TcpListener;
 
@@ -36,6 +36,16 @@ async fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    match &config.made_token {
+        // The one time the token is shown: the person who just started the server signs in with it.
+        Some(MadeToken::New(path)) => eprintln!(
+            "\nSignal Lab made an access token for this server and saved it in {}.\nSign in with it:\n\n    {}\n",
+            path.display(),
+            config.token.as_deref().unwrap_or_default()
+        ),
+        Some(MadeToken::Kept(path)) => tracing::info!(token = %path.display(), "access token from the data folder"),
+        None => {}
+    }
     let access = if config.token.is_some() { "token required" } else { "this machine only, no token" };
     tracing::info!(version = env!("CARGO_PKG_VERSION"), "Signal Lab server on http://{} ({access})", config.listen);
     if let Some(dir) = &config.data_dir {

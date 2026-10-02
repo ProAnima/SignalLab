@@ -105,6 +105,25 @@ jobs:
           args: --bundles ${{ matrix.bundles }}
           includeUpdaterJson: false
 
+      # The command line for scripts and CI (docs/automation.md), next to the installers.
+      - name: signallab, the command line
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          cargo build --release --locked -p signal-lab-cli
+          version="${TAG#v}"
+          mkdir -p cli-dist
+          if [ "$RUNNER_OS" = Windows ]; then
+            archive="cli-dist/signallab-$version-windows-x64.zip"
+            7z a -tzip "$archive" ./target/release/signallab.exe ./LICENSE > /dev/null
+          else
+            archive="cli-dist/signallab-$version-linux-x64.tar.gz"
+            tar -czf "$archive" -C target/release signallab -C ../.. LICENSE
+          fi
+          node scripts/github-release.mjs upload "$TAG" "$archive"
+
   checksums:
     name: Checksums
     needs: build

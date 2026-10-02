@@ -12,6 +12,29 @@ release notes — so what is written here is what users read. See
 
 ### Added
 
+- **Signal Lab in CI/CD.** `signallab`, a command line next to the installers and in
+  the image: `signallab run tests/*.json --junit junit.xml` runs experiments headless
+  and exits 0 when all pass, 1 when one fails, 2 for invalid input, 3 when it could not
+  run; steps print as they happen, in English or Russian, and `--json` gives one JSON
+  object per line. `--server` sends the runs to a lab server that can reach the gear.
+  `signallab send osc|udp|http|mqtt` and `signallab fire` send one message the way the
+  app does. Secrets come from `SIGNALLAB_SECRET_*` and are never printed.
+- **An API for automation.** `POST /api/run` on the server runs an experiment to its end
+  and answers with the result, or streams its steps as NDJSON; the whole API is
+  described at `/api/openapi.json`.
+- **A GitHub Action** (`uses: ProAnima/SignalLab@vX.Y.Z`) runs experiments in a workflow
+  and leaves a JUnit report; GitLab CI and plain shell recipes are in
+  `docs/automation.md`.
+- **The server in one command.** On a Linux machine,
+  `curl -fsSL https://raw.githubusercontent.com/ProAnima/SignalLab/main/deploy/install.sh | sh`
+  installs Docker if needed (it asks), starts the server with host networking, waits
+  until it answers and prints the address and the access token. Running it again
+  updates; `--uninstall` removes it and keeps the data, `--purge` deletes that too.
+- The server image makes its own access token on the first start (`/data/token`,
+  shown once in the log and kept across updates), so a bare `docker run` or
+  `docker compose up -d` is enough; `--generate-token` does the same outside Docker.
+  On loopback, where no token is needed, nothing is made.
+
 - **Save from where you send.** The HTTP, OSC and MQTT screens have *Save…*:
   name it, pick a folder, and what you just sent is in the library. The screen
   stays tied to it — *Save* (`Ctrl+S`) updates it, *Save as…* makes a copy, and a
@@ -96,6 +119,10 @@ release notes — so what is written here is what users read. See
 
 ### Changed
 
+- **Installers that look like Signal Lab.** The Windows setup and the MSI carry the
+  brand on their pages, the setup has its own icon, and the license page is gone (MIT
+  asks for no acceptance) — one click less. Unattended installs are documented
+  (`/S`, `/ALLUSERS`, `/P`, `msiexec /qn`).
 - **The Inspector lives in the bottom panel**, a tab next to the console, so it
   is at hand on every screen; the tab shows when capture is on and how many
   frames it holds, and the panel can be maximised. *Open frame* links go there.

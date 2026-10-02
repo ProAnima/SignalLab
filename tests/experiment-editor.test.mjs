@@ -310,7 +310,8 @@ test("every code the UI can construct has a text in both languages", () => {
   }
   assert.ok(en["err.file.too_large"].includes("{max}"));
   for (const key of Object.keys(en).filter((key) => key.startsWith("err.") || key.startsWith("field."))) {
-    const placeholders = (text) => [...text.matchAll(/\{(\w+)\}/g)].map((found) => found[1]).sort().join();
+    // The names asked for, not how often: a plural repeats a value in each of its forms.
+    const placeholders = (text) => [...new Set([...text.matchAll(/\{(\w+)\}/g)].map((found) => found[1]))].sort().join();
     assert.equal(placeholders(ru[key]), placeholders(en[key]), `${key}: both languages use the same values`);
   }
 });

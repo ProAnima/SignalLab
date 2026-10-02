@@ -27,7 +27,10 @@ npm run e2e:linux          # the same on Linux in Docker (WebKitGTK); -- --image
 npm run release -- X.Y.Z --dry-run   # then --push; see docs/delivery.md
 cargo test --workspace     # engine, desktop shell and server tests
 cargo run -p signal-lab-server   # server on 127.0.0.1:1430 serving dist/ (npm run build first)
+cargo run -p signal-lab-cli -- run empty   # signallab, the command line (docs/automation.md)
 python scripts/gen-icon.py && npx tauri icon src-tauri/icons/icon-1024.png  # app icon
+python scripts/gen-installer-art.py   # installer sidebar/header/dialog/banner from the icon
+node scripts/install-test.mjs --image signallab:dev   # deploy/install.sh end to end on this Docker
 ```
 
 **Delivery** ([docs/delivery.md](docs/delivery.md)): `scripts/check.mjs` is the one
@@ -54,7 +57,7 @@ Win 10/11). All present on this machine as of the initial setup.
 ## Layout
 
 ```
-Cargo.toml                workspace: engine, server, src-tauri (one version, one lock, target/)
+Cargo.toml                workspace: engine, server, src-tauri, cli (one version, one lock, target/)
 src/                      React UI
   lib/transport.ts        the one place that knows desktop vs browser: invoke or fetch + WebSocket
   lib/platform.ts         fullscreen, downloads, sign-out — per platform
@@ -117,8 +120,19 @@ server/src/               signal-lab-server (axum)
   auth.rs                 token, sessions, Host/Origin rules
   routes.rs               /api/invoke, /api/events, /api/files, /api/health, /login, static UI
   events.rs               engine events fanned out to every page's WebSocket
-server/tests/server.rs    the server end to end, like a browser and a script
+  run.rs                  POST /api/run: a run waited for, or its steps as NDJSON lines
+server/tests/server.rs    the server end to end, like a browser and a script (run.rs: /api/run)
+docs/api/openapi.json     the API described (served at /api/openapi.json; a test checks it)
+cli/                      `signallab`, the command line for scripts and CI (docs/automation.md)
+  src/run.rs              run / validate / templates, in this process or on a server (remote.rs)
+  src/send.rs             send osc|udp|http|mqtt, fire a library signal — the app's own commands
+  src/i18n.rs             the interface's dictionaries (build.rs embeds them) and translate.ts in Rust
+  src/junit.rs            the JUnit report; src/fail.rs the exit codes 0/1/2/3
+cli/tests/cli.rs          the binary as a pipeline runs it, against loopback and a server started there
+action.yml                the GitHub Action: signallab from the image, a JUnit report
 Dockerfile, deploy/compose.yaml, scripts/image.mjs   the server image and its smoke test
+deploy/install.sh         the server on a Linux host in one command (Docker, host network, token)
+src-tauri/installer/      the installers' artwork (generated, committed; tests/installer.test.mjs)
 ```
 
 ## Invariants worth not breaking
@@ -139,6 +153,17 @@ Dockerfile, deploy/compose.yaml, scripts/image.mjs   the server image and its sm
   the WebSocket must match `Origin`, sessions are `HttpOnly` + `SameSite=Strict`.
   Keep `Referrer-Policy: same-origin` — `no-referrer` makes the sign-in form
   send `Origin: null`. `server/tests/server.rs` pins these rules.
+  `--generate-token` (on in the image) is the one way to start with nothing set
+  up: it makes `<data dir>/token` (0600) once, prints it once, and keeps it —
+  never a server without a token on a reachable address.
+- **A run is followed, not polled.** `Service::run` / `experiment_run::start_followed`
+  give a `RunHandle` (each step, then the `RunResult`) for the same run
+  `experiment_start` makes — one runner, one report. The server's `/api/run`
+  and the command line both use it; a client that goes away does not stop the
+  run. `signallab` speaks the interface's texts (`cli/build.rs` reads
+  `src/lib/locales`), exits 0 passed / 1 failed / 2 invalid / 3 could not run,
+  and its own codes need `err.<code>` texts like the engine's (the scan in
+  `engine/src/error.rs` covers `cli/src`).
 - **Long-running work is a job.** Register it with `JobRegistry` so the console
   strip can list and stop it, and call `finish(id)` when it ends on its own.
 - **Modules never call the Inspector directly** — publish a normalized `Frame`

@@ -342,8 +342,8 @@ Produces two Windows installers under `target/release/bundle/`:
 
 | Artifact | Use |
 | --- | --- |
-| `nsis/Signal Lab_<version>_x64-setup.exe` | normal install — asks per-user or per-machine, English/Russian |
-| `msi/Signal Lab_<version>_x64_en-US.msi` | unattended / group-policy deployment |
+| `nsis/Signal Lab_<version>_x64-setup.exe` | normal install: English or Russian, for you (no admin rights) or for everyone, *Run* and a desktop shortcut at the end; `/S` installs silently |
+| `msi/Signal Lab_<version>_x64_en-US.msi` | unattended / group-policy deployment (`msiexec /i … /qn`) |
 
 `target/release/signal-lab.exe` is the bare executable and needs no
 installation at all — handy for a USB stick on a show site. The release profile
@@ -351,7 +351,9 @@ is size-optimized (`opt-level = "s"`, LTO, stripped).
 
 The app icon is redrawn from the in-app brand mark (`src/components/Brand.tsx`)
 by `scripts/gen-icon.py`; feed the 1024px result to `npx tauri icon` to cut the
-platform set.
+platform set. The installers' sidebar, header, dialog and banner come from that
+icon too: `python scripts/gen-installer-art.py` (unattended switches and the rest:
+[docs/delivery.md](docs/delivery.md#installers)).
 
 **Linux packages** from this machine: `npm run build:linux` builds `.deb`, `.rpm`
 and `.AppImage` in Docker on Ubuntu 22.04 (the system CI uses) into
@@ -363,21 +365,29 @@ and `.AppImage` in Docker on Ubuntu 22.04 (the system CI uses) into
 Chrome, Firefox or Edge and every screen works as in the app — runs, the Inspector,
 reports and exports download from the browser.
 
-**Docker, on a Linux host** (the image is published with each release, x64 and arm64):
+**On a Linux machine, in one command:**
 
 ```bash
-docker run --rm ghcr.io/proanima/signallab token > signallab_token.txt
-sudo chown 10001 signallab_token.txt && sudo chmod 400 signallab_token.txt
+curl -fsSL https://raw.githubusercontent.com/ProAnima/SignalLab/main/deploy/install.sh | sh
+```
+
+It installs Docker if it is missing (it asks first), starts the server with host
+networking, waits until it answers and prints the address to open and the access
+token to sign in with. Run it again to update — the data and the token stay;
+`--uninstall` removes it (`--purge` with its data). Options: `--version`, `--port`,
+`--dir`, `--name`, `--yes`; `sh install.sh --help`.
+
+**Docker by hand** (the image is published with each release, x64 and arm64):
+
+```bash
 docker run -d --name signallab --network host --restart unless-stopped \
-  -v signallab-data:/data \
-  -v "$PWD/signallab_token.txt:/run/secrets/signallab_token:ro" \
-  -e SIGNALLAB_TOKEN_FILE=/run/secrets/signallab_token \
-  --read-only --cap-drop ALL --security-opt no-new-privileges \
+  -v signallab-data:/data --read-only --cap-drop ALL --security-opt no-new-privileges \
   ghcr.io/proanima/signallab:latest
+docker exec signallab cat /data/token     # the token it made on its first start
 ```
 
 Then open `http://<host>:1430` and sign in with the token. The same as a Compose file:
-[`deploy/compose.yaml`](deploy/compose.yaml).
+[`deploy/compose.yaml`](deploy/compose.yaml) — `docker compose up -d`.
 
 | Networking | What works |
 | --- | --- |
@@ -391,13 +401,42 @@ Then open `http://<host>:1430` and sign in with the token. The same as a Compose
 
 **Security.** Without a token the server listens only on loopback and refuses to
 start on any other address. With one (`--token-file`, 24+ characters,
-`signal-lab-server token` makes one) a browser signs in once and gets an `HttpOnly`,
+`signal-lab-server token` makes one; the image makes and keeps its own in
+`/data/token`, `--generate-token`) a browser signs in once and gets an `HttpOnly`,
 `SameSite=Strict` session; scripts send `Authorization: Bearer`. Requests must come
 from the server's own origin and host name, every job start is logged with the
 client's address, and experiment secrets are read-only files in
 `/run/secrets/signallab/`. Put TLS in a reverse proxy and add `--secure-cookie`.
 All options and their environment variables: `signal-lab-server --help` and
 [docs/delivery.md](docs/delivery.md#7-server-mode-and-docker-image).
+
+## Automation, CI/CD and the API
+
+`signallab` runs the same experiments without a window — in a pipeline, a cron
+job or a deploy script — and exits with a code a pipeline understands:
+
+```bash
+signallab run tests/smoke.json --param api=http://127.0.0.1:8080 --junit junit.xml
+signallab run tests/stage.json --server http://lab-pc:1430 --token-file token.txt
+signallab send osc 127.0.0.1:9000 /cue/go f:0.75
+```
+
+`0` all passed, `1` one failed, `2` invalid input, `3` could not run. Steps print as
+they happen in English or Russian, `--json` gives a JSON object per line, `--junit`
+a report every CI system shows, and `--server` sends the runs to a lab PC that can
+reach the gear. It ships next to the installers and in the image; a GitHub Action
+wraps it:
+
+```yaml
+- uses: ProAnima/SignalLab@v0.4.0
+  with:
+    experiments: tests/signallab/*.json
+```
+
+The server's API does the same over HTTP: `POST /api/run` waits for a run and
+answers with its result, or streams its steps as NDJSON; `/api/invoke/<command>`
+is the engine's whole command table; `/api/openapi.json` describes it all. Commands,
+exit codes, secrets, GitLab and shell recipes: [docs/automation.md](docs/automation.md).
 
 ## Releases
 

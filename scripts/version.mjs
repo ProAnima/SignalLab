@@ -25,7 +25,7 @@ const CARGO_WORKSPACE = /(\[workspace\.package\][^[]*?\nversion\s*=\s*")([^"]+)(
 /** The workspace's own packages in Cargo.lock: signal-lab, signal-lab-engine, signal-lab-server. */
 const CARGO_LOCK = /(\[\[package\]\]\r?\nname = "signal-lab(?:-[a-z]+)?"\r?\nversion = ")([^"]+)(")/g;
 /** Crates of the workspace; each takes its version from the workspace. */
-export const MEMBERS = ["engine/Cargo.toml", "src-tauri/Cargo.toml", "server/Cargo.toml"];
+export const MEMBERS = ["engine/Cargo.toml", "src-tauri/Cargo.toml", "server/Cargo.toml", "cli/Cargo.toml"];
 
 /** Every place a version is written, and how to read and replace it. */
 export const COPIES = [

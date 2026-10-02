@@ -1,8 +1,9 @@
-# Signal Lab is three crates: the engine, and the two ways to run it — the
-# desktop app (src-tauri) and the headless server (server). Only the desktop
-# app depends on Tauri and a webview; the server and the engine build anywhere.
+# Signal Lab is four crates: the engine, and the ways to run it — the desktop
+# app (src-tauri), the headless server (server) and the command line (cli,
+# `signallab`). Only the desktop app depends on Tauri and a webview; the rest
+# build anywhere.
 [workspace]
-members = ["engine", "server", "src-tauri"]
+members = ["engine", "server", "src-tauri", "cli"]
 resolver = "2"
 
 [workspace.package]

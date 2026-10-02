@@ -1,10 +1,11 @@
 # Signal Lab server with Docker Compose, on a Linux host.
 #
-#   1. A token, in a file next to this one that only the container's user reads:
-#        docker run --rm ghcr.io/proanima/signallab token > signallab_token.txt
-#        sudo chown 10001 signallab_token.txt && sudo chmod 400 signallab_token.txt
-#   2. docker compose up -d          (in this folder)
-#   3. Open http://<this-host>:1430 and sign in with the token.
+#   docker compose up -d                        (in this folder)
+#   docker exec signallab cat /data/token       the access token, made on the first start
+#   then open http://<this-host>:1430 and sign in with it.
+#
+# Or let deploy/install.sh do all of it, Docker included:
+#   curl -fsSL https://raw.githubusercontent.com/ProAnima/SignalLab/main/deploy/install.sh | sh
 #
 # Host networking lets OSC, UDP, broadcast, multicast and discovery reach the
 # physical network, and lets waits and monitors listen on real ports. It works
@@ -17,17 +18,21 @@ services:
   signallab:
     # Pin a version for anything that matters: SIGNALLAB_IMAGE=ghcr.io/proanima/signallab:X.Y.Z
     image: ${SIGNALLAB_IMAGE:-ghcr.io/proanima/signallab:latest}
+    container_name: signallab
     network_mode: host
     environment:
-      SIGNALLAB_TOKEN_FILE: /run/secrets/signallab_token
+      # The token is made in /data/token on the first start and kept across
+      # restarts and updates. To bring your own instead, uncomment the token
+      # secret below and set SIGNALLAB_TOKEN_FILE: /run/secrets/signallab_token.
+      SIGNALLAB_GENERATE_TOKEN: "true"
       # Listen on one interface instead of all of them:
       # SIGNALLAB_LISTEN: 10.0.0.5:1430
       # Only answer to these names (a guard against DNS rebinding):
       # SIGNALLAB_ALLOWED_HOSTS: lab-pc.local,10.0.0.5
       # Behind an HTTPS reverse proxy:
       # SIGNALLAB_SECURE_COOKIE: "true"
-    secrets:
-      - signallab_token
+    # secrets:
+      # - signallab_token
       # Experiment secrets ({{secret.API_TOKEN}}) are read-only files, one per name:
       # - source: api_token
       #   target: /run/secrets/signallab/API_TOKEN
@@ -41,11 +46,11 @@ services:
     # SIGTERM closes every page's connection and stops every job first.
     stop_grace_period: 15s
 
-secrets:
-  signallab_token:
-    file: ./signallab_token.txt
-  # api_token:
-  #   file: ./api_token.txt
+# secrets:
+#   signallab_token:
+#     file: ./signallab_token.txt      # docker run --rm ghcr.io/proanima/signallab token > signallab_token.txt
+#   api_token:
+#     file: ./api_token.txt
 
 volumes:
   signallab-data:

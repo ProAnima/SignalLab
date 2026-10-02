@@ -1,6 +1,12 @@
 //! Executing an experiment: branches, joins, listeners, step events, the run
 //! report and *Send now*. What each step does is `experiment_steps`; this
 //! module decides which step runs next and reports it.
+//!
+//! A run is started one way and can be watched two ways: through the events
+//! every host receives (`experiment://step`, `experiment://ended` — the app's
+//! timeline), and through the [`RunHandle`] that [`start_followed`] returns,
+//! which hands its holder each step and then the result — what the server's
+//! `/api/run` and the command line wait for. Both are the same run.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -9,6 +15,7 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use serde_json::Value;
+use tokio::sync::{mpsc, oneshot};
 use crate::host::Host;
 
 use super::error::{EngineError, EngineResult, Field};
@@ -29,7 +36,7 @@ const REPEAT_REPORT_EVERY: Duration = Duration::from_secs(1);
 /// Version of the run report file.
 const REPORT_VERSION: u32 = 2;
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct RunEvent {
     pub job_id: u64,
     pub ts: u64,
@@ -60,6 +67,157 @@ struct JobEnded {
     error: Option<EngineError>,
     report_path: Option<String>,
     report_error: Option<EngineError>,
+}
+
+/// How a run ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Outcome {
+    Passed,
+    Failed,
+    /// Stopped from outside — Stop, Stop all, a server shutting down — before
+    /// it ended on its own. Like a run stopped in the app, it saves no report.
+    Stopped,
+}
+
+impl Outcome {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Outcome::Passed => "passed",
+            Outcome::Failed => "failed",
+            Outcome::Stopped => "stopped",
+        }
+    }
+}
+
+/// What a run starts with besides the document. `overrides` and `seed` are
+/// Run with… values for this run only; the document is not changed.
+#[derive(Clone, Debug, Default)]
+pub struct RunOptions {
+    pub overrides: BTreeMap<String, String>,
+    pub seed: Option<u64>,
+    /// The run fails with `run.timeout` after this long: 1 s to `RUN_LIMIT`,
+    /// which is also the limit when none is given.
+    pub limit: Option<Duration>,
+}
+
+/// A run that has just started: its job and the values it runs with.
+#[derive(Clone, Debug, Serialize)]
+pub struct RunStarted {
+    pub job_id: u64,
+    pub experiment: String,
+    pub seed: u64,
+    pub profile: Option<String>,
+    /// Some values came from Run with… rather than the document.
+    pub overridden: bool,
+    pub started_ms: u64,
+}
+
+/// A run that has ended: what its report says, and where the report is.
+#[derive(Clone, Debug, Serialize)]
+pub struct RunResult {
+    pub job_id: u64,
+    pub experiment: String,
+    pub outcome: Outcome,
+    pub seed: u64,
+    pub profile: Option<String>,
+    pub overridden: bool,
+    /// The parameter values the run used.
+    pub params: BTreeMap<String, String>,
+    pub started_ms: u64,
+    pub ended_ms: u64,
+    /// Why it failed: the first failure, with secret values masked.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<EngineError>,
+    /// Every step, in the order they happened.
+    pub steps: Vec<RunEvent>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub report_path: Option<String>,
+    /// The report could not be written.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub report_error: Option<EngineError>,
+}
+
+/// What a followed run says next.
+#[derive(Debug)]
+pub enum Progress {
+    Step(RunEvent),
+    /// Once, after the last step.
+    Ended(RunResult),
+}
+
+/// A run being followed to its end. Dropping the handle does not stop the
+/// run: it is a job like any other, ends on its own (or by Stop) and saves its
+/// report either way.
+pub struct RunHandle {
+    pub started: RunStarted,
+    pub info: JobInfo,
+    steps: mpsc::UnboundedReceiver<RunEvent>,
+    end: oneshot::Receiver<RunResult>,
+    ended: Option<RunResult>,
+    done: bool,
+    /// What a stopped run reports — it is aborted, so it hands over nothing itself.
+    events: Arc<Mutex<Vec<RunEvent>>>,
+    params: BTreeMap<String, String>,
+}
+
+impl RunHandle {
+    /// The next step as it happens, then the result once, then `None`.
+    pub async fn next(&mut self) -> Option<Progress> {
+        loop {
+            // Every step is sent before the result, so steps already waiting go first.
+            if let Ok(step) = self.steps.try_recv() {
+                return Some(Progress::Step(step));
+            }
+            if let Some(result) = self.ended.take() {
+                self.done = true;
+                return Some(Progress::Ended(result));
+            }
+            if self.done {
+                return None;
+            }
+            let result = tokio::select! {
+                biased;
+                Some(step) = self.steps.recv() => return Some(Progress::Step(step)),
+                // The sender is dropped without a result only when the job was aborted.
+                result = &mut self.end => result.ok(),
+            };
+            let result = result.unwrap_or_else(|| self.stopped());
+            self.ended = Some(result);
+        }
+    }
+
+    /// Wait for the end; steps not taken with `next` are in the result anyway.
+    pub async fn finished(mut self) -> RunResult {
+        loop {
+            match self.next().await {
+                Some(Progress::Ended(result)) => return result,
+                Some(Progress::Step(_)) => {}
+                // `next` returns the end before it returns None.
+                None => return self.stopped(),
+            }
+        }
+    }
+
+    /// The job was aborted before it could report: the steps it got to.
+    fn stopped(&self) -> RunResult {
+        let started = &self.started;
+        RunResult {
+            job_id: started.job_id,
+            experiment: started.experiment.clone(),
+            outcome: Outcome::Stopped,
+            seed: started.seed,
+            profile: started.profile.clone(),
+            overridden: started.overridden,
+            params: self.params.clone(),
+            started_ms: started.started_ms,
+            ended_ms: now_ms(),
+            error: None,
+            steps: self.events.lock().map(|events| events.clone()).unwrap_or_default(),
+            report_path: None,
+            report_error: None,
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -101,7 +259,10 @@ fn waiting_join(joins: &HashMap<String, JoinBarrier>) -> Option<(String, usize)>
 struct EngineShared {
     host: Host,
     job_id: u64,
-    events: Mutex<Vec<RunEvent>>,
+    /// Every step so far; shared with the handle, which reads it if the run is stopped.
+    events: Arc<Mutex<Vec<RunEvent>>>,
+    /// Each step as it happens, for whoever follows the run (gone when nobody does).
+    observer: mpsc::UnboundedSender<RunEvent>,
     by_id: HashMap<String, Node>,
     /// Every wire of an output, in document order: one output may feed several
     /// nodes, which then run in parallel.
@@ -209,6 +370,8 @@ fn emit(shared: &EngineShared, node_id: &str, step: Step) {
     if let Ok(mut list) = shared.events.lock() {
         list.push(event.clone());
     }
+    // Nobody following the run is not an error.
+    let _ = shared.observer.send(event.clone());
     shared.host.emit("experiment://step", event);
 }
 
@@ -500,18 +663,28 @@ struct Prepared {
     secrets: BTreeMap<String, String>,
     listeners: Listeners,
     subscriptions: Subscriptions,
+    /// The run fails with `run.timeout` after this long.
+    limit: Duration,
 }
 
-async fn run(host: &Host, events: &mut Vec<RunEvent>, job_id: u64, doc: &Experiment, prepared: Prepared) -> Result<(), EngineError> {
+/// Where the steps of a run go besides the host: its list, and its follower.
+struct Followers {
+    events: Arc<Mutex<Vec<RunEvent>>>,
+    steps: mpsc::UnboundedSender<RunEvent>,
+}
+
+async fn run(host: &Host, followers: Followers, job_id: u64, doc: &Experiment, prepared: Prepared) -> Result<(), EngineError> {
     let mut joins = HashMap::new();
     for node in doc.nodes.iter().filter(|node| matches!(node.kind, NodeKind::Join)) {
         let inputs: Vec<String> = doc.edges.iter().filter(|edge| edge.to == node.id).map(|edge| edge.from.clone()).collect();
         joins.insert(node.id.clone(), JoinBarrier { expected: inputs.len(), arrived: 0, inputs, states: Vec::new() });
     }
+    let limit = prepared.limit;
     let shared = Arc::new(EngineShared {
         host: host.clone(),
         job_id,
-        events: Mutex::new(Vec::new()),
+        events: followers.events,
+        observer: followers.steps,
         by_id: doc.nodes.iter().map(|node| (node.id.clone(), node.clone())).collect(),
         outgoing: doc.edges.iter().fold(HashMap::new(), |mut outgoing: HashMap<(String, String), Vec<String>>, edge| {
             outgoing.entry((edge.from.clone(), edge.port.clone())).or_default().push(edge.to.clone());
@@ -542,11 +715,11 @@ async fn run(host: &Host, events: &mut Vec<RunEvent>, job_id: u64, doc: &Experim
     spawn_branch(shared.clone(), start_id.clone(), BranchContext::default(), active_tasks, done_tx.clone());
     drop(done_tx);
 
-    if tokio::time::timeout(RUN_LIMIT, done_rx.recv()).await.is_err() {
+    if tokio::time::timeout(limit, done_rx.recv()).await.is_err() {
         shared.stop_flag.store(true, Ordering::SeqCst);
         let mut first = shared.first_error.lock().unwrap();
         if first.is_none() {
-            *first = Some(EngineError::new("run.timeout").with("seconds", RUN_LIMIT.as_secs()));
+            *first = Some(EngineError::new("run.timeout").with("seconds", limit.as_secs()));
         }
     }
 
@@ -569,9 +742,6 @@ async fn run(host: &Host, events: &mut Vec<RunEvent>, job_id: u64, doc: &Experim
             emit(&shared, &end.id, complete);
         }
     }
-    if let Ok(list) = shared.events.lock() {
-        *events = list.clone();
-    }
     let first = shared.first_error.lock().unwrap().clone();
     match first {
         Some(error) => Err(error.masked(&shared.masked)),
@@ -589,10 +759,9 @@ fn file_error(path: &std::path::Path, error: impl ToString) -> EngineError {
     EngineError::new("file.io").with("path", path.display()).because(error)
 }
 
-fn save_report(id: u64, settings: &RunSettings, started_ms: u64, doc: &Experiment, steps: &[RunEvent], error: &Option<EngineError>) -> EngineResult<String> {
+fn save_report(id: u64, settings: &RunSettings, started_ms: u64, ended_ms: u64, doc: &Experiment, steps: &[RunEvent], error: &Option<EngineError>) -> EngineResult<String> {
     let dir = data_dir().join("runs");
     std::fs::create_dir_all(&dir).map_err(|error| file_error(&dir, error))?;
-    let path = dir.join(format!("run-{started_ms}-{id}.json"));
     let report = RunReport {
         version: REPORT_VERSION,
         experiment: &doc.name,
@@ -602,20 +771,42 @@ fn save_report(id: u64, settings: &RunSettings, started_ms: u64, doc: &Experimen
         overrides: &settings.overrides,
         params: &settings.params,
         started_ms,
-        ended_ms: now_ms(),
-        outcome: if error.is_some() { "failed" } else { "passed" },
+        ended_ms,
+        outcome: if error.is_some() { Outcome::Failed.as_str() } else { Outcome::Passed.as_str() },
         error,
         steps,
     };
-    let bytes = serde_json::to_vec_pretty(&report).map_err(|error| file_error(&path, error))?;
-    std::fs::write(&path, bytes).map_err(|error| file_error(&path, error))?;
-    Ok(path.display().to_string())
+    let bytes = serde_json::to_vec_pretty(&report).map_err(|error| file_error(&dir, error))?;
+    // Never over another report: two processes sharing a data folder (command
+    // lines in parallel CI jobs) can start job 1 in the same millisecond.
+    let mut attempt = 1u32;
+    loop {
+        let name = if attempt == 1 { format!("run-{started_ms}-{id}.json") } else { format!("run-{started_ms}-{id}-{attempt}.json") };
+        let path = dir.join(name);
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(mut file) => {
+                use std::io::Write;
+                file.write_all(&bytes).map_err(|error| file_error(&path, error))?;
+                return Ok(path.display().to_string());
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists && attempt < 1000 => attempt += 1,
+            Err(error) => return Err(file_error(&path, error)),
+        }
+    }
 }
 
-/// Start a run. `overrides` and `seed` come from Run with… and apply to this
-/// run only; the document is not changed. Everything that can stop a run
-/// before its first step — validation, a secret that is not stored, a port
-/// that cannot be opened — is an error here, before the job exists.
+/// The time limit of a run: what was asked for, within 1 s and `RUN_LIMIT`.
+fn run_limit(limit: Option<Duration>) -> EngineResult<Duration> {
+    match limit {
+        None => Ok(RUN_LIMIT),
+        Some(limit) if limit >= Duration::from_secs(1) && limit <= RUN_LIMIT => Ok(limit),
+        Some(_) => Err(EngineError::new("run.limit_range").with("max", RUN_LIMIT.as_secs())),
+    }
+}
+
+/// Start a run (the Run button). `overrides` and `seed` come from Run with…
+/// and apply to this run only; the document is not changed. Progress and the
+/// end go out as `experiment://step` and `experiment://ended` events.
 pub async fn start(
     host: Host,
     jobs: JobRegistry,
@@ -624,6 +815,18 @@ pub async fn start(
     seed: Option<u64>,
     store: &dyn SecretStore,
 ) -> EngineResult<JobInfo> {
+    let handle = start_followed(host, jobs, doc, RunOptions { overrides, seed, limit: None }, store).await?;
+    Ok(handle.info)
+}
+
+/// Start a run and follow it: the same run as `start` — the same job, events
+/// and report — with a handle that hands over each step and then the result.
+/// Everything that can stop a run before its first step — validation, a
+/// secret that is not stored, a port that cannot be opened — is an error
+/// here, before the job exists.
+pub async fn start_followed(host: Host, jobs: JobRegistry, doc: Experiment, options: RunOptions, store: &dyn SecretStore) -> EngineResult<RunHandle> {
+    let RunOptions { overrides, seed, limit } = options;
+    let limit = run_limit(limit)?;
     data::check_seed(seed)?;
     let (_order, params) = validate_run(&doc, &overrides)?;
     let secret_values = data::load_secrets(&doc.nodes, store)?;
@@ -635,16 +838,31 @@ pub async fn start(
     let jobs_cl = jobs.clone();
     let started_ms = info.started_ms;
     let seed = seed.or(doc.seed).unwrap_or_else(|| rand::random::<u64>() & data::MAX_SEED);
+    let started = RunStarted {
+        job_id: id,
+        experiment: doc.name.clone(),
+        seed,
+        profile: doc.profile.clone(),
+        overridden: !overrides.is_empty(),
+        started_ms,
+    };
     let settings = RunSettings { seed, overrides, params };
-    let (ready_tx, ready_rx) = tokio::sync::oneshot::channel::<()>();
-    let handle = tokio::spawn(async move {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let (steps_tx, steps_rx) = mpsc::unbounded_channel();
+    let (end_tx, end_rx) = oneshot::channel();
+    let handle_params = settings.params.clone();
+    let followers = Followers { events: events.clone(), steps: steps_tx };
+    let (ready_tx, ready_rx) = oneshot::channel::<()>();
+    let task = tokio::spawn(async move {
         if ready_rx.await.is_err() {
             return;
         }
-        let mut steps = Vec::new();
-        let prepared = Prepared { seed, params: settings.params.clone(), secrets: secret_values, listeners, subscriptions };
-        let error = run(&host_cl, &mut steps, id, &doc, prepared).await.err();
-        let (report_path, report_error) = match save_report(id, &settings, started_ms, &doc, &steps, &error) {
+        let events = followers.events.clone();
+        let prepared = Prepared { seed, params: settings.params.clone(), secrets: secret_values, listeners, subscriptions, limit };
+        let error = run(&host_cl, followers, id, &doc, prepared).await.err();
+        let steps = events.lock().map(|list| list.clone()).unwrap_or_default();
+        let ended_ms = now_ms();
+        let (report_path, report_error) = match save_report(id, &settings, started_ms, ended_ms, &doc, &steps, &error) {
             Ok(path) => (Some(path), None),
             Err(error) => (None, Some(error)),
         };
@@ -655,16 +873,32 @@ pub async fn start(
             seed,
             profile: doc.profile.clone(),
             overridden: !settings.overrides.is_empty(),
-            error,
-            report_path,
-            report_error,
+            error: error.clone(),
+            report_path: report_path.clone(),
+            report_error: report_error.clone(),
         };
         host_cl.emit("job://ended", ended.clone());
         host_cl.emit("experiment://ended", ended);
+        // Nobody following is not an error: the run is complete either way.
+        let _ = end_tx.send(RunResult {
+            job_id: id,
+            experiment: doc.name.clone(),
+            outcome: if error.is_some() { Outcome::Failed } else { Outcome::Passed },
+            seed,
+            profile: doc.profile.clone(),
+            overridden: !settings.overrides.is_empty(),
+            params: settings.params,
+            started_ms,
+            ended_ms,
+            error,
+            steps,
+            report_path,
+            report_error,
+        });
     });
-    jobs.insert(info.clone(), handle);
+    jobs.insert(info.clone(), task);
     let _ = ready_tx.send(());
-    Ok(info)
+    Ok(RunHandle { started, info, steps: steps_rx, end: end_rx, ended: None, done: false, events, params: handle_params })
 }
 
 /// What *Send now* reports. Secret values are masked and the resolved request

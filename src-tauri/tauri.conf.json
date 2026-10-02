@@ -35,7 +35,6 @@
     "shortDescription": "OSC & network protocol simulator",
     "longDescription": "Signal Lab generates, captures and impairs the traffic show-control gear speaks: OSC over UDP, broadcast and multicast discovery, HTTP, and raw UDP/TCP load. Built for bringing an installation up before the installation exists.",
     "license": "MIT",
-    "licenseFile": "../LICENSE",
     "icon": [
       "icons/32x32.png",
       "icons/64x64.png",
@@ -48,7 +47,15 @@
       "nsis": {
         "installMode": "both",
         "languages": ["English", "Russian"],
-        "displayLanguageSelector": true
+        "displayLanguageSelector": true,
+        "installerIcon": "icons/icon.ico",
+        "sidebarImage": "installer/nsis-sidebar.bmp",
+        "headerImage": "installer/nsis-header.bmp",
+        "uninstallerHeaderImage": "installer/nsis-header.bmp"
+      },
+      "wix": {
+        "bannerPath": "installer/wix-banner.bmp",
+        "dialogImagePath": "installer/wix-dialog.bmp"
       }
     }
   }
