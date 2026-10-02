@@ -349,6 +349,11 @@ impl Rng {
         (self.next_u64() as u128 * bound) >> 64
     }
 
+    /// Uniform in `0..bound`.
+    pub fn below_u64(&mut self, bound: u64) -> u64 {
+        self.below(bound as u128) as u64
+    }
+
     fn unit(&mut self) -> f64 {
         (self.next_u64() >> 11) as f64 / (1u64 << 53) as f64
     }

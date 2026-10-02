@@ -10,7 +10,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::error::{EngineError, EngineResult, Field};
-use super::experiment::{Experiment, Node, NodeKind};
+use super::experiment::{Experiment, Node, NodeKind, Until};
+use super::experiment_validate::LoopShape;
 use super::http::HttpResponse;
 use super::matching::{self, UdpMode};
 pub use super::matching::{compare, CompareOp};
@@ -202,7 +203,9 @@ fn texts_mut(kind: &mut NodeKind) -> Vec<(Field, &mut String)> {
             fields.push((Field::new("header_name"), name));
             fields.push((Field::new("expected_text"), contains));
         }
-        NodeKind::AssertValue { value, expected, .. } | NodeKind::BranchValue { value, expected, .. } => {
+        NodeKind::AssertValue { value, expected, .. }
+        | NodeKind::BranchValue { value, expected, .. }
+        | NodeKind::Loop { until: Some(Until { value, expected, .. }), .. } => {
             fields.push((Field::new("value"), value));
             fields.push((Field::new("expected"), expected));
         }
@@ -333,7 +336,8 @@ fn check_literals(node: &Node, params: &BTreeMap<String, String>) -> EngineResul
             matching::compile_regex(expr).map(|_| ()).map_err(|error| error.in_field(Field::new("pattern")))
         }
         NodeKind::AssertValue { op: CompareOp::Matches, expected, .. }
-        | NodeKind::BranchValue { op: CompareOp::Matches, expected, .. } => match static_text(expected, params) {
+        | NodeKind::BranchValue { op: CompareOp::Matches, expected, .. }
+        | NodeKind::Loop { until: Some(Until { op: CompareOp::Matches, expected, .. }), .. } => match static_text(expected, params) {
             Some(pattern) => matching::compile_regex(&pattern).map(|_| ()).map_err(|error| error.in_field(Field::new("expected"))),
             None => Ok(()),
         },
@@ -373,8 +377,10 @@ fn check_udp_pattern(mode: UdpMode, pattern: &str, field: Field, params: &BTreeM
 /// Template checks before a run (see "Static checks" in the design): syntax,
 /// literal regular expressions and JSON paths, variable names, and that every
 /// name is a parameter or a variable set on every path before its use.
-/// `order` is the topological order validation computed.
-pub fn check_values(doc: &Experiment, order: &[String], params: &BTreeMap<String, String>) -> EngineResult<()> {
+/// `order` is the topological order validation computed, `loops` its loops: a
+/// Loop's exit condition, and what follows Done or Limit, also know what every
+/// iteration of the body set.
+pub fn check_values(doc: &Experiment, order: &[String], loops: &LoopShape, params: &BTreeMap<String, String>) -> EngineResult<()> {
     let by_id: HashMap<&str, &Node> = doc.nodes.iter().map(|node| (node.id.as_str(), node)).collect();
     let mut producers = BTreeSet::new();
     for node in &doc.nodes {
@@ -395,27 +401,30 @@ pub fn check_values(doc: &Experiment, order: &[String], params: &BTreeMap<String
     // Variables known on each wire: what was known after the source node, plus
     // what the source writes on that output.
     let mut incoming: HashMap<&str, Vec<(&str, &str)>> = HashMap::new();
-    for edge in &doc.edges {
+    for edge in doc.edges.iter().filter(|edge| !loops.is_back(edge)) {
         incoming.entry(edge.to.as_str()).or_default().push((edge.from.as_str(), edge.port.as_str()));
     }
     let mut known_after: HashMap<&str, BTreeSet<String>> = HashMap::new();
+    // What is known on a wire out of `from`: what was known after it, what it
+    // writes on that output — and, out of a Loop's Done or Limit, what every
+    // iteration of its body set (the order puts the body first).
+    let wire_known = |known_after: &HashMap<&str, BTreeSet<String>>, from: &str, port: &str| -> Option<BTreeSet<String>> {
+        let mut set = known_after.get(from)?.clone();
+        if let Some((variable, on)) = written_var(&by_id[from].kind) {
+            if on == port {
+                set.insert(variable.to_string());
+            }
+        }
+        if matches!(by_id[from].kind, NodeKind::Loop { .. }) && port != "body" {
+            set.extend(body_known(loops, known_after, &by_id, from));
+        }
+        Some(set)
+    };
     for id in order {
         let node = by_id[id.as_str()];
         let inputs: Vec<BTreeSet<String>> = incoming
             .get(id.as_str())
-            .map(|list| {
-                list.iter()
-                    .filter_map(|(from, port)| {
-                        let mut set = known_after.get(from)?.clone();
-                        if let Some((variable, on)) = written_var(&by_id[from].kind) {
-                            if on == *port {
-                                set.insert(variable.to_string());
-                            }
-                        }
-                        Some(set)
-                    })
-                    .collect()
-            })
+            .map(|list| list.iter().filter_map(|(from, port)| wire_known(&known_after, from, port)).collect())
             .unwrap_or_default();
         // Every branch into a Join has run; any other merge took only one path.
         let known: BTreeSet<String> = match (&node.kind, inputs.split_first()) {
@@ -425,28 +434,59 @@ pub fn check_values(doc: &Experiment, order: &[String], params: &BTreeMap<String
                 first.iter().filter(|name| rest.iter().all(|set| set.contains(*name))).cloned().collect()
             }
         };
-        for (field, text) in text_fields(&node.kind) {
-            let Ok(parsed) = template::parse(&text) else { continue };
-            for reference in parsed.refs() {
-                let problem = match &reference {
-                    Ref::Param(name) if !params.contains_key(name) => Some(EngineError::new("param.unknown").with("name", name)),
-                    Ref::Bare(name) if params.contains_key(name) => None,
-                    Ref::Var(name) | Ref::Bare(name) if !known.contains(name) => Some(if producers.contains(name) {
-                        EngineError::new("name.not_on_every_path").with("name", name)
-                    } else {
-                        EngineError::new("name.unknown").with("name", name)
-                    }),
-                    Ref::Secret(name) => secrets::check_name(name).err(),
-                    _ => None,
-                };
-                if let Some(problem) = problem {
-                    return Err(problem.in_field(field).at(id));
-                }
-            }
+        // A Loop's exit condition is read when the body comes back: checked below.
+        if !matches!(node.kind, NodeKind::Loop { .. }) {
+            check_refs(&node.kind, &known, &producers, params).map_err(|error| error.at(id))?;
         }
         known_after.insert(id.as_str(), known);
     }
+    for node in doc.nodes.iter().filter(|node| matches!(node.kind, NodeKind::Loop { .. })) {
+        let Some(entry) = known_after.get(node.id.as_str()) else { continue };
+        let mut known = entry.clone();
+        known.extend(body_known(loops, &known_after, &by_id, &node.id));
+        check_refs(&node.kind, &known, &producers, params).map_err(|error| error.at(&node.id))?;
+    }
     Ok(())
+}
+
+/// Every name a node's templates use is a parameter, a known variable or a valid secret.
+fn check_refs(kind: &NodeKind, known: &BTreeSet<String>, producers: &BTreeSet<String>, params: &BTreeMap<String, String>) -> EngineResult<()> {
+    for (field, text) in text_fields(kind) {
+        let Ok(parsed) = template::parse(&text) else { continue };
+        for reference in parsed.refs() {
+            let problem = match &reference {
+                Ref::Param(name) if !params.contains_key(name) => Some(EngineError::new("param.unknown").with("name", name)),
+                Ref::Bare(name) if params.contains_key(name) => None,
+                Ref::Var(name) | Ref::Bare(name) if !known.contains(name) => Some(if producers.contains(name) {
+                    EngineError::new("name.not_on_every_path").with("name", name)
+                } else {
+                    EngineError::new("name.unknown").with("name", name)
+                }),
+                Ref::Secret(name) => secrets::check_name(name).err(),
+                _ => None,
+            };
+            if let Some(problem) = problem {
+                return Err(problem.in_field(field));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Variables every iteration of a Loop's body has set when it comes back: on
+/// each wire back, what was known after its source and what that output writes.
+fn body_known(loops: &LoopShape, known_after: &HashMap<&str, BTreeSet<String>>, by_id: &HashMap<&str, &Node>, loop_id: &str) -> BTreeSet<String> {
+    let mut sets = loops.back_edges.iter().filter(|(_, _, to)| *to == loop_id).filter_map(|(from, port, _)| {
+        let mut set = known_after.get(from)?.clone();
+        if let Some((variable, on)) = written_var(&by_id[from].kind) {
+            if on == *port {
+                set.insert(variable.to_string());
+            }
+        }
+        Some(set)
+    });
+    let Some(first) = sets.next() else { return BTreeSet::new() };
+    sets.fold(first, |all, set| all.intersection(&set).cloned().collect())
 }
 
 /// Secret names a node kind reads, in field order.
@@ -631,7 +671,7 @@ mod tests {
 
     fn doc_with(params: &[(&str, &str)], profiles: serde_json::Value, profile: Option<&str>) -> Experiment {
         serde_json::from_value(json!({
-            "version": 4, "name": "p",
+            "version": 5, "name": "p",
             "params": params.iter().map(|(name, value)| json!({ "name": name, "value": value })).collect::<Vec<_>>(),
             "profiles": profiles, "profile": profile, "seed": null,
             "nodes": [{ "id": "start", "type": "start", "x": 0, "y": 0 }, { "id": "end", "type": "end", "x": 0, "y": 0 }],
@@ -687,7 +727,7 @@ mod tests {
     #[test]
     fn secrets_must_be_stored_before_a_run_and_never_leave_in_responses() {
         let doc: Experiment = serde_json::from_value(json!({
-            "version": 4, "name": "s", "params": [], "profiles": [], "profile": null, "seed": null,
+            "version": 5, "name": "s", "params": [], "profiles": [], "profile": null, "seed": null,
             "nodes": [
                 { "id": "start", "type": "start", "x": 0, "y": 0 },
                 { "id": "login", "type": "http", "x": 0, "y": 0, "request": { "method": "GET", "url": "http://127.0.0.1/",

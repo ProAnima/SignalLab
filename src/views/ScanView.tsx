@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { api, EV, type JobInfo, type OpenPort, type ScanProgress } from "../lib/api";
 import { useStore } from "../lib/store";
 import { useT, type TKey } from "../lib/i18n";
-import { useJobStream, useRollingList } from "../lib/hooks";
+import { useFieldIds, useJobStream, useRollingList } from "../lib/hooks";
 import { fmtTime, fmtNum } from "../lib/format";
 
 const PRESETS: { key: TKey; range: [number, number] }[] = [
@@ -15,6 +15,7 @@ const PRESETS: { key: TKey; range: [number, number] }[] = [
 export function ScanView() {
   const { pushLog, pushError, refreshJobs, stopJob, jobGone } = useStore();
   const t = useT();
+  const fid = useFieldIds();
 
   const [host, setHost] = useState("127.0.0.1");
   const [portStart, setPortStart] = useState(1);
@@ -63,24 +64,24 @@ export function ScanView() {
         <div className="panel">
           <p className="section-label">{t("sc.target")}</p>
           <div className="field">
-            <label>{t("sc.host")}</label>
-            <input value={host} onChange={(e) => setHost(e.target.value)} disabled={!!job} />
+            <label htmlFor={fid("host")} data-tip={t("sc.hostHint")}>{t("sc.host")}</label>
+            <input id={fid("host")} value={host} onChange={(e) => setHost(e.target.value)} disabled={!!job} />
           </div>
           <div className="row">
             <div className="field">
-              <label>{t("sc.fromPort")}</label>
-              <input type="number" value={portStart} onChange={(e) => setPortStart(+e.target.value)} disabled={!!job} />
+              <label htmlFor={fid("from")}>{t("sc.fromPort")}</label>
+              <input id={fid("from")} type="number" value={portStart} onChange={(e) => setPortStart(+e.target.value)} disabled={!!job} />
             </div>
             <div className="field">
-              <label>{t("sc.toPort")}</label>
-              <input type="number" value={portEnd} onChange={(e) => setPortEnd(+e.target.value)} disabled={!!job} />
+              <label htmlFor={fid("to")} data-tip={t("sc.rangeHint")}>{t("sc.toPort")}</label>
+              <input id={fid("to")} type="number" value={portEnd} onChange={(e) => setPortEnd(+e.target.value)} disabled={!!job} />
             </div>
           </div>
           <div className="field">
-            <label>{t("sc.preset")}</label>
+            <label htmlFor={fid("preset")}>{t("sc.preset")}</label>
             {/* Reflects the current range instead of snapping back to the
                 placeholder, which read as a bug. */}
-            <select
+            <select id={fid("preset")}
               disabled={!!job}
               value={PRESETS.find((p) => p.range[0] === portStart && p.range[1] === portEnd)?.key ?? ""}
               onChange={(e) => {
@@ -94,16 +95,16 @@ export function ScanView() {
           </div>
           <div className="row">
             <div className="field">
-              <label>{t("common.concurrency")}</label>
-              <input type="number" value={concurrency} onChange={(e) => setConcurrency(+e.target.value)} disabled={!!job} />
+              <label htmlFor={fid("concurrency")} data-tip={t("common.concurrencyHint")}>{t("common.concurrency")}</label>
+              <input id={fid("concurrency")} type="number" value={concurrency} onChange={(e) => setConcurrency(+e.target.value)} disabled={!!job} />
             </div>
             <div className="field">
-              <label>{t("common.timeoutMs")}</label>
-              <input type="number" value={timeout} onChange={(e) => setTimeoutMs(+e.target.value)} disabled={!!job} />
+              <label htmlFor={fid("timeout")} data-tip={t("common.timeoutHint")}>{t("common.timeoutMs")}</label>
+              <input id={fid("timeout")} type="number" value={timeout} onChange={(e) => setTimeoutMs(+e.target.value)} disabled={!!job} />
             </div>
           </div>
           <div className="field">
-            <label className="checkbox">
+            <label className="checkbox" data-tip={t("sc.grabBannerHint")}>
               <input type="checkbox" checked={grabBanner} onChange={(e) => setGrabBanner(e.target.checked)} disabled={!!job} />
               {t("sc.grabBanner")}
             </label>

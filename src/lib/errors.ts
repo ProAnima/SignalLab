@@ -3,10 +3,10 @@ import { en } from "./locales/en.ts";
 import type { Translate } from "./i18n";
 
 /**
- * One way to show any failure. The experiment engine rejects with an
- * `EngineError` (a code, values, the node and field it is about, the system's
- * own wording); other commands still reject with text, and code can throw an
- * `Error`. Everything that shows a failure — banners, the timeline, the
+ * One way to show any failure. The engine rejects with an `EngineError` (a
+ * code, values, the node and field it is about, the system's own wording);
+ * our own code can throw an `Error`, and a dictionary key or a stored older
+ * text passes through as it is. Everything that shows a failure — banners, the timeline, the
  * console, Send now, panels — goes through `describeError`, so a failure reads
  * the same everywhere and re-renders when the language changes: callers keep
  * the failure itself, never the finished sentence.

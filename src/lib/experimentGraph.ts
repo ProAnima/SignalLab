@@ -36,6 +36,7 @@ export function createNode(type: NodeType, x: number, y: number): ExperimentNode
     case "extract": return { ...base, type, variable: "token", from: "json", expr: "$.token" };
     case "assert_value": return { ...base, type, value: "{{token}}", op: "not_empty", expected: "" };
     case "branch_value": return { ...base, type, value: "{{token}}", op: "eq", expected: "" };
+    case "loop": return { ...base, type, max: 5, until: null };
     // Listens on loopback by default, like every shipped target.
     case "wait_osc": return { ...base, type, bind: "127.0.0.1:9001", address: "/pong", args: [], timeout_ms: 2000, variable: "reply" };
     case "wait_udp": return { ...base, type, bind: "127.0.0.1:9001", mode: "contains", pattern: "pong", timeout_ms: 2000, variable: "reply" };
@@ -73,14 +74,53 @@ export function validPortsFor(type: NodeType): Port[] {
     case "branch_status": case "branch_value": return ["yes", "no"];
     case "fork": return ["branch1", "branch2"];
     case "wait_osc": case "wait_udp": case "wait_mqtt": return ["matched", "timeout"];
+    case "loop": return ["body", "done", "limit"];
     case "end": return [];
     default: return ["next"];
   }
 }
 
-/** Outputs a runnable graph must connect; a wait's Timeout is optional (unwired, a timeout fails the step). */
+/**
+ * Outputs a runnable graph must connect. A wait's Timeout and a Loop's Limit
+ * are optional: unwired, a timeout or running out of iterations fails the step.
+ */
 export function requiredPortsFor(type: NodeType): Port[] {
-  return validPortsFor(type).filter((port) => port !== "timeout");
+  return validPortsFor(type).filter((port) => port !== "timeout" && port !== "limit");
+}
+
+/**
+ * A Loop's body: the nodes reached from its Body output that lead back to it
+ * (as the engine's `LoopShape` reads it).
+ */
+export function loopBody(doc: Experiment, loopId: string): Set<string> {
+  const forward = new Set<string>();
+  const stack = doc.edges.filter((edge) => edge.from === loopId && portOf(edge) === "body").map((edge) => edge.to);
+  while (stack.length) {
+    const id = stack.pop()!;
+    if (id === loopId || forward.has(id)) continue;
+    forward.add(id);
+    for (const edge of doc.edges) if (edge.from === id) stack.push(edge.to);
+  }
+  const back = new Set<string>();
+  const behind = doc.edges.filter((edge) => edge.to === loopId).map((edge) => edge.from);
+  while (behind.length) {
+    const id = behind.pop()!;
+    if (id === loopId || back.has(id)) continue;
+    back.add(id);
+    for (const edge of doc.edges) if (edge.to === id) behind.push(edge.from);
+  }
+  return new Set([...forward].filter((id) => back.has(id)));
+}
+
+/** A wire from a Loop's body back to the Loop: the one way a flow may go back. */
+export function isBackEdge(doc: Experiment, edge: GraphEdge): boolean {
+  const target = doc.nodes.find((node) => node.id === edge.to);
+  return target?.type === "loop" && loopBody(doc, edge.to).has(edge.from);
+}
+
+/** The wires that only go forward: every one but the ways back of loops. */
+function forwardEdges(doc: Experiment): GraphEdge[] {
+  return doc.edges.filter((edge) => !isBackEdge(doc, edge));
 }
 
 export function portOf(edge: GraphEdge): Port { return edge.port ?? "next"; }
@@ -153,7 +193,19 @@ export function addAfter(doc: Experiment, anchor: Anchor | null, node: Experimen
   if (!anchor || !source || !validPortsFor(source.type).includes(anchor.port)) return { ...doc, nodes: [...doc.nodes, node] };
   const edge = wireOf(doc, anchor);
   if (edge) return insertOnEdge(doc, edge, node);
-  return { ...doc, nodes: [...doc.nodes, node], edges: [...doc.edges, { from: anchor.from, to: node.id, port: anchor.port }] };
+  return closeLoop({ ...doc, nodes: [...doc.nodes, node], edges: [...doc.edges, { from: anchor.from, to: node.id, port: anchor.port }] }, anchor, node);
+}
+
+/**
+ * The first step put on an empty Body also leads back to its Loop, so the body
+ * is whole at once — when the step has one output to do it with.
+ */
+function closeLoop(doc: Experiment, anchor: Anchor, node: ExperimentNode): Experiment {
+  const source = doc.nodes.find((item) => item.id === anchor.from);
+  const outputs = validPortsFor(node.type);
+  const firstOnBody = source?.type === "loop" && anchor.port === "body" && doc.edges.filter((edge) => edge.from === source.id && portOf(edge) === "body").length === 1;
+  if (!firstOnBody || outputs.length !== 1) return doc;
+  return { ...doc, edges: [...doc.edges, { from: node.id, to: anchor.from, port: outputs[0] }] };
 }
 
 /**
@@ -164,7 +216,7 @@ export function addAfter(doc: Experiment, anchor: Anchor | null, node: Experimen
 export function addBranch(doc: Experiment, anchor: Anchor | null, node: ExperimentNode): Experiment {
   const source = anchor && doc.nodes.find((item) => item.id === anchor.from);
   if (!anchor || !source || !validPortsFor(source.type).includes(anchor.port)) return { ...doc, nodes: [...doc.nodes, node] };
-  return { ...doc, nodes: [...doc.nodes, node], edges: [...doc.edges, { from: anchor.from, to: node.id, port: anchor.port }] };
+  return closeLoop({ ...doc, nodes: [...doc.nodes, node], edges: [...doc.edges, { from: anchor.from, to: node.id, port: anchor.port }] }, anchor, node);
 }
 
 /** Outputs that must be wired before the graph can run, as `id:port`. */
@@ -206,15 +258,19 @@ function reaches(edges: GraphEdge[], from: string, target: string): boolean {
 /**
  * Add a wire. An output keeps the wires it has — several wires run their
  * nodes in parallel. Refused (the same document back) for a wire that exists,
- * a loop, or a port the node does not have.
+ * a cycle, or a port the node does not have. The one wire that may go back is
+ * from a Loop's body to that Loop: it closes an iteration.
  */
 export function connect(doc: Experiment, from: string, port: Port, to: string): Experiment {
   const source = doc.nodes.find((node) => node.id === from);
   const target = doc.nodes.find((node) => node.id === to);
   if (!source || !target || from === to || source.type === "end" || target.type === "start") return doc;
   if (!validPortsFor(source.type).includes(port) || isWired(doc, from, port, to)) return doc;
-  if (reaches(doc.edges, to, from)) return doc;
-  return { ...doc, edges: [...doc.edges, { from, to, port }] };
+  const added = { ...doc, edges: [...doc.edges, { from, to, port }] };
+  const closesLoop = target.type === "loop" && reaches(forwardEdges(doc).filter((edge) => !(edge.from === to && portOf(edge) !== "body")), to, from);
+  if (closesLoop) return added;
+  if (reaches(forwardEdges(doc), to, from)) return doc;
+  return added;
 }
 
 /** Remove one wire of an output, or all of them without `to`. */
@@ -228,17 +284,21 @@ export function insertOnEdge(doc: Experiment, edge: GraphEdge, node: ExperimentN
   if (!source || !target) return doc;
   const x = Math.max(node.x, source.x + STEP_X);
   const shift = Math.max(0, x + STEP_X - target.x);
+  // What follows moves right to make room — along forward wires only: a Loop's
+  // way back would make everything "follow".
   const downstream = new Set<string>();
-  const stack = [edge.to];
+  const forward = isBackEdge(doc, edge) ? [] : forwardEdges(doc);
+  const stack = isBackEdge(doc, edge) ? [] : [edge.to];
   while (stack.length) {
     const id = stack.pop()!;
     if (downstream.has(id)) continue;
     downstream.add(id);
-    for (const candidate of doc.edges) if (candidate.from === id) stack.push(candidate.to);
+    for (const candidate of forward) if (candidate.from === id) stack.push(candidate.to);
   }
   // Only this wire is cut; the output's other wires keep their nodes.
   const before = doc.edges.filter((candidate) => !(candidate.from === edge.from && portOf(candidate) === portOf(edge) && candidate.to === edge.to));
-  const defaultOutPort = validPortsFor(node.type)[0] ?? "next";
+  // A Loop continues the flow through Done; its Body is the new loop's inside.
+  const defaultOutPort = node.type === "loop" ? "done" : validPortsFor(node.type)[0] ?? "next";
   return {
     ...doc,
     nodes: [...doc.nodes.map((item) => downstream.has(item.id) ? { ...item, x: item.x + shift } : item), { ...node, x }],
@@ -252,7 +312,8 @@ export function removeNode(doc: Experiment, id: string): Experiment {
   if (!node || node.type === "start" || node.type === "end") return doc;
   const incoming = doc.edges.filter((edge) => edge.to === id);
   const outgoing = doc.edges.filter((edge) => edge.from === id);
-  const bridge = incoming.length === 1 && outgoing.length === 1 && !isWired(doc, incoming[0].from, portOf(incoming[0]), outgoing[0].to)
+  // No bridge onto itself: removing a Loop's only body step leaves Body unwired.
+  const bridge = incoming.length === 1 && outgoing.length === 1 && incoming[0].from !== outgoing[0].to && !isWired(doc, incoming[0].from, portOf(incoming[0]), outgoing[0].to)
     ? [{ from: incoming[0].from, to: outgoing[0].to, port: portOf(incoming[0]) }]
     : [];
   return { ...doc, nodes: doc.nodes.filter((item) => item.id !== id),
@@ -278,7 +339,10 @@ export function arrangeNodes(doc: Experiment): Experiment {
   const indegree = new Map(doc.nodes.map((node) => [node.id, 0]));
   const outgoing = new Map<string, string[]>();
   const rank = new Map(doc.nodes.map((node) => [node.id, 0]));
-  for (const edge of doc.edges) {
+  // A Loop's way back is not part of the order; its body comes first in each
+  // column, so the body stays in the Loop's row and Done continues below it.
+  const bodyFirst = forwardEdges(doc).sort((a, b) => Number(portOf(b) === "body") - Number(portOf(a) === "body"));
+  for (const edge of bodyFirst) {
     if (!indegree.has(edge.from) || !indegree.has(edge.to)) continue;
     indegree.set(edge.to, indegree.get(edge.to)! + 1);
     outgoing.set(edge.from, [...(outgoing.get(edge.from) ?? []), edge.to]);
@@ -295,11 +359,13 @@ export function arrangeNodes(doc: Experiment): Experiment {
   // Imported cyclic drafts must never lose nodes or get stuck in layout.
   if (queue.length !== doc.nodes.length) return doc;
   const rows = new Map<number, number>();
+  // A Loop's way back arcs over its body: the top row leaves it room.
+  const top = doc.nodes.some((node) => node.type === "loop") ? 120 : 48;
   const positions = new Map(queue.map((id) => {
     const column = rank.get(id)!;
     const row = rows.get(column) ?? 0;
     rows.set(column, row + 1);
-    return [id, { x: 40 + column * (NODE_WIDTH + 72), y: 48 + row * (NODE_HEIGHT + 48) }];
+    return [id, { x: 40 + column * (NODE_WIDTH + 72), y: top + row * (NODE_HEIGHT + 48) }];
   }));
   const nodes = doc.nodes.map((node) => ({ ...node, ...positions.get(node.id)! }));
   if (nodes.every((node, index) => node.x === doc.nodes[index].x && node.y === doc.nodes[index].y)) return doc;

@@ -15,6 +15,7 @@ use std::time::Duration;
 use serde::Serialize;
 use crate::host::Host;
 
+use super::error::{EngineError, EngineResult};
 use super::jobs::now_ms;
 
 /// Frames held for export / snapshot, independent of what the UI managed to draw.
@@ -177,15 +178,18 @@ impl Capture {
         if !self.is_enabled() {
             return None;
         }
-        frame.seq = self.inner.seq.fetch_add(1, Ordering::Relaxed) + 1;
-        let seq = frame.seq;
         if frame.ts == 0 {
             frame.ts = now_ms();
         }
+        // The number is taken under the ring's lock, so the ring is always in
+        // number order. Taken before it, two sources pushing at once could land
+        // out of order, and `drain`'s cursor (the last frame's number) would go
+        // back and ship the same frames again on every tick.
+        let mut ring = self.inner.ring.lock().unwrap();
+        let seq = self.inner.seq.fetch_add(1, Ordering::Relaxed) + 1;
+        frame.seq = seq;
         self.inner.total.fetch_add(1, Ordering::Relaxed);
         self.inner.bytes.fetch_add(frame.bytes as u64, Ordering::Relaxed);
-
-        let mut ring = self.inner.ring.lock().unwrap();
         if ring.len() >= RING_CAPACITY {
             ring.pop_front();
         }
@@ -250,28 +254,30 @@ impl Capture {
         (batch, skipped_now)
     }
 
-    /// Write the whole ring to `~/Documents/SignalLab/`. Returns the file path.
-    pub fn export(&self, format: &str) -> Result<String, String> {
+    /// Write the whole ring to the data folder. Returns the file path.
+    pub fn export(&self, format: &str) -> EngineResult<String> {
         let frames = self.snapshot(RING_CAPACITY);
         if frames.is_empty() {
-            return Err("capture buffer is empty".into());
+            return Err(EngineError::new("inspect.empty"));
         }
         let dir = export_dir();
-        std::fs::create_dir_all(&dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
+        let failed = |path: &std::path::Path, e: &dyn std::fmt::Display| EngineError::new("file.io").with("path", path.display()).because(e);
+        std::fs::create_dir_all(&dir).map_err(|e| failed(&dir, &e))?;
 
         let ext = if format == "txt" { "txt" } else { "jsonl" };
         let path = dir.join(format!("capture-{}.{ext}", now_ms()));
-        let file = std::fs::File::create(&path).map_err(|e| format!("create file: {e}"))?;
+        let file = std::fs::File::create(&path).map_err(|e| failed(&path, &e))?;
         let mut out = std::io::BufWriter::new(file);
+        let io = |e: std::io::Error| failed(&path, &e);
 
         if ext == "jsonl" {
             for f in &frames {
-                let line = serde_json::to_string(f).map_err(|e| e.to_string())?;
-                writeln!(out, "{line}").map_err(|e| e.to_string())?;
+                // A frame is plain data, so this fails only as the writing does.
+                serde_json::to_writer(&mut out, f).map_err(|e| failed(&path, &e))?;
+                writeln!(out).map_err(io)?;
             }
         } else {
-            writeln!(out, "Signal Lab capture — {} frames", frames.len())
-                .map_err(|e| e.to_string())?;
+            writeln!(out, "Signal Lab capture — {} frames", frames.len()).map_err(io)?;
             for f in &frames {
                 writeln!(
                     out,
@@ -285,16 +291,16 @@ impl Capture {
                     verdict = f.verdict.as_deref().unwrap_or(""),
                     summary = f.summary,
                 )
-                .map_err(|e| e.to_string())?;
+                .map_err(io)?;
                 if let Some(d) = &f.detail {
-                    writeln!(out, "  {}", d.replace('\n', "\n  ")).map_err(|e| e.to_string())?;
+                    writeln!(out, "  {}", d.replace('\n', "\n  ")).map_err(io)?;
                 }
                 if let Some(h) = &f.hex {
-                    write!(out, "{h}").map_err(|e| e.to_string())?;
+                    write!(out, "{h}").map_err(io)?;
                 }
             }
         }
-        out.flush().map_err(|e| e.to_string())?;
+        out.flush().map_err(io)?;
         Ok(path.to_string_lossy().into_owned())
     }
 }
@@ -484,6 +490,7 @@ mod tests {
         let cap = Capture::new();
         cap.push(Frame::rx("osc", "test"));
         assert_eq!(cap.stats().total, 0);
+        assert!(cap.export("jsonl").unwrap_err().is("inspect.empty"), "nothing to write is said, not written");
         cap.set_enabled(true);
         cap.push(Frame::rx("osc", "test").summary("/x"));
         assert_eq!(cap.stats().total, 1);
@@ -501,6 +508,39 @@ mod tests {
         assert_eq!(skipped, 10);
         let (empty, _) = cap.drain();
         assert!(empty.is_empty());
+    }
+
+    /// Many sources at once (a scan's workers, both legs of a relay): every
+    /// frame reaches the interface once, in number order, or is counted as skipped.
+    #[test]
+    fn concurrent_pushes_are_drained_once_and_in_order() {
+        let cap = Capture::new();
+        cap.set_enabled(true);
+        let pushers: Vec<_> = (0..8)
+            .map(|_| {
+                let cap = cap.clone();
+                std::thread::spawn(move || {
+                    for _ in 0..500 {
+                        cap.push(Frame::rx("tcp", "test"));
+                    }
+                })
+            })
+            .collect();
+        let mut delivered = Vec::new();
+        let mut skipped = 0;
+        while pushers.iter().any(|pusher| !pusher.is_finished()) {
+            let (batch, skipped_now) = cap.drain();
+            delivered.extend(batch.iter().map(|frame| frame.seq));
+            skipped += skipped_now;
+        }
+        for pusher in pushers {
+            pusher.join().unwrap();
+        }
+        let (batch, skipped_now) = cap.drain();
+        delivered.extend(batch.iter().map(|frame| frame.seq));
+        skipped += skipped_now;
+        assert!(delivered.windows(2).all(|pair| pair[0] < pair[1]), "a frame was shipped twice or out of order");
+        assert_eq!(delivered.len() as u64 + skipped, 4000, "every frame is shipped or counted as skipped");
     }
 
     #[test]

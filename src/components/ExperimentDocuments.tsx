@@ -70,7 +70,7 @@ export function ExperimentDocuments({ document, onOpen, onClose }: Props) {
     onCancel={(event) => { event.preventDefault(); onClose(); }} onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <div className="experiment-documents-content">
       <header><div><h2 id="experiment-documents-title" data-tip={t("exp.documentsHint")}>{t("exp.documents")}</h2></div>
-        <button className="ghost sm" aria-label={t("exp.close")} onClick={onClose}>×</button>
+        <button className="ghost sm" aria-label={t("exp.close")} data-tip={t("common.closeHint")} onClick={onClose}>×</button>
       </header>
       <div className="experiment-template-list" role="group" aria-label={t("exp.templates")}>
         {experimentTemplates.map((item, index) => <button key={item.id} className={`experiment-template ${!imported && templateId === item.id ? "selected" : ""}`}

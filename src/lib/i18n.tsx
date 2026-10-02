@@ -2,19 +2,16 @@ import {
   createContext, useCallback, useContext, useEffect, useMemo, useState,
   type ReactNode,
 } from "react";
-import { en, type Dict, type TKey } from "./locales/en";
-import { ru } from "./locales/ru";
+import { en, type TKey } from "./locales/en";
+import { CODES, dictOf, LOCALES, SOURCE, type Lang } from "./locales/index";
+import { format, pickLanguage, type Params } from "./translate";
+import { setFormatLanguage } from "./format";
 
-export type { TKey };
+export type { TKey, Lang };
 
-export type Lang = "en" | "ru";
+/** The languages, for the switch: code, own name, two letters. */
+export const LANGS = LOCALES.map(({ code, name, short }) => ({ code, label: name, short }));
 
-export const LANGS: { code: Lang; label: string; short: string }[] = [
-  { code: "en", label: "English", short: "EN" },
-  { code: "ru", label: "Русский", short: "RU" },
-];
-
-const DICTS: Record<Lang, Dict> = { en, ru };
 const STORAGE_KEY = "signal-lab.lang";
 
 /**
@@ -24,16 +21,28 @@ const STORAGE_KEY = "signal-lab.lang";
  */
 export type TextKey = TKey | (string & {});
 
-export type Translate = (key: TextKey, params?: Record<string, string | number>) => string;
+export type Translate = (key: TextKey, params?: Params) => string;
 
+/** The saved choice, else the first of the system's languages the interface has, else English. */
 function detect(): Lang {
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved === "en" || saved === "ru") return saved;
+    const known = CODES.find((code) => code === saved);
+    if (known) return known;
   } catch {
     // localStorage can be unavailable in a locked-down webview; fall through.
   }
-  return navigator.language?.toLowerCase().startsWith("ru") ? "ru" : "en";
+  const preferred = navigator.languages?.length ? navigator.languages : [navigator.language ?? ""];
+  return pickLanguage(preferred, CODES, SOURCE);
+}
+
+/** `t` for one language, outside React too (tests, one-off texts). */
+export function translator(lang: Lang): Translate {
+  const dict = dictOf(lang) as Record<string, string | undefined>;
+  const source = en as Record<string, string | undefined>;
+  // Unknown key → the source language, then the key itself (which is how raw
+  // engine strings pass through untouched).
+  return (key, params) => format(dict[key] ?? source[key] ?? key, params, lang);
 }
 
 interface I18n {
@@ -60,19 +69,9 @@ export function I18nProvider({ children }: { children: ReactNode }) {
     setLangState(next);
   }, []);
 
-  const t = useCallback<Translate>(
-    (key, params) => {
-      const dict = DICTS[lang] as Record<string, string | undefined>;
-      // Unknown key → fall back to English, then to the key itself (which is
-      // how raw engine error strings pass through untouched).
-      const raw = dict[key] ?? (en as Record<string, string | undefined>)[key] ?? key;
-      if (!params) return raw;
-      return raw.replace(/\{(\w+)\}/g, (match, name: string) =>
-        name in params ? String(params[name]) : match
-      );
-    },
-    [lang]
-  );
+  const t = useMemo(() => translator(lang), [lang]);
+  // Before the children render, so their numbers and sizes are in this language.
+  setFormatLanguage(lang, { b: t("unit.b"), kb: t("unit.kb"), mb: t("unit.mb"), gb: t("unit.gb") });
 
   const value = useMemo(() => ({ lang, setLang, t }), [lang, setLang, t]);
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

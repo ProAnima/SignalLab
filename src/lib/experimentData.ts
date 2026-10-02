@@ -4,7 +4,7 @@
  * it: suggestions, the variables visible at a node, JSON paths for "Extract as
  * variable". See docs/milestone-3-data.md.
  */
-import type { Experiment, ExperimentNode, ExperimentProfile, OscReply, Retry, UdpMode, UdpReply } from "./api";
+import type { Experiment, ExperimentNode, ExperimentProfile, OscReply, Repeat, Retry, UdpMode, UdpReply } from "./api";
 import type { TKey } from "./i18n";
 
 /** Names with a meaning of their own; mirrors `template::RESERVED`. */
@@ -87,6 +87,14 @@ export function defaultReply(type: "osc" | "udp"): OscReply | UdpReply {
 
 /** Retry as the node first gets it: three attempts, half a second apart. */
 export const DEFAULT_RETRY: Retry = { attempts: 3, delay_ms: 500, backoff: "fixed" };
+
+/** Repeat as the node first gets it: ten sends, a second apart. */
+export const DEFAULT_REPEAT: Repeat = { until: "count", count: 10, duration_ms: 10_000, interval_ms: 1000, jitter_ms: 0 };
+
+/** Sends, so it can send again and again (the engine's `NodeKind::is_action`). */
+export function canRepeat(node: ExperimentNode): boolean {
+  return ["http", "tcp", "mqtt", "osc", "udp"].includes(node.type);
+}
 
 /** Sends or listens, so a second attempt may succeed (the engine's `NodeKind::retries`). */
 export function canRetry(node: ExperimentNode): boolean {

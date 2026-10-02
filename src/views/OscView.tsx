@@ -1,21 +1,29 @@
 import { useEffect, useState } from "react";
-import { api, EV, type ExperimentNode, type JobInfo, type OscArg, type OscInbound, type GenTick, type SignalBody, type Waveform } from "../lib/api";
+import { api, EV, type EngineError, type ExperimentNode, type JobInfo, type OscArg, type OscInbound, type GenTick, type Signal, type SignalBody, type Waveform } from "../lib/api";
+import { SaveSignal, saveShortcut } from "../components/SaveSignal";
 import { waitForOscMessage } from "../lib/experimentGraph";
 import { useStore } from "../lib/store";
 import { describeError, type Failure } from "../lib/errors";
 import { useT, type TKey } from "../lib/i18n";
-import { useJobStream, usePersistentState, useRollingList, useSeries } from "../lib/hooks";
+import { useFieldIds, useJobStream, usePersistentState, useRollingList, useSeries } from "../lib/hooks";
 import { fmtTime } from "../lib/format";
 import { Scope } from "../components/Scope";
-import { OscArgsEditor, fmtArg, isArgRows, toOscArg, type ArgRow } from "../components/OscArgs";
+import { OscArgsEditor, fmtArg, fromOscArg, isArgRows, toOscArg, type ArgRow } from "../components/OscArgs";
 
-interface FlatMsg { ts: number; from: string; address: string; args: OscArg[]; error?: string | null; }
+interface FlatMsg { ts: number; from: string; address: string; args: OscArg[]; error?: EngineError | null; }
 
 const WAVEFORMS: Waveform[] = ["sine", "triangle", "saw", "square", "ramp", "random", "constant"];
 
-export function OscView({ onToExperiment, onWaitFor }: { onToExperiment?: (body: SignalBody) => void; onWaitFor?: (node: ExperimentNode) => void }) {
+/** `load`: a stored OSC signal to send from here; `onShowSignal` opens the one the sender is saved as. */
+export function OscView({ onToExperiment, onWaitFor, load, onShowSignal }: {
+  onToExperiment?: (body: SignalBody) => void;
+  onWaitFor?: (node: ExperimentNode) => void;
+  load?: { signal: Signal; at: number } | null;
+  onShowSignal?: (id: string) => void;
+}) {
   const { pushLog, pushError, refreshJobs, stopJob, jobGone } = useStore();
   const t = useT();
+  const fid = useFieldIds();
 
   // ---- sender ----
   // Kept across screens and restarts: the message you were sending is the one you want next.
@@ -23,6 +31,13 @@ export function OscView({ onToExperiment, onWaitFor }: { onToExperiment?: (body:
   const [address, setAddress] = usePersistentState("signal-lab.osc.address", "/hello/avatar/1");
   const [args, setArgs] = usePersistentState<ArgRow[]>("signal-lab.osc.args", [{ type: "float", value: "1.0" }], isArgRows);
   const [last, setLast] = useState<{ ok: boolean; text: string; error?: Failure; ts: number; n: number } | null>(null);
+  const [signalId, setSignalId] = usePersistentState<string | null>("signal-lab.osc.signal", null, (value) => value === null || typeof value === "string");
+
+  useEffect(() => {
+    if (load?.signal.body.transport !== "osc") return;
+    const { target: to, address: path, args: values } = load.signal.body;
+    setTarget(to); setAddress(path); setArgs(values.map(fromOscArg)); setSignalId(load.signal.id);
+  }, [load]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const send = async () => {
     try {
@@ -128,18 +143,18 @@ export function OscView({ onToExperiment, onWaitFor }: { onToExperiment?: (body:
 
       <div className="cols side">
         {/* Sender */}
-        <div className="panel">
+        <div className="panel" onKeyDown={saveShortcut}>
           <p className="section-label">{t("osc.sender")}</p>
           <div className="field">
-            <label>{t("common.target")}</label>
-            <input value={target} onChange={(e) => setTarget(e.target.value)} onKeyDown={onEnterSend} />
+            <label htmlFor={fid("osc-target")} data-tip={t("common.targetHint")}>{t("common.target")}</label>
+            <input id={fid("osc-target")} value={target} onChange={(e) => setTarget(e.target.value)} onKeyDown={onEnterSend} />
           </div>
           <div className="field">
-            <label>{t("common.address")}</label>
-            <input value={address} onChange={(e) => setAddress(e.target.value)} onKeyDown={onEnterSend} />
+            <label htmlFor={fid("osc-address")} data-tip={t("common.addressHint")}>{t("common.address")}</label>
+            <input id={fid("osc-address")} value={address} onChange={(e) => setAddress(e.target.value)} onKeyDown={onEnterSend} />
           </div>
           <div className="field">
-            <label>{t("common.arguments")}</label>
+            <label data-tip={t("common.argumentsHint")}>{t("common.arguments")}</label>
             <OscArgsEditor args={args} onChange={setArgs} onSubmit={send} />
           </div>
           <div className="btn-row">
@@ -154,6 +169,8 @@ export function OscView({ onToExperiment, onWaitFor }: { onToExperiment?: (body:
               </button>
             )}
           </div>
+          <SaveSignal body={{ transport: "osc", target, address, args: args.map(toOscArg) }} signalId={signalId} onSignalId={setSignalId}
+            suggestName={address} onShow={onShowSignal} />
           {last && (
             <p className={"send-result " + (last.ok ? "ok" : "err")} role="status">
               <span>{last.ok ? "✓" : "✕"} {last.error !== undefined ? describeError(last.error, t).text : last.text}</span>
@@ -168,8 +185,8 @@ export function OscView({ onToExperiment, onWaitFor }: { onToExperiment?: (body:
           <p className="section-label">{t("osc.monitor")}</p>
           <div className="row" style={{ alignItems: "flex-end", marginBottom: 12 }}>
             <div className="field" style={{ margin: 0 }}>
-              <label>{t("common.bind")}</label>
-              <input value={bind} onChange={(e) => setBind(e.target.value)} disabled={!!monJob} />
+              <label htmlFor={fid("osc-bind")} data-tip={t("common.bindHint")}>{t("common.bind")}</label>
+              <input id={fid("osc-bind")} value={bind} onChange={(e) => setBind(e.target.value)} disabled={!!monJob} />
             </div>
             <button className={monJob ? "danger" : "primary"} style={{ flex: "0 0 auto" }} onClick={toggleMonitor}>
               {monJob ? t("common.stop") : t("osc.listen")}
@@ -197,7 +214,7 @@ export function OscView({ onToExperiment, onWaitFor }: { onToExperiment?: (body:
                     <td style={{ color: m.error ? "var(--red)" : "var(--accent)" }}>
                       {m.error ? t("osc.decodeError") : m.address}
                     </td>
-                    <td>{m.error ?? m.args.map(fmtArg).join("  ")}</td>
+                    <td>{m.error ? describeError(m.error, t).text : m.args.map(fmtArg).join("  ")}</td>
                     {onWaitFor && <td>{!m.error && <button className="ghost xs" aria-label={t("osc.waitForThis")}
                       data-tip={t("osc.waitForThisHint", { bind })} onClick={() => onWaitFor(waitForOscMessage(bind, m.address, m.args))}>⇠</button>}</td>}
                   </tr>
@@ -218,43 +235,43 @@ export function OscView({ onToExperiment, onWaitFor }: { onToExperiment?: (body:
           <div>
             <div className="row">
               <div className="field">
-                <label>{t("common.target")}</label>
-                <input value={gen.target} onChange={(e) => setGen({ ...gen, target: e.target.value })} />
+                <label htmlFor={fid("gen-target")} data-tip={t("common.targetHint")}>{t("common.target")}</label>
+                <input id={fid("gen-target")} value={gen.target} onChange={(e) => setGen({ ...gen, target: e.target.value })} />
               </div>
               <div className="field">
-                <label>{t("osc.address")}</label>
-                <input value={gen.address} onChange={(e) => setGen({ ...gen, address: e.target.value })} />
+                <label htmlFor={fid("gen-address")} data-tip={t("common.addressHint")}>{t("osc.address")}</label>
+                <input id={fid("gen-address")} value={gen.address} onChange={(e) => setGen({ ...gen, address: e.target.value })} />
               </div>
             </div>
             <div className="row">
               <div className="field">
-                <label>{t("osc.waveform")}</label>
-                <select value={gen.waveform} onChange={(e) => setGen({ ...gen, waveform: e.target.value as Waveform })}>
+                <label htmlFor={fid("gen-waveform")} data-tip={t("osc.waveformHint")}>{t("osc.waveform")}</label>
+                <select id={fid("gen-waveform")} value={gen.waveform} onChange={(e) => setGen({ ...gen, waveform: e.target.value as Waveform })}>
                   {WAVEFORMS.map((w) => (
                     <option key={w} value={w}>{t(`wave.${w}` as TKey)}</option>
                   ))}
                 </select>
               </div>
               <div className="field">
-                <label>{t("osc.freq")}</label>
-                <input type="number" value={gen.freq} onChange={(e) => setGen({ ...gen, freq: +e.target.value })} />
+                <label htmlFor={fid("gen-freq")}>{t("osc.freq")}</label>
+                <input id={fid("gen-freq")} type="number" value={gen.freq} onChange={(e) => setGen({ ...gen, freq: +e.target.value })} />
               </div>
               <div className="field">
-                <label>{t("osc.rate")}</label>
-                <input type="number" value={gen.rate} onChange={(e) => setGen({ ...gen, rate: +e.target.value })} />
+                <label htmlFor={fid("gen-rate")} data-tip={t("osc.rateHint")}>{t("osc.rate")}</label>
+                <input id={fid("gen-rate")} type="number" value={gen.rate} onChange={(e) => setGen({ ...gen, rate: +e.target.value })} />
               </div>
             </div>
             <div className="row">
               <div className="field">
-                <label>{t("osc.min")}</label>
-                <input type="number" value={gen.min} onChange={(e) => setGen({ ...gen, min: +e.target.value })} />
+                <label htmlFor={fid("gen-min")}>{t("osc.min")}</label>
+                <input id={fid("gen-min")} type="number" value={gen.min} onChange={(e) => setGen({ ...gen, min: +e.target.value })} />
               </div>
               <div className="field">
-                <label>{t("osc.max")}</label>
-                <input type="number" value={gen.max} onChange={(e) => setGen({ ...gen, max: +e.target.value })} />
+                <label htmlFor={fid("gen-max")}>{t("osc.max")}</label>
+                <input id={fid("gen-max")} type="number" value={gen.max} onChange={(e) => setGen({ ...gen, max: +e.target.value })} />
               </div>
               <div className="field check">
-                <label className="checkbox">
+                <label className="checkbox" data-tip={t("osc.asIntHint")}>
                   <input type="checkbox" checked={gen.as_int} onChange={(e) => setGen({ ...gen, as_int: e.target.checked })} />
                   {t("osc.asInt")}
                 </label>

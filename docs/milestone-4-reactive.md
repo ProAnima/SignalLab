@@ -1,6 +1,6 @@
 # Milestone 4 — reactive flows: detailed design
 
-Status: PR 4.1 delivered, 2026-10-01; PR 4.2 (a reply in the same node, Retry, Wait for MQTT, Wait for this, frames from the timeline) delivered, 2026-10-02. Parent plan: [ROADMAP.md](../ROADMAP.md#4-reactive-flows-wait-for-replies-retry-repeat).
+Status: PR 4.1 delivered, 2026-10-01; PR 4.2 (a reply in the same node, Retry, Wait for MQTT, Wait for this, frames from the timeline) delivered, 2026-10-02; PR 4.3 (Repeat, Loop) delivered, 2026-10-02 — milestone 4 is complete. Parent plan: [ROADMAP.md](../ROADMAP.md#4-reactive-flows-wait-for-replies-retry-repeat).
 
 PR 4.1 lets an experiment **wait for a device's reply**. Waiting is where most things go wrong — a port is taken, a reply never comes, a pattern is mistyped — so the same PR replaces the engine's English error strings with **structured, localized errors** everywhere the experiment engine reports a problem.
 
@@ -58,7 +58,7 @@ The text of a message lives only in the locale files (`en.ts` defines it, `ru.ts
 | `transport.target_invalid` | Target is not `IP:port` / not a valid URL |
 | `transport.failed` | Anything else (detail has the reason) |
 
-MQTT adds `mqtt.refused` (CONNACK return code), `mqtt.no_answer`, `mqtt.protocol` and `mqtt.topic_invalid`; the TCP part of a broker failure uses the transport codes. Note that Windows retries a connection to a closed local port for about two seconds before reporting it refused.
+MQTT adds `mqtt.refused` (CONNACK return code), with `mqtt.refused_protocol`, `mqtt.refused_client_id`, `mqtt.refused_unavailable`, `mqtt.refused_credentials` and `mqtt.refused_not_authorized` for return codes 1–5, `mqtt.no_answer`, `mqtt.protocol` and `mqtt.topic_invalid`; the TCP part of a broker failure uses the transport codes. The tool screens (OSC, Broadcast, MQTT, Netsim, Storm, Scanner, HTTP, the library, the Inspector) report through the same codes since 2026-10-02. Note that Windows retries a connection to a closed local port for about two seconds before reporting it refused.
 
 ## 2. Responsibilities (SOLID)
 
@@ -223,7 +223,80 @@ timeline lists those frames, and one opens the Inspector with that frame
 selected and the filters cleared. Without capture armed there is no frame and
 no link.
 
-## 6. Tests
+## 6. PR 4.3 — Repeat and Loop
+
+Both are document version 5 (an older Signal Lab refuses the file instead of
+dropping the settings).
+
+### Repeat
+
+Every action may send more than once (`repeat` in the node):
+
+| Field | |
+| --- | --- |
+| `until` | `count` (a number of sends) or `duration` (as many as fit in a time) |
+| `count` | 2–10 000 sends, the first included |
+| `duration_ms` | up to the run limit (300 s), from the first send |
+| `interval_ms` | 10–60 000 between two sends (100 per second at most) |
+| `jitter_ms` | 0–60 000 more per pause, drawn from the run's seed |
+
+- Each send is made like a single one: its templates are read afresh —
+  `{{counter}}` is the send's number, `{{now}}` its time — and Retry applies to
+  each. A send that fails for good fails the step; otherwise it passes once,
+  after the last send, with that send's outcome and variables
+  (`exp.step.repeated {n, ms}`). A send that expects a reply waits for its own.
+- Progress is a step event, state `repeating`, at most once a second
+  (`exp.step.repeatingCount` / `repeatingFor`), so a heartbeat does not flood
+  the timeline.
+- Bounded twice: by its own numbers, and by the run — the whole repetition must
+  fit in 300 s (`node.repeat_too_long`) and a timed one in 10 000 sends
+  (`node.repeat_too_many`). Waits and other kinds refuse it
+  (`node.repeat_unsupported`). Stop ends a pause; another branch failing stops
+  the sends too. *Send now* sends once.
+- Jitter is reproducible: the same seed gives the same pauses
+  (`Repeat::pause_before`, a stream of its own so templates draw the same
+  numbers as without it).
+
+### Loop
+
+A **Loop** node (`max` 1–1000 iterations, optional `until` — the comparison of
+*Check value*) has three outputs: **Body**, **Done** and an optional **Limit**.
+
+- Reached from outside, it starts iteration 1 on Body. The steps on Body lead
+  back to the Loop; each time they do, the exit condition is read — after the
+  iteration, so the body always runs at least once and can set what it tests.
+  Done follows when it holds, or after `max` iterations without a condition;
+  Limit when the iterations run out before it held (unwired, `loop.limit` fails
+  the run). Every arrival is a step event: `exp.step.loopIteration {n, max}`,
+  `loopDone {n}`, `loopFinished {n}`, `loopLimit {max}`.
+- `{{counter}}` in the body is the iteration's number (every node counts its
+  executions). The branch carries which loops it is in and how far each has
+  got (`BranchContext::loops`).
+- **The one cycle a document may have.** `LoopShape` finds each body — the
+  nodes reached from Body that lead back to the Loop — and its wires back.
+  Validation and ordering see the graph without those wires, and with the body
+  before whatever follows Done, so:
+  - another cycle is still `graph.cycle`;
+  - a body leads only on in itself or back (`loop.body_leaves`), is entered only
+    through Body (`loop.body_entered`), runs as one branch — no second wire on
+    an output (`loop.body_parallel`), no Start, End, Fork, Join or nested Loop
+    (`loop.body_unsupported`) — and comes back (`loop.no_return`);
+  - the exit condition, and the steps after Done or Limit, may use what every
+    iteration of the body sets; the body itself only what is known on entry.
+- The template *Poll until ready* asks a device for `/status` every 0.3 s until
+  it answers `ready`, at most 10 times.
+
+### Interface
+
+*repeat sending* is a checkbox in an action's properties (times or a time,
+every, jitter); the node shows `×10` or `5s`. The Loop's properties hold the
+maximum and *stop early when* with the value, operator and expected value of
+*Check value*, and the preview says what will be compared. On the canvas the
+wire back runs dashed over the body (under it when there is no room above);
+the editor allows exactly that wire (`connect`), and layout, insertion and
+removal read the flow forward (`isBackEdge`, `loopBody`).
+
+## 7. Tests
 
 - Error: builders, masking of params and detail, serialization; a scan that every code and field key used by the engine has an English text and no text is stale.
 - Matching: OSC patterns (wildcards, sets, alternatives, malformed patterns with positions), argument rules with numbers and text, UDP modes, hex parsing.
@@ -232,3 +305,6 @@ no link.
 - Validation: wait fields, the variable set only on Matched, optional Timeout, unexpected outputs.
 - Transport classification of refused, timeout, name and invalid-URL errors (HTTP and TCP); MQTT causes to codes.
 - UI (`npm test`): the renderer's location, operator wording, unknown codes, legacy text; waits' ports and reply variables; matching placeholders in both languages.
+- Repeat (loopback, `engine/tests/repeat_loop.rs`): a count of sends each with its own `{{counter}}`, a timed repeat that never sends past its time and reports progress, Stop in a pause, a reply per send, and what validation refuses; the jitter's range and reproducibility.
+- Loop: polling a device until it is ready (iterations, Done reading the last answer), Limit and its failure when unwired, a loop without a condition, Stop between iterations, and every body rule — plus `graph.cycle` elsewhere and names that Done may and may not read. Editor: only a body's last step wires back, layout and insertion read the flow forward, removing the only body step never wires the loop to itself.
+- End to end (`npm run e2e`, CI): every screen in the desktop app and in the server, on Windows and Linux, including a repeated ping and the poll template (see docs/delivery.md).

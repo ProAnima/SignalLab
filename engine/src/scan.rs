@@ -12,6 +12,7 @@ use tokio::net::TcpStream;
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 
+use super::error::{EngineError, EngineResult};
 use super::inspect::{self, Frame};
 use super::jobs::{now_ms, JobInfo, JobRegistry};
 
@@ -59,9 +60,9 @@ pub async fn start_scan(
     host: Host,
     jobs: JobRegistry,
     cfg: ScanConfig,
-) -> Result<JobInfo, String> {
+) -> EngineResult<JobInfo> {
     if cfg.host.trim().is_empty() {
-        return Err("host is required".into());
+        return Err(EngineError::new("scan.host_required"));
     }
     let (start_port, end_port) = if cfg.port_start <= cfg.port_end {
         (cfg.port_start, cfg.port_end)
@@ -73,12 +74,10 @@ pub async fn start_scan(
     let timeout = Duration::from_millis(cfg.timeout_ms.clamp(50, 10_000));
 
     let id = jobs.next_id();
-    let info = JobInfo {
-        id,
-        kind: "scan".into(),
-        label: format!("Scan {} :{}-{}", cfg.host, start_port, end_port),
-        started_ms: now_ms(),
-    };
+    let info = JobInfo::new(id, "scan", format!("Scan {} :{}-{}", cfg.host, start_port, end_port))
+        .with("host", &cfg.host)
+        .with("from", start_port)
+        .with("to", end_port);
 
     let host_cl = host.clone();
     let jobs_cl = jobs.clone();

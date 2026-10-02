@@ -50,7 +50,7 @@ export function ExperimentRunWith({ doc, issues, lastSeed, initial, anchor, onRu
       onPointerDown={(event) => event.stopPropagation()}
       onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); onClose(); } }}
       onSubmit={(event) => { event.preventDefault(); submit(); }}>
-      <header><strong data-tip={t("exp.runWithHint")}>{t("exp.runWith")}</strong><button type="button" className="ghost sm" aria-label={t("exp.close")} onClick={onClose}>×</button></header>
+      <header><strong data-tip={t("exp.runWithHint")}>{t("exp.runWith")}</strong><button type="button" className="ghost sm" aria-label={t("exp.close")} data-tip={t("common.closeHint")} onClick={onClose}>×</button></header>
       {doc.profiles.length > 0 && <label>{t("exp.profile")}
         <select value={profile ?? ""} onChange={(event) => setProfile(event.target.value || null)}>
           {[null, ...doc.profiles.map((item) => item.name)].map((name) => <option key={name ?? ""} value={name ?? ""}>

@@ -23,9 +23,12 @@ use serde::{Deserialize, Serialize};
 use crate::host::Host;
 use tokio::net::UdpSocket;
 
+use super::error::{EngineError, EngineResult};
 use super::inspect::{self, describe_payload, Frame, Gate};
 use super::jobs::{now_ms, JobInfo, JobRegistry, TaskGuard};
+use super::net;
 use super::osc_codec::{encode_message, OscArg};
+use super::transport::{self, Cause};
 
 /// Guard rail: a sweep never expands past this many hosts.
 const MAX_SWEEP_HOSTS: usize = 1024;
@@ -56,11 +59,11 @@ pub enum Payload {
 }
 
 impl Payload {
-    pub fn encode(&self) -> Result<Vec<u8>, String> {
+    pub fn encode(&self) -> EngineResult<Vec<u8>> {
         match self {
             Payload::Osc { address, args } => {
                 if !address.starts_with('/') {
-                    return Err(format!("OSC address must start with '/': '{address}'"));
+                    return Err(EngineError::new("node.osc_address").with("value", address));
                 }
                 Ok(encode_message(address, args))
             }
@@ -91,7 +94,7 @@ impl Payload {
 }
 
 /// Accepts "de ad be ef", "deadbeef", "0xDE,0xAD" — anything non-hex is ignored.
-fn parse_hex(s: &str) -> Result<Vec<u8>, String> {
+fn parse_hex(s: &str) -> EngineResult<Vec<u8>> {
     let cleaned: String = s
         .replace("0x", "")
         .replace("0X", "")
@@ -99,18 +102,16 @@ fn parse_hex(s: &str) -> Result<Vec<u8>, String> {
         .filter(|c| c.is_ascii_hexdigit())
         .collect();
     if cleaned.is_empty() {
-        return Err("hex payload is empty".into());
+        return Err(EngineError::new("hex.empty"));
     }
     if !cleaned.len().is_multiple_of(2) {
-        return Err(format!(
-            "hex payload has an odd number of digits ({})",
-            cleaned.len()
-        ));
+        return Err(EngineError::new("hex.invalid").with("value", s.trim()));
     }
-    (0..cleaned.len())
+    // Only ASCII hex digits are left, so every pair parses.
+    Ok((0..cleaned.len())
         .step_by(2)
-        .map(|i| u8::from_str_radix(&cleaned[i..i + 2], 16).map_err(|e| e.to_string()))
-        .collect()
+        .filter_map(|i| u8::from_str_radix(&cleaned[i..i + 2], 16).ok())
+        .collect())
 }
 
 // ---------------------------------------------------------------------------
@@ -134,43 +135,27 @@ fn is_broadcastish(ip: Ipv4Addr) -> bool {
     ip.is_broadcast() || ip.octets()[3] == 255
 }
 
-async fn resolve_one(spec: &str) -> Result<SocketAddr, String> {
-    let spec = spec.trim();
-    if let Ok(addr) = spec.parse::<SocketAddr>() {
-        return Ok(addr);
-    }
-    // Fall back to DNS so "server.local:9000" works.
-    let mut iter = tokio::net::lookup_host(spec)
-        .await
-        .map_err(|e| format!("cannot resolve '{spec}': {e}"))?;
-    iter.next().ok_or_else(|| format!("no address for '{spec}'"))
-}
-
 /// `192.168.1.0/24` → every usable host address on `port`.
-fn sweep_hosts(cidr: &str, port: u16) -> Result<Vec<SocketAddr>, String> {
+fn sweep_hosts(cidr: &str, port: u16) -> EngineResult<Vec<SocketAddr>> {
     if port == 0 {
-        return Err("sweep needs a port".into());
+        return Err(EngineError::new("broadcast.sweep_port"));
     }
-    let (base, prefix) = cidr
-        .trim()
-        .split_once('/')
-        .ok_or_else(|| format!("'{cidr}' is not CIDR notation (expected a.b.c.d/nn)"))?;
-    let base: Ipv4Addr = base
-        .parse()
-        .map_err(|e| format!("invalid network address '{base}': {e}"))?;
-    let prefix: u32 = prefix
-        .parse()
-        .map_err(|e| format!("invalid prefix '/{prefix}': {e}"))?;
-    if prefix > 32 {
-        return Err("prefix must be 0–32".into());
-    }
+    let cidr = cidr.trim();
+    let invalid = || EngineError::new("broadcast.cidr_invalid").with("value", cidr);
+    let (base, prefix) = cidr.split_once('/').ok_or_else(invalid)?;
+    let base: Ipv4Addr = base.trim().parse().map_err(|_| invalid())?;
+    let prefix: u32 = match prefix.trim().parse() {
+        Ok(prefix) if prefix <= 32 => prefix,
+        _ => return Err(EngineError::new("broadcast.prefix_invalid").with("value", prefix.trim())),
+    };
     let host_bits = 32 - prefix;
     let count = 1u64 << host_bits;
     if count > MAX_SWEEP_HOSTS as u64 + 2 {
-        return Err(format!(
-            "/{prefix} expands to {count} addresses — narrow it to /{} or smaller",
-            32 - (MAX_SWEEP_HOSTS as f64).log2().floor() as u32
-        ));
+        return Err(EngineError::new("broadcast.sweep_too_large")
+            .with("prefix", prefix)
+            .with("count", count)
+            .with("max", MAX_SWEEP_HOSTS)
+            .with("limit", 32 - MAX_SWEEP_HOSTS.ilog2()));
     }
 
     let net = u32::from(base) & (!0u32).checked_shl(host_bits).unwrap_or(0);
@@ -192,11 +177,13 @@ async fn resolve_targets(
     mode: TargetMode,
     target: &str,
     port: u16,
-) -> Result<Vec<SocketAddr>, String> {
+) -> EngineResult<Vec<SocketAddr>> {
     let target = target.trim();
+    let required = || EngineError::new("broadcast.target_required");
     if target.is_empty() {
-        return Err("target is required".into());
+        return Err(required());
     }
+    // `IP:port`, or `host:port` through DNS so "server.local:9000" works.
     match mode {
         TargetMode::List => {
             let mut out = Vec::new();
@@ -205,29 +192,25 @@ async fn resolve_targets(
                 if part.is_empty() {
                     continue;
                 }
-                out.push(resolve_one(part).await?);
+                out.push(transport::resolve(part).await?);
             }
             if out.is_empty() {
-                return Err("target list is empty".into());
+                return Err(required());
             }
             Ok(out)
         }
         TargetMode::Broadcast => {
-            let addr = resolve_one(target).await?;
+            let addr = transport::resolve(target).await?;
             match addr.ip() {
                 IpAddr::V4(ip) if is_broadcastish(ip) => Ok(vec![addr]),
-                IpAddr::V4(_) => Err(format!(
-                    "'{target}' is not a broadcast address — use 255.255.255.255:port or x.x.x.255:port"
-                )),
-                IpAddr::V6(_) => Err("IPv6 has no broadcast — use multicast instead".into()),
+                IpAddr::V4(_) => Err(EngineError::new("broadcast.not_broadcast").with("target", target)),
+                IpAddr::V6(_) => Err(EngineError::new("broadcast.ipv6")),
             }
         }
         TargetMode::Multicast => {
-            let addr = resolve_one(target).await?;
+            let addr = transport::resolve(target).await?;
             if !addr.ip().is_multicast() {
-                return Err(format!(
-                    "'{target}' is not a multicast group (expected 224.0.0.0–239.255.255.255)"
-                ));
+                return Err(EngineError::new("broadcast.not_multicast").with("target", target));
             }
             Ok(vec![addr])
         }
@@ -285,7 +268,10 @@ pub struct EmitResult {
     pub summary: String,
     /// Why the first failed packet failed, for callers that explain it.
     #[serde(skip)]
-    pub first_error: Option<(super::transport::Cause, String)>,
+    pub first_error: Option<(Cause, String)>,
+    /// The same, for the interface: the first failure as a code about its target.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<EngineError>,
 }
 
 #[derive(Clone, Serialize)]
@@ -300,11 +286,13 @@ struct EmitStat {
 }
 
 /// Build the send socket and apply broadcast / multicast options.
-async fn emit_socket(cfg: &EmitConfig, targets: &[SocketAddr]) -> Result<UdpSocket, String> {
-    let bind = cfg.bind.clone().unwrap_or_else(|| "0.0.0.0:0".to_string());
-    let sock = UdpSocket::bind(&bind)
+async fn emit_socket(cfg: &EmitConfig, targets: &[SocketAddr]) -> EngineResult<UdpSocket> {
+    let bind = cfg.bind.as_deref().map(str::trim).filter(|bind| !bind.is_empty()).unwrap_or("0.0.0.0:0");
+    let address = super::osc::parse_bind(bind)?;
+    let sock = UdpSocket::bind(address)
         .await
-        .map_err(|e| format!("bind {bind} failed: {e}"))?;
+        .map_err(|e| net::bind_error(bind, e))?;
+    let refused = |option: &str, e: std::io::Error| EngineError::new("socket.option_failed").with("option", option).because(e);
 
     let wants_broadcast = cfg.mode == TargetMode::Broadcast
         || targets.iter().any(|t| match t.ip() {
@@ -312,16 +300,13 @@ async fn emit_socket(cfg: &EmitConfig, targets: &[SocketAddr]) -> Result<UdpSock
             IpAddr::V6(_) => false,
         });
     if wants_broadcast {
-        sock.set_broadcast(true)
-            .map_err(|e| format!("SO_BROADCAST failed: {e} (is the address really a broadcast address?)"))?;
+        sock.set_broadcast(true).map_err(|e| refused("SO_BROADCAST", e))?;
     }
 
     let ttl = cfg.ttl.clamp(1, 255);
     if cfg.mode == TargetMode::Multicast {
-        sock.set_multicast_ttl_v4(ttl)
-            .map_err(|e| format!("multicast TTL failed: {e}"))?;
-        sock.set_multicast_loop_v4(cfg.multicast_loop)
-            .map_err(|e| format!("multicast loopback failed: {e}"))?;
+        sock.set_multicast_ttl_v4(ttl).map_err(|e| refused("IP_MULTICAST_TTL", e))?;
+        sock.set_multicast_loop_v4(cfg.multicast_loop).map_err(|e| refused("IP_MULTICAST_LOOP", e))?;
     } else {
         let _ = sock.set_ttl(ttl);
     }
@@ -329,7 +314,7 @@ async fn emit_socket(cfg: &EmitConfig, targets: &[SocketAddr]) -> Result<UdpSock
 }
 
 /// Send one packet per target, once. Returns what actually went out.
-pub async fn send_once(host: Host, cfg: EmitConfig) -> Result<EmitResult, String> {
+pub async fn send_once(host: Host, cfg: EmitConfig) -> EngineResult<EmitResult> {
     let targets = resolve_targets(cfg.mode, &cfg.target, cfg.port).await?;
     let bytes = cfg.payload.encode()?;
     let sock = emit_socket(&cfg, &targets).await?;
@@ -341,6 +326,7 @@ pub async fn send_once(host: Host, cfg: EmitConfig) -> Result<EmitResult, String
     let mut sent_bytes = 0u64;
     let mut errors = 0u64;
     let mut first_error = None;
+    let mut error = None;
     for t in &targets {
         match sock.send_to(&bytes, t).await {
             Ok(n) => {
@@ -361,7 +347,8 @@ pub async fn send_once(host: Host, cfg: EmitConfig) -> Result<EmitResult, String
             Err(e) => {
                 errors += 1;
                 if first_error.is_none() {
-                    first_error = Some((super::transport::of_io(&e), format!("{t}: {e}")));
+                    first_error = Some((transport::of_io(&e), format!("{t}: {e}")));
+                    error = Some(transport::of_io(&e).error(&t.to_string()).because(&e));
                 }
                 if capture {
                     inspect::publish(
@@ -386,6 +373,7 @@ pub async fn send_once(host: Host, cfg: EmitConfig) -> Result<EmitResult, String
         resolved: targets.iter().take(8).map(|a| a.to_string()).collect(),
         summary,
         first_error,
+        error,
     })
 }
 
@@ -393,6 +381,16 @@ fn proto_of(p: &Payload) -> &'static str {
     match p {
         Payload::Osc { .. } => "osc",
         _ => "udp",
+    }
+}
+
+/// The mode as the interface writes it, for `job.beacon`'s parameters.
+fn mode_name(m: TargetMode) -> &'static str {
+    match m {
+        TargetMode::List => "list",
+        TargetMode::Broadcast => "broadcast",
+        TargetMode::Multicast => "multicast",
+        TargetMode::Sweep => "sweep",
     }
 }
 
@@ -410,21 +408,19 @@ pub async fn start_beacon(
     host: Host,
     jobs: JobRegistry,
     cfg: EmitConfig,
-) -> Result<JobInfo, String> {
+) -> EngineResult<JobInfo> {
     let targets = resolve_targets(cfg.mode, &cfg.target, cfg.port).await?;
     let payload = cfg.payload.encode()?;
     let rate = cfg.rate;
     if rate <= 0.0 {
-        return Err("beacon rate must be greater than 0".into());
+        return Err(EngineError::new("broadcast.rate_invalid"));
     }
     let aggregate = rate * targets.len() as f64;
     if aggregate > MAX_AGGREGATE_PPS {
-        return Err(format!(
-            "{:.0} packets/s across {} targets exceeds the {:.0} pps guard rail — lower the rate or narrow the target",
-            aggregate,
-            targets.len(),
-            MAX_AGGREGATE_PPS
-        ));
+        return Err(EngineError::new("broadcast.rate_limit")
+            .with("pps", format!("{aggregate:.0}"))
+            .with("targets", targets.len())
+            .with("max", MAX_AGGREGATE_PPS));
     }
 
     let sock = emit_socket(&cfg, &targets).await?;
@@ -434,18 +430,11 @@ pub async fn start_beacon(
     let verdict = mode_label(cfg.mode);
 
     let id = jobs.next_id();
-    let info = JobInfo {
-        id,
-        kind: "beacon".into(),
-        label: format!(
-            "Beacon {} → {} ×{} @{}/s",
-            verdict,
-            cfg.target,
-            targets.len(),
-            rate
-        ),
-        started_ms: now_ms(),
-    };
+    let info = JobInfo::new(id, "beacon", format!("Beacon {} → {} ×{} @{}/s", verdict, cfg.target, targets.len(), rate))
+        .with("mode", mode_name(cfg.mode))
+        .with("target", &cfg.target)
+        .with("targets", targets.len())
+        .with("rate", rate);
 
     let host_cl = host.clone();
     let jobs_cl = jobs.clone();
@@ -493,7 +482,7 @@ pub async fn start_beacon(
         let mut ticker = tokio::time::interval(Duration::from_secs_f64(1.0 / rate));
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let start = std::time::Instant::now();
-        let mut error: Option<String> = None;
+        let mut error: Option<EngineError> = None;
 
         loop {
             ticker.tick().await;
@@ -532,7 +521,7 @@ pub async fn start_beacon(
                         // would otherwise spin silently.
                         if errors.load(Ordering::Relaxed) > 32 && packets.load(Ordering::Relaxed) == 0
                         {
-                            error = Some(format!("send to {t} keeps failing: {e}"));
+                            error = Some(transport::of_io(&e).error(&t.to_string()).because(e));
                         }
                     }
                 }
@@ -644,28 +633,22 @@ pub async fn start_discovery(
     host: Host,
     jobs: JobRegistry,
     cfg: DiscoveryConfig,
-) -> Result<JobInfo, String> {
-    let bind_addr: SocketAddr = cfg
-        .bind
-        .parse()
-        .map_err(|e| format!("invalid bind '{}': {e}", cfg.bind))?;
+) -> EngineResult<JobInfo> {
+    let bind_addr = super::osc::parse_bind(&cfg.bind)?;
     let sock = bind_udp(bind_addr, cfg.reuse).map_err(|e| {
-        format!(
-            "bind {} failed: {e}{}",
-            cfg.bind,
-            if cfg.reuse {
-                ""
-            } else {
-                " — enable address reuse to share the port"
-            }
-        )
+        // Without SO_REUSEADDR a port the real service holds cannot be shared.
+        if !cfg.reuse && transport::of_io(&e) == Cause::AddressInUse {
+            EngineError::new("broadcast.port_shared").with("target", &cfg.bind).because(e)
+        } else {
+            net::bind_error(&cfg.bind, e)
+        }
     })?;
 
     let iface: Ipv4Addr = match &cfg.interface {
         Some(s) if !s.trim().is_empty() => s
             .trim()
             .parse()
-            .map_err(|e| format!("invalid interface '{s}': {e}"))?,
+            .map_err(|_| EngineError::new("broadcast.interface_invalid").with("value", s.trim()))?,
         _ => Ipv4Addr::UNSPECIFIED,
     };
     let mut joined = Vec::new();
@@ -674,14 +657,12 @@ pub async fn start_discovery(
         if g.is_empty() {
             continue;
         }
-        let group: Ipv4Addr = g
-            .parse()
-            .map_err(|e| format!("invalid multicast group '{g}': {e}"))?;
-        if !group.is_multicast() {
-            return Err(format!("'{g}' is not a multicast group"));
-        }
+        let group = match g.parse::<Ipv4Addr>() {
+            Ok(group) if group.is_multicast() => group,
+            _ => return Err(EngineError::new("broadcast.not_multicast").with("target", g)),
+        };
         sock.join_multicast_v4(group, iface)
-            .map_err(|e| format!("join {g} failed: {e}"))?;
+            .map_err(|e| EngineError::new("broadcast.join_failed").with("group", g).because(e))?;
         joined.push(group.to_string());
     }
 
@@ -691,7 +672,7 @@ pub async fn start_discovery(
         .unwrap_or_else(|_| cfg.bind.clone());
     let response = match (&cfg.respond, &cfg.response) {
         (true, Some(p)) => Some(p.encode()?),
-        (true, None) => return Err("auto-reply is on but no response payload is set".into()),
+        (true, None) => return Err(EngineError::new("broadcast.reply_missing")),
         _ => None,
     };
     let response_summary = cfg
@@ -701,16 +682,15 @@ pub async fn start_discovery(
         .unwrap_or_default();
 
     let id = jobs.next_id();
-    let info = JobInfo {
-        id,
-        kind: "discovery".into(),
-        label: if joined.is_empty() {
-            format!("Discovery {local}")
-        } else {
-            format!("Discovery {local} + {}", joined.join(","))
-        },
-        started_ms: now_ms(),
+    let label = if joined.is_empty() {
+        format!("Discovery {local}")
+    } else {
+        format!("Discovery {local} + {}", joined.join(","))
     };
+    let info = JobInfo::new(id, "discovery", label)
+        .with("bind", &local)
+        .with("groups", joined.join(", "))
+        .with("joined", joined.len());
 
     let sock = Arc::new(sock);
     let peers: Arc<Mutex<HashMap<SocketAddr, Peer>>> = Arc::new(Mutex::new(HashMap::new()));
@@ -855,8 +835,11 @@ pub async fn start_discovery(
                         }
                     }
                 }
+                // An auto-reply to a prober that has gone comes back as this
+                // on Windows; the listener carries on.
+                Err(e) if crate::net::udp_transient(&e) => continue,
                 Err(e) => {
-                    error = Some(e.to_string());
+                    error = Some(EngineError::new("wait.receive_failed").with("target", &local).because(e));
                     break;
                 }
             }
@@ -884,8 +867,10 @@ mod tests {
         assert_eq!(parse_hex("de ad be ef").unwrap(), vec![0xde, 0xad, 0xbe, 0xef]);
         assert_eq!(parse_hex("DEADBEEF").unwrap(), vec![0xde, 0xad, 0xbe, 0xef]);
         assert_eq!(parse_hex("0xDE,0xAD").unwrap(), vec![0xde, 0xad]);
-        assert!(parse_hex("abc").is_err());
-        assert!(parse_hex("").is_err());
+        let odd = parse_hex(" abc ").unwrap_err();
+        assert_eq!((odd.code.as_str(), odd.params["value"].as_str()), ("hex.invalid", "abc"));
+        assert!(parse_hex("").unwrap_err().is("hex.empty"));
+        assert!(parse_hex("zz").unwrap_err().is("hex.empty"), "nothing hex is left");
     }
 
     #[test]
@@ -898,8 +883,27 @@ mod tests {
 
     #[test]
     fn sweep_honours_the_host_cap() {
-        assert!(sweep_hosts("10.0.0.0/8", 9000).is_err());
+        let wide = sweep_hosts("10.0.0.0/8", 9000).unwrap_err();
+        assert_eq!(wide.code, "broadcast.sweep_too_large");
+        let params: Vec<(&str, &str)> = wide.params.iter().map(|(name, value)| (name.as_str(), value.as_str())).collect();
+        assert_eq!(params, [("count", "16777216"), ("limit", "22"), ("max", "1024"), ("prefix", "8")]);
+        assert_eq!(sweep_hosts("10.0.0.0/22", 9000).unwrap().len(), 1022, "the limit it names is accepted");
         assert!(sweep_hosts("10.0.0.0/24", 9000).is_ok());
+    }
+
+    #[test]
+    fn sweep_says_which_part_of_the_block_is_wrong() {
+        for (cidr, port, code, value) in [
+            ("10.0.0.0/24", 0, "broadcast.sweep_port", None),
+            ("10.0.0.0", 9000, "broadcast.cidr_invalid", Some("10.0.0.0")),
+            (" 10.0.0/24 ", 9000, "broadcast.cidr_invalid", Some("10.0.0/24")),
+            ("server.local/24", 9000, "broadcast.cidr_invalid", Some("server.local/24")),
+            ("10.0.0.0/33", 9000, "broadcast.prefix_invalid", Some("33")),
+            ("10.0.0.0/x", 9000, "broadcast.prefix_invalid", Some("x")),
+        ] {
+            let error = sweep_hosts(cidr, port).unwrap_err();
+            assert_eq!((error.code.as_str(), error.params.get("value").map(String::as_str)), (code, value), "{cidr}");
+        }
     }
 
     #[test]
@@ -976,6 +980,40 @@ mod tests {
         assert_eq!(summary, "/hello/discover \"who\"");
     }
 
+    /// Answering a prober that has already closed its port comes back to the
+    /// listener as WSAECONNRESET on Windows; the listener must keep answering.
+    #[tokio::test]
+    async fn discovery_keeps_answering_after_a_prober_went_away() {
+        let host = Host::new(crate::host::Recorder::new(), crate::inspect::Capture::new());
+        let jobs = JobRegistry::new();
+        let port = UdpSocket::bind("127.0.0.1:0").await.unwrap().local_addr().unwrap().port();
+        let cfg = DiscoveryConfig {
+            bind: format!("127.0.0.1:{port}"),
+            groups: vec![],
+            interface: None,
+            reuse: false,
+            respond: true,
+            response: Some(Payload::Text { text: "HERE".into() }),
+            respond_delay_ms: 0,
+            match_contains: None,
+        };
+        let job = start_discovery(host, jobs.clone(), cfg).await.unwrap();
+        let listener: SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
+
+        let gone = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        gone.send_to(b"PROBE", listener).await.unwrap();
+        drop(gone);
+        tokio::time::sleep(Duration::from_millis(150)).await;
+
+        let prober = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        prober.send_to(b"PROBE", listener).await.unwrap();
+        let mut buf = vec![0u8; 64];
+        let (n, _) = tokio::time::timeout(Duration::from_secs(2), prober.recv_from(&mut buf)).await.expect("the listener stopped answering").unwrap();
+        assert_eq!(&buf[..n], b"HERE");
+        assert!(jobs.list().iter().any(|info| info.id == job.id), "the listener is still running");
+        jobs.stop(job.id);
+    }
+
     #[tokio::test]
     async fn broadcast_mode_turns_on_so_broadcast() {
         let cfg = cfg_for(
@@ -990,18 +1028,72 @@ mod tests {
 
     #[tokio::test]
     async fn modes_reject_addresses_of_the_wrong_shape() {
+        let refused = |mode, target: &'static str| async move { resolve_targets(mode, target, 0).await.err().map(EngineError::into_code) };
         // A plain host is not a broadcast address…
-        assert!(resolve_targets(TargetMode::Broadcast, "192.168.1.10:9000", 0)
-            .await
-            .is_err());
+        assert_eq!(refused(TargetMode::Broadcast, "192.168.1.10:9000").await.as_deref(), Some("broadcast.not_broadcast"));
+        assert_eq!(refused(TargetMode::Broadcast, "[ff02::1]:9000").await.as_deref(), Some("broadcast.ipv6"));
         // …and 239.x is a group, not a unicast host, so multicast accepts it.
-        assert!(resolve_targets(TargetMode::Multicast, "239.1.1.1:9000", 0)
-            .await
-            .is_ok());
-        assert!(resolve_targets(TargetMode::Multicast, "192.168.1.10:9000", 0)
-            .await
-            .is_err());
-        assert!(resolve_targets(TargetMode::List, "", 0).await.is_err());
+        assert_eq!(refused(TargetMode::Multicast, "239.1.1.1:9000").await, None);
+        assert_eq!(refused(TargetMode::Multicast, "192.168.1.10:9000").await.as_deref(), Some("broadcast.not_multicast"));
+        assert_eq!(refused(TargetMode::List, "").await.as_deref(), Some("broadcast.target_required"));
+        assert_eq!(refused(TargetMode::List, " , ;").await.as_deref(), Some("broadcast.target_required"));
+        // A target without a port, or a name that does not resolve, says so.
+        assert_eq!(refused(TargetMode::List, "127.0.0.1").await.as_deref(), Some("transport.target_invalid"));
+        assert_eq!(refused(TargetMode::List, "no-such-host.invalid:9000").await.as_deref(), Some("transport.dns"));
+    }
+
+    #[tokio::test]
+    async fn a_beacon_and_a_listener_refuse_settings_that_cannot_work() {
+        let host = Host::new(crate::host::Recorder::new(), crate::inspect::Capture::new());
+        let jobs = JobRegistry::new();
+        let mut cfg = cfg_for(TargetMode::List, "127.0.0.1:9", Payload::Text { text: "x".into() });
+        assert!(start_beacon(host.clone(), jobs.clone(), cfg.clone()).await.unwrap_err().is("broadcast.rate_invalid"));
+        cfg.rate = 60_000.0;
+        let limit = start_beacon(host.clone(), jobs.clone(), cfg.clone()).await.unwrap_err();
+        assert_eq!((limit.code.as_str(), limit.params["pps"].as_str(), limit.params["targets"].as_str()), ("broadcast.rate_limit", "60000", "1"));
+        cfg.rate = 1.0;
+        cfg.bind = Some("0.0.0.0".into());
+        assert!(start_beacon(host.clone(), jobs.clone(), cfg).await.unwrap_err().is("node.bind_invalid"));
+
+        let listen = |bind: &str, groups: &[&str], interface: Option<&str>, respond: bool| DiscoveryConfig {
+            bind: bind.into(),
+            groups: groups.iter().map(|group| group.to_string()).collect(),
+            interface: interface.map(String::from),
+            reuse: true,
+            respond,
+            response: None,
+            respond_delay_ms: 0,
+            match_contains: None,
+        };
+        let refused = |cfg| {
+            let (host, jobs) = (host.clone(), jobs.clone());
+            async move { start_discovery(host, jobs, cfg).await.err().map(EngineError::into_code) }
+        };
+        assert_eq!(refused(listen("nonsense", &[], None, false)).await.as_deref(), Some("node.bind_invalid"));
+        assert_eq!(refused(listen("127.0.0.1:0", &["10.0.0.1"], None, false)).await.as_deref(), Some("broadcast.not_multicast"));
+        assert_eq!(refused(listen("127.0.0.1:0", &[], Some("eth0"), false)).await.as_deref(), Some("broadcast.interface_invalid"));
+        assert_eq!(refused(listen("127.0.0.1:0", &[], None, true)).await.as_deref(), Some("broadcast.reply_missing"));
+        assert!(jobs.list().is_empty(), "nothing was started");
+    }
+
+    #[tokio::test]
+    async fn a_port_in_use_suggests_sharing_it_only_when_sharing_is_off() {
+        let host = Host::new(crate::host::Recorder::new(), crate::inspect::Capture::new());
+        let taken = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        let bind = taken.local_addr().unwrap().to_string();
+        let cfg = DiscoveryConfig {
+            bind: bind.clone(),
+            groups: vec![],
+            interface: None,
+            reuse: false,
+            respond: false,
+            response: None,
+            respond_delay_ms: 0,
+            match_contains: None,
+        };
+        let error = start_discovery(host, JobRegistry::new(), cfg).await.unwrap_err();
+        assert_eq!((error.code.as_str(), error.params["target"].as_str()), ("broadcast.port_shared", bind.as_str()));
+        assert!(error.detail.is_some(), "the system's wording is kept");
     }
 
     /// SO_REUSEADDR semantics differ per platform: on Windows it lets the
@@ -1032,7 +1124,8 @@ mod tests {
             address: "probe".into(),
             args: vec![],
         };
-        assert!(bad.encode().is_err());
+        let error = bad.encode().unwrap_err();
+        assert_eq!((error.code.as_str(), error.params["value"].as_str()), ("node.osc_address", "probe"));
 
         let text = Payload::Text {
             text: "HELLO?".into(),

@@ -1,25 +1,27 @@
 import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type CSSProperties, type PointerEvent, type Ref } from "react";
 import { api, EV, on, type Experiment, type ExperimentEnded, type ExperimentNode, type ExperimentStep, type HttpResponse, type JobInfo, type Signal, type SignalBody } from "../lib/api";
-import { addAfter, addBranch, anchorAfter, arrangeNodes, connect, createNode, disconnect, duplicateNode, isWired, missingOutputs, placeAfter, portOf, removeNode, unreachableNodes, validPortsFor, NODE_WIDTH as NODE_W, NODE_HEIGHT as NODE_H, STEP_X, type Anchor, type NodeType, type Port } from "../lib/experimentGraph";
+import { addAfter, addBranch, anchorAfter, arrangeNodes, connect, createNode, disconnect, duplicateNode, isBackEdge, isWired, missingOutputs, placeAfter, portOf, removeNode, unreachableNodes, validPortsFor, NODE_WIDTH as NODE_W, NODE_HEIGHT as NODE_H, STEP_X, type Anchor, type NodeType, type Port } from "../lib/experimentGraph";
 import { useExperimentDocument } from "../lib/useExperimentDocument";
 import { useExperimentViewport } from "../lib/useExperimentViewport";
 import { ExperimentFinder } from "../components/ExperimentFinder";
 import { ExperimentDocuments } from "../components/ExperimentDocuments";
 import { NODE_CATALOG, ADDABLE_NODES, NODE_GROUPS, type NodeGroup } from "../lib/experimentCatalog";
 import { ExperimentNodeFields } from "../components/ExperimentNodeFields";
-import { RetryFields } from "../components/ExperimentNodeOptions";
+import { RepeatFields, RetryFields } from "../components/ExperimentNodeOptions";
 import { ExperimentParams } from "../components/ExperimentParams";
 import { ExperimentRunWith, type RunOptions } from "../components/ExperimentRunWith";
 import { JsonPicker } from "../components/JsonPicker";
 import { TemplateSuggestions, type TemplateSuggestion } from "../components/TemplateField";
-import { canRetry, GENERATORS, jsonPath, replyFields, secretNames, suggestVariableName, variablesBefore, writtenVariable } from "../lib/experimentData";
+import { canRepeat, canRetry, GENERATORS, jsonPath, replyFields, secretNames, suggestVariableName, variablesBefore, writtenVariable } from "../lib/experimentData";
 import { describeError, failureNode, messageParams, type Failure } from "../lib/errors";
 import { ErrorMessage } from "../components/ErrorMessage";
 import { downloadUrl, isFullscreen, onFullscreenChange, setFullscreen as setWindowFullscreen } from "../lib/platform";
 import { nodeFromSignal, signalBodyOfNode, signalTarget, transportKey } from "../lib/signals";
-import { fmtBytes, fmtTime, prettyJson } from "../lib/format";
+import { fmtBytes, fmtNum, fmtTime, prettyJson } from "../lib/format";
 import { useStore } from "../lib/store";
+import { usePersistentState } from "../lib/hooks";
 import { useT } from "../lib/i18n";
+import { Splitter } from "../components/Splitter";
 
 /** What the shell can ask of the editor while another screen is showing. */
 export interface ExperimentHandle {
@@ -42,7 +44,7 @@ const GROUP_GLYPH: Record<NodeGroup, string> = { action: "↗", observe: "⇠", 
 const bindPort = (bind: string) => { const at = bind.lastIndexOf(":"); return at >= 0 ? bind.slice(at) : bind; };
 const isWait = (node: ExperimentNode) => node.type === "wait_osc" || node.type === "wait_udp" || node.type === "wait_mqtt";
 /** A node heading's tooltip: what the node does; for the parallel nodes, how they are wired. */
-const nodeHelp = (type: NodeType) => type === "fork" ? "exp.forkHint" as const : type === "join" ? "exp.joinHint" as const : NODE_CATALOG[type].description;
+const nodeHelp = (type: NodeType) => type === "fork" ? "exp.forkHint" as const : type === "join" ? "exp.joinHint" as const : type === "loop" ? "exp.loopHint" as const : NODE_CATALOG[type].description;
 const OP_TEXT: Record<string, string> = { eq: "=", ne: "≠", lt: "<", le: "≤", gt: ">", ge: "≥", contains: "⊃", matches: "~", empty: "= ∅", not_empty: "≠ ∅" };
 
 /** What a node will put on the wire, one line per part, for the resolved preview. */
@@ -58,6 +60,7 @@ function previewLines(node: ExperimentNode): string[] {
     case "assert_body": return [`⊃ ${node.contains}`];
     case "assert_header": return [`${node.name}: ${node.contains}`];
     case "assert_value": case "branch_value": return [`${node.value} ${OP_TEXT[node.op]} ${node.op === "empty" || node.op === "not_empty" ? "" : node.expected}`.trim()];
+    case "loop": return node.until ? [`${node.until.value} ${OP_TEXT[node.until.op]} ${node.until.op === "empty" || node.until.op === "not_empty" ? "" : node.until.expected}`.trim()] : [];
     case "wait_osc": return [`${node.address} ⇠ ${node.bind}`, ...node.args.map((rule) => `args[${rule.index}] ${OP_TEXT[rule.op]} ${rule.op === "empty" || rule.op === "not_empty" ? "" : rule.value}`.trim())];
     case "wait_udp": return [`${node.mode === "any" ? "*" : node.pattern} ⇠ ${node.bind}`];
     case "wait_mqtt": return [`${node.topic} ⇠ ${node.host}:${node.port}`, ...(node.mode === "any" ? [] : [node.pattern])];
@@ -65,7 +68,7 @@ function previewLines(node: ExperimentNode): string[] {
   }
 }
 
-function summary(node: ExperimentNode, t: (key: any) => string): string {
+function summary(node: ExperimentNode, t: (key: any, params?: Record<string, string | number>) => string): string {
   switch (node.type) {
     case "http": return `${node.request.method} ${node.request.url}`;
     case "tcp": return `${node.host}:${node.port}`;
@@ -84,6 +87,9 @@ function summary(node: ExperimentNode, t: (key: any) => string): string {
     case "extract": return `${node.variable} ← ${node.from === "json" || node.from === "header" || node.from === "regex" ? node.expr : node.from}`;
     case "assert_value": return `${node.value} ${OP_TEXT[node.op]} ${node.op === "empty" || node.op === "not_empty" ? "" : node.expected}`.trim();
     case "branch_value": return `${node.value} ${OP_TEXT[node.op]} ${node.op === "empty" || node.op === "not_empty" ? "" : node.expected} ?`;
+    case "loop": return node.until
+      ? t("exp.loopSummaryUntil", { max: node.max, condition: `${node.until.value} ${OP_TEXT[node.until.op]} ${node.until.op === "empty" || node.until.op === "not_empty" ? "" : node.until.expected}`.trim() })
+      : t("exp.loopSummary", { max: node.max });
     case "wait_osc": return `${node.address} ⇠ ${bindPort(node.bind)} · ${node.timeout_ms} ms`;
     case "wait_udp": return `${node.mode === "any" ? "*" : node.pattern || "∅"} ⇠ ${bindPort(node.bind)} · ${node.timeout_ms} ms`;
     case "wait_mqtt": return `${node.topic} ⇠ ${node.host}:${node.port} · ${node.timeout_ms} ms`;
@@ -92,6 +98,14 @@ function summary(node: ExperimentNode, t: (key: any) => string): string {
 }
 
 const outputPorts = validPortsFor;
+/** One wire: an output of `from` and the node it leads to. */
+type Wire = { from: string; port: Port; to: string };
+const sameWire = (a: Wire, edge: { from: string; to: string; port?: Port }) => a.from === edge.from && a.port === portOf(edge) && a.to === edge.to;
+const wireKey = (edge: { from: string; to: string; port?: Port }) => `${edge.from}-${portOf(edge)}-${edge.to}`;
+/** Default pane sizes, restored by a double click on their handle. */
+const PROPERTIES_WIDTH = 254;
+const TIMELINE_HEIGHT = 142;
+const sizeValid = (value: unknown) => typeof value === "number" && Number.isFinite(value) && value > 0;
 const editable = (target: EventTarget | null) => target instanceof HTMLElement && !!target.closest("input, textarea, select, [contenteditable=true]");
 
 export function ExperimentView({ active, focusMode, setFocusMode, onShowFrame, ref }: { active: boolean; focusMode: boolean; setFocusMode: (value: boolean) => void; onShowFrame?: (seq: number) => void; ref?: Ref<ExperimentHandle> }) {
@@ -99,6 +113,21 @@ export function ExperimentView({ active, focusMode, setFocusMode, onShowFrame, r
   const { refreshJobs, library, pushLog, pushError } = useStore();
   const { document: doc, history, dispatch, save: saveDocument, replace, saveState, validationError, profileIssues, revalidate, error: documentError } = useExperimentDocument();
   const [selected, setSelected] = useState<string | null>(null);
+  // A wire picked on the canvas; a node and a wire are never both selected.
+  const [wire, setWire] = useState<Wire | null>(null);
+  // The wire under the pointer (its line or its buttons): it shows its × too.
+  const [hoverWire, setHoverWire] = useState<string | null>(null);
+  const hoverTimer = useRef<number | undefined>(undefined);
+  const hover = (key: string | null) => {
+    window.clearTimeout(hoverTimer.current);
+    // Leaving the line for its buttons, which sit on it, must not hide them.
+    if (key) setHoverWire(key);
+    else hoverTimer.current = window.setTimeout(() => setHoverWire(null), 180);
+  };
+  const [propertiesWidth, setPropertiesWidth] = usePersistentState("signal-lab.layout.properties", PROPERTIES_WIDTH, sizeValid);
+  const [timelineHeight, setTimelineHeight] = usePersistentState("signal-lab.layout.timeline", TIMELINE_HEIGHT, sizeValid);
+  const viewRef = useRef<HTMLDivElement>(null);
+  const workspaceRef = useRef<HTMLDivElement>(null);
   const [events, setEvents] = useState<ExperimentStep[]>([]);
   const [job, setJob] = useState<JobInfo | null>(null);
   const [outcome, setOutcome] = useState<Outcome>(null);
@@ -150,10 +179,20 @@ export function ExperimentView({ active, focusMode, setFocusMode, onShowFrame, r
   const label = (kind: NodeType): string => t(NODE_CATALOG[kind].title);
   const nodeSummary = (node: ExperimentNode) => node.type === "start" ? t("exp.entry") : node.type === "end" ? t("exp.result") : summary(node, t);
 
+  /**
+   * Where a Loop's way back runs: over its two ends, clear of them — Done and
+   * Limit leave the Loop lower down — or under them when the canvas has no
+   * room above.
+   */
+  const backY = (a: ExperimentNode, b: ExperimentNode) => {
+    const top = Math.min(a.y, b.y);
+    return top >= 80 ? top - 70 : Math.max(a.y, b.y) + NODE_H + 70;
+  };
   const portY = (node: ExperimentNode, port: Port): number => {
     if (node.type === "branch_status" || node.type === "branch_value") return port === "yes" ? 28 : 56;
     if (node.type === "fork") return port === "branch1" ? 28 : 56;
     if (isWait(node)) return port === "matched" ? 28 : 56;
+    if (node.type === "loop") return port === "body" ? 16 : port === "done" ? 40 : 64;
     return NODE_H / 2;
   };
 
@@ -165,8 +204,17 @@ export function ExperimentView({ active, focusMode, setFocusMode, onShowFrame, r
       case "branch2": return t("exp.branch2");
       case "matched": return t("exp.portMatched");
       case "timeout": return t("exp.portTimeout");
+      case "body": return t("exp.portBody");
+      case "done": return t("exp.portDone");
+      case "limit": return t("exp.portLimit");
       default: return t("exp.outputPort");
     }
+  };
+
+  /** "Start → OSC message", with the output named when the node has several. */
+  const wireName = (edge: { from: string; to: string; port?: Port }): string => {
+    const target = doc?.nodes.find((node) => node.id === edge.to);
+    return `${anchorLabel({ from: edge.from, port: portOf(edge) })} → ${target ? label(target.type) : ""}`;
   };
 
   const anchorLabel = (anchor: Anchor): string => {
@@ -174,6 +222,9 @@ export function ExperimentView({ active, focusMode, setFocusMode, onShowFrame, r
     if (!node) return "";
     return outputPorts(node.type).length > 1 ? `${label(node.type)} · ${portLabel(anchor.port)}` : label(node.type);
   };
+
+  // Selecting a node lets go of a wire.
+  useEffect(() => { if (selected) setWire(null); }, [selected]);
 
   useEffect(() => {
     if (!doc || selectionInitialized.current) return;
@@ -334,7 +385,7 @@ export function ExperimentView({ active, focusMode, setFocusMode, onShowFrame, r
       if (Object.keys(values).length) setKnownVars((prior) => ({ ...prior, ...values }));
       const response = result.response;
       if (response) {
-        const text = `HTTP ${response.status} ${response.status_text} · ${response.latency_ms.toFixed(0)} ms · ${fmtBytes(response.body_bytes)}`;
+        const text = `HTTP ${response.status} ${response.status_text} · ${fmtNum(response.latency_ms)} ${t("unit.ms")} · ${fmtBytes(response.body_bytes)}`;
         const shown = response.body + (response.truncated ? `\n${t("http.truncated")}` : "");
         let json: unknown;
         try { json = response.truncated ? undefined : JSON.parse(response.body); } catch { json = undefined; }
@@ -404,6 +455,7 @@ export function ExperimentView({ active, focusMode, setFocusMode, onShowFrame, r
       if (event.key === "Escape") {
         if (menu) setMenu(null);
         else if (linkStart) cancelLink();
+        else if (selectedWire) setWire(null);
         else if (fullscreen) { setWindowFullscreen(false).then(() => { setFullscreen(false); setFocusMode(focusBeforeFullscreen.current); }).catch(() => {}); }
         else if (focusMode) setFocusMode(false);
         return;
@@ -425,6 +477,7 @@ export function ExperimentView({ active, focusMode, setFocusMode, onShowFrame, r
         if (event.key === "Enter" && selectedNode) { event.preventDefault(); void sendNode(selectedNode); }
         return;
       }
+      if ((event.key === "Delete" || event.key === "Backspace") && selectedWire && !busy) { event.preventDefault(); removeWire(); return; }
       if ((event.key === "Delete" || event.key === "Backspace") && selected && !busy) { event.preventDefault(); removeSelected(); }
       if (code === "KeyA" && !menu) { event.preventDefault(); openAddMenu(); }
       if (selected && !busy && target.closest(".experiment-node-body") && ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) {
@@ -629,6 +682,21 @@ export function ExperimentView({ active, focusMode, setFocusMode, onShowFrame, r
   };
 
   const selectedNode = doc?.nodes.find((node) => node.id === selected) ?? null;
+  // Gone with an undo, a removed node or a reconnection: then nothing is selected.
+  const selectedWire = wire && doc?.edges.some((edge) => sameWire(wire, edge)) ? wire : null;
+  const selectWire = (edge: { from: string; to: string; port?: Port }) => {
+    if (busy || linkStart) return;
+    setSelected(null); setMenu(null);
+    setWire({ from: edge.from, port: portOf(edge), to: edge.to });
+  };
+  /** Remove a wire: the selected one, or the one whose × was clicked. */
+  const removeWire = (target: Wire | null = selectedWire) => {
+    if (!target || busy) return;
+    const { from, port, to } = target;
+    commitEdit();
+    edit((current) => disconnect(current, from, port, to));
+    setWire(null); setHoverWire(null);
+  };
   const nodeStates = useMemo(() => new Map(events.map((event) => [event.node_id, event.state])), [events]);
   const missing = useMemo(() => doc ? missingOutputs(doc) : new Set<string>(), [doc]);
   const detached = useMemo(() => doc ? unreachableNodes(doc) : new Set<string>(), [doc]);
@@ -684,7 +752,8 @@ export function ExperimentView({ active, focusMode, setFocusMode, onShowFrame, r
       <span className="experiment-kind">{glyph}</span><span><b>{title}</b></span></button>;
   };
 
-  return <div className={`experiment-view ${propertiesOpen ? "" : "properties-closed"} ${timelineOpen ? "" : "timeline-closed"}`}
+  return <div ref={viewRef} className={`experiment-view ${propertiesOpen ? "" : "properties-closed"} ${timelineOpen ? "" : "timeline-closed"}`}
+    style={{ "--properties-w": `${propertiesWidth}px`, "--timeline-h": `${timelineHeight}px` } as CSSProperties}
     onFocusCapture={(event) => { if (event.target.matches("input, textarea, select")) editGroup.current = `field-${crypto.randomUUID()}`; }}
     onBlurCapture={(event) => { if (event.target.matches("input, textarea, select")) commitEdit(); }}>
     <div className="experiment-toolbar">
@@ -712,7 +781,9 @@ export function ExperimentView({ active, focusMode, setFocusMode, onShowFrame, r
     </div>
     {(problem ?? documentError) !== null && <ErrorMessage className="experiment-problem" error={problem ?? documentError} nodeLabel={nodeName}
       onShow={(id) => { const node = doc.nodes.find((item) => item.id === id); if (node) showNode(node); }} />}
-    <div className="experiment-workspace">
+    <div className="experiment-workspace" ref={workspaceRef}>
+      {propertiesOpen && <Splitter orientation="vertical" label="layout.properties" size={propertiesWidth} min={220} initial={PROPERTIES_WIDTH}
+        max={() => Math.max(220, (workspaceRef.current?.clientWidth ?? 1200) - 360)} onSize={setPropertiesWidth} />}
       <div className="experiment-left">
         <div className="experiment-canvas-tools">
           <div className="experiment-tool-group" role="group" aria-label={t("exp.history")}>
@@ -723,7 +794,7 @@ export function ExperimentView({ active, focusMode, setFocusMode, onShowFrame, r
           {linkStart && <span className="experiment-canvas-hint linking" role="status">{t("exp.chooseInput")}</span>}
           {linkStart && <button className="ghost sm" onClick={cancelLink}>{t("exp.cancelLink")}</button>}
           <div className="fill" />
-          <button className="ghost sm experiment-arrange" onClick={arrange} disabled={busy}>{t("exp.arrange")}</button>
+          <button className="ghost sm experiment-arrange" data-tip={t("exp.arrangeHint")} onClick={arrange} disabled={busy}>{t("exp.arrange")}</button>
           <button className="ghost sm" aria-label={t("exp.zoomOut")} data-tip={t("exp.zoomOut")} onClick={() => zoomAt(zoom - .1)}>−</button>
           <span className="experiment-zoom" data-tip={t("exp.zoomHint")}>{Math.round(zoom * 100)}%</span>
           <button className="ghost sm" aria-label={t("exp.zoomIn")} data-tip={t("exp.zoomIn")} onClick={() => zoomAt(zoom + .1)}>＋</button>
@@ -734,7 +805,7 @@ export function ExperimentView({ active, focusMode, setFocusMode, onShowFrame, r
           <div className="experiment-canvas-space" style={{ width: canvasWidth * zoom, height: canvasHeight * zoom }}>
             <div className="experiment-canvas" style={{ width: canvasWidth, height: canvasHeight, transform: `scale(${zoom})`, "--zoom": zoom } as CSSProperties}
               onDoubleClick={(event) => { if (event.target !== event.currentTarget) return; const point = graphPoint(event.clientX, event.clientY); openMenu(event.clientX, event.clientY, point.x - NODE_W / 2, point.y - NODE_H / 2, linkStart ?? undefined, !!linkStart); }}
-              onPointerDown={(event) => { if (event.target !== event.currentTarget) return; const scroll = scrollRef.current!; pan.current = { clientX: event.clientX, clientY: event.clientY, left: scroll.scrollLeft, top: scroll.scrollTop, moved: false }; event.currentTarget.setPointerCapture(event.pointerId); if (!linkStart) setSelected(null); }}
+              onPointerDown={(event) => { if (event.target !== event.currentTarget) return; const scroll = scrollRef.current!; pan.current = { clientX: event.clientX, clientY: event.clientY, left: scroll.scrollLeft, top: scroll.scrollTop, moved: false }; event.currentTarget.setPointerCapture(event.pointerId); if (!linkStart) { setSelected(null); setWire(null); } }}
               onPointerMove={(event) => {
                 if (linkStart && !portDrag.current) setLinkPoint(graphPoint(event.clientX, event.clientY));
                 const p = pan.current; if (!p) return;
@@ -746,22 +817,40 @@ export function ExperimentView({ active, focusMode, setFocusMode, onShowFrame, r
                 // Click-to-link, then a click on empty canvas: the next node goes right there.
                 if (p && !p.moved && linkStart) { const point = graphPoint(event.clientX, event.clientY); openMenu(event.clientX, event.clientY, point.x, point.y - NODE_H / 2, linkStart, true); }
               }} onPointerCancel={() => { pan.current = null; }}>
-              <svg className="experiment-wires" width={canvasWidth} height={canvasHeight} aria-hidden="true">
+              <svg className="experiment-wires" width={canvasWidth} height={canvasHeight}>
                 {doc.edges.map((edge) => { const a = doc.nodes.find((node) => node.id === edge.from); const b = doc.nodes.find((node) => node.id === edge.to); if (!a || !b) return null;
                   const p = portOf(edge);
                   const x1 = a.x + NODE_W, y1 = a.y + portY(a, p);
                   const x2 = b.x, y2 = b.y + NODE_H / 2;
-                  const isRunning = nodeStates.get(a.id) === "running" || nodeStates.get(b.id) === "running";
+                  const busyState = (id: string) => ["running", "retry", "repeating"].includes(nodeStates.get(id) ?? "");
+                  const isRunning = busyState(a.id) || busyState(b.id);
                   const isPassed = nodeStates.get(a.id) === "passed" && (nodeStates.get(b.id) === "passed" || nodeStates.get(b.id) === "running");
-                  return <path key={`${edge.from}-${p}-${edge.to}`} className={`wire ${p} ${isRunning ? "active-flow" : ""} ${isPassed ? "passed-flow" : ""}`} d={`M ${x1} ${y1} C ${x1 + 75} ${y1}, ${x2 - 75} ${y2}, ${x2} ${y2}`} />;
+                  // A Loop's way back runs under the body, from its last step to the Loop's input.
+                  const d = isBackEdge(doc, edge) ? `M ${x1} ${y1} C ${x1 + 80} ${backY(a, b)}, ${x2 - 80} ${backY(a, b)}, ${x2} ${y2}` : `M ${x1} ${y1} C ${x1 + 75} ${y1}, ${x2 - 75} ${y2}, ${x2} ${y2}`;
+                  const picked = !!selectedWire && sameWire(selectedWire, edge);
+                  // A wide, invisible stroke takes the pointer, so a wire is easy to pick; the drawn one sits on it.
+                  return <g key={`${edge.from}-${p}-${edge.to}`}>
+                    <path className="experiment-wire-hit" d={d} role="button" tabIndex={busy ? -1 : 0} aria-pressed={picked}
+                      aria-label={`${t("exp.wire")}: ${wireName(edge)}`} onClick={() => selectWire(edge)} onFocus={() => selectWire(edge)}
+                      onPointerEnter={() => hover(wireKey(edge))} onPointerLeave={() => hover(null)} />
+                    <path aria-hidden="true" className={`wire ${p} ${isBackEdge(doc, edge) ? "back" : ""} ${isRunning ? "active-flow" : ""} ${isPassed ? "passed-flow" : ""} ${picked ? "selected" : hoverWire === wireKey(edge) ? "hovered" : ""}`} d={d} />
+                  </g>;
                 })}
                 {linkSource && linkPoint && (() => { const x1 = linkSource.x + NODE_W, y1 = linkSource.y + portY(linkSource, linkStart!.port), { x: x2, y: y2 } = linkPoint;
-                  return <path className="wire preview" d={`M ${x1} ${y1} C ${x1 + 75} ${y1}, ${x2 - 75} ${y2}, ${x2} ${y2}`} />; })()}
+                  return <path aria-hidden="true" className="wire preview" d={`M ${x1} ${y1} C ${x1 + 75} ${y1}, ${x2 - 75} ${y2}, ${x2} ${y2}`} />; })()}
               </svg>
               {doc.edges.map((edge) => { const a = doc.nodes.find((node) => node.id === edge.from); const b = doc.nodes.find((node) => node.id === edge.to); if (!a || !b) return null;
                 const p = portOf(edge);
-                const y1 = a.y + portY(a, p); const x = (a.x + NODE_W + b.x) / 2; const y = (y1 + b.y + NODE_H / 2) / 2;
-                return <button key={`${edge.from}-${p}-${edge.to}`} className="experiment-edge-add" style={{ left: x - 11, top: y - 11 }} data-tip={t("exp.insertNode")} aria-label={`${t("exp.insertNode")}: ${label(a.type)} → ${label(b.type)}`} disabled={busy} onClick={(event) => openMenu(event.clientX, event.clientY, Math.max(x - NODE_W / 2, a.x + STEP_X), y - NODE_H / 2, { from: edge.from, port: p, to: edge.to })}>＋</button>;
+                const y1 = a.y + portY(a, p); const y2 = b.y + NODE_H / 2; const x = (a.x + NODE_W + b.x) / 2;
+                // On a way back, the middle of its curve.
+                const y = isBackEdge(doc, edge) ? (y1 + 6 * backY(a, b) + y2) / 8 : (y1 + y2) / 2;
+                const picked = !!selectedWire && sameWire(selectedWire, edge);
+                // ＋ inserts into the wire; × — above it, clear of the ports — removes it, shown while the wire is hovered or selected.
+                return <span key={wireKey(edge)} className="experiment-edge-tools" onPointerEnter={() => hover(wireKey(edge))} onPointerLeave={() => hover(null)}>
+                  <button className="experiment-edge-add" style={{ left: x - 11, top: y - 11 }} data-tip={t("exp.insertNode")} aria-label={`${t("exp.insertNode")}: ${label(a.type)} → ${label(b.type)}`} disabled={busy} onClick={(event) => openMenu(event.clientX, event.clientY, Math.max(x - NODE_W / 2, a.x + STEP_X), y - NODE_H / 2, { from: edge.from, port: p, to: edge.to })}>＋</button>
+                  {(picked || hoverWire === wireKey(edge)) && !busy && <button className="experiment-edge-remove" style={{ left: x - 11, top: y - 37 }} data-tip={`${t("exp.removeWire")} · Delete`} aria-label={`${t("exp.removeWire")}: ${wireName(edge)}`}
+                    onClick={() => removeWire({ from: edge.from, port: p, to: edge.to })}>×</button>}
+                </span>;
               })}
               {doc.nodes.map((node) => <div key={node.id} data-node={node.id} data-group={NODE_CATALOG[node.type].group}
                 className={`experiment-node ${selected === node.id ? "selected" : ""} ${nodeStates.get(node.id) ?? ""} ${detached.has(node.id) ? "detached" : ""} ${problemNodeId === node.id ? "invalid" : ""} ${linkStart && linkStart.from !== node.id ? "link-target" : ""}`}
@@ -773,9 +862,11 @@ export function ExperimentView({ active, focusMode, setFocusMode, onShowFrame, r
                   aria-label={`${label(node.type)}: ${nodeSummary(node)}`}>
                   <div className="experiment-node-header">
                     <span className="experiment-node-type">{label(node.type)}</span>
+                    {node.repeat && (() => { const tip = node.repeat.until === "count" ? t("exp.repeatBadgeCount", { count: node.repeat.count }) : t("exp.repeatBadgeFor", { s: node.repeat.duration_ms / 1000 });
+                      return <span className="experiment-node-repeat" data-tip={tip} aria-label={tip}>{node.repeat.until === "count" ? `×${node.repeat.count}` : `${node.repeat.duration_ms / 1000}s`}</span>; })()}
                     {node.retry && <span className="experiment-node-retry" data-tip={t("exp.retryBadge", { attempts: node.retry.attempts })} aria-label={t("exp.retryBadge", { attempts: node.retry.attempts })}>↻{node.retry.attempts}</span>}
                     {nodeStates.has(node.id) && <span className={`node-status-badge ${nodeStates.get(node.id)}`} aria-label={t(`exp.${nodeStates.get(node.id)}`)}>
-                      {({ running: "●", passed: "✓", retry: "↻" } as Record<string, string>)[nodeStates.get(node.id)!] ?? "✕"}
+                      {({ running: "●", passed: "✓", retry: "↻", repeating: "⟳" } as Record<string, string>)[nodeStates.get(node.id)!] ?? "✕"}
                     </span>}
                   </div>
                   <span className="experiment-node-subtitle">{nodeSummary(node)}</span>
@@ -804,10 +895,11 @@ export function ExperimentView({ active, focusMode, setFocusMode, onShowFrame, r
           <fieldset disabled={busy}>
           <TemplateSuggestions.Provider value={suggestions}>
             <ExperimentNodeFields node={selectedNode} patch={(change) => patchNode(selectedNode.id, change)} />
+            {canRepeat(selectedNode) && <RepeatFields repeat={selectedNode.repeat} patch={(change) => patchNode(selectedNode.id, change)} />}
             {canRetry(selectedNode) && <RetryFields retry={selectedNode.retry} patch={(change) => patchNode(selectedNode.id, change)} />}
           </TemplateSuggestions.Provider>
           {preview?.nodeId === selectedNode.id && <div className={`experiment-preview ${preview.error ? "error" : ""}`} aria-live="polite">
-            <p className="section-label">{t(isWait(selectedNode) ? "exp.previewWait" : "exp.preview")}</p>
+            <p className="section-label">{t(isWait(selectedNode) ? "exp.previewWait" : ["assert_value", "branch_value", "loop"].includes(selectedNode.type) ? "exp.previewCheck" : "exp.preview")}</p>
             {preview.error !== undefined ? <ErrorMessage error={preview.error} /> : preview.lines.map((line, index) => <code key={index}>{line}</code>)}
             {preview.missing.length > 0 && <p className="experiment-preview-missing" data-tip={missingTip(preview.missing)}>{missingText(preview.missing)}</p>}
           </div>}
@@ -827,16 +919,21 @@ export function ExperimentView({ active, focusMode, setFocusMode, onShowFrame, r
           {doc.edges.filter((edge) => edge.from === selectedNode.id).map((edge) => <div className="experiment-connection" key={`${portOf(edge)}-${edge.to}`}><span>{portLabel(portOf(edge))} → {label(doc.nodes.find((node) => node.id === edge.to)?.type ?? "end")}</span><button className="ghost sm" data-tip={t("exp.disconnect")} aria-label={t("exp.disconnect")} onClick={() => edit((current) => disconnect(current, edge.from, portOf(edge), edge.to))}>×</button></div>)}
           {selectedNode.type !== "end" && <div className="experiment-node-actions"><button className="ghost sm" data-tip={`${t("exp.addAfter")} · A`} onClick={openAddMenu}>＋ {t("exp.addNext")}</button>
             {selectedNode.type !== "start" && <><button className="ghost sm" data-tip={`${t("exp.duplicate")} · Ctrl+D`} onClick={duplicateSelected}>{t("exp.duplicate")}</button><button className="ghost sm experiment-delete" data-tip={`${t("exp.delete")} · Delete`} onClick={removeSelected}>{t("exp.delete")}</button></>}</div>}
-        </fieldset></> : <p className="experiment-empty">{t("exp.selectNode")}</p>}
+        </fieldset></> : selectedWire ? <>
+          <h2>{t("exp.wire")}</h2>
+          <p className="experiment-wire-name">{wireName(selectedWire)}</p>
+          <div className="experiment-node-actions"><button className="ghost sm experiment-delete" data-tip={`${t("exp.removeWire")} · Delete`} disabled={busy} onClick={() => removeWire()}>{t("exp.removeWire")}</button></div>
+        </> : <p className="experiment-empty">{t("exp.selectNode")}</p>}
       </aside>}
     </div>
-    <div className="experiment-timeline"><div className="experiment-timeline-title"><button className="ghost sm" onClick={() => setTimelineOpen(!timelineOpen)} aria-expanded={timelineOpen}>{timelineOpen ? "▾" : "▸"} {t("exp.timeline")}{!timelineOpen && events.length > 0 && <span className="experiment-node-count">{events.length}</span>}</button>{reportPath && (downloadUrl(reportPath)
+    <div className="experiment-timeline">{timelineOpen && <Splitter orientation="horizontal" label="layout.timeline" size={timelineHeight} min={90} initial={TIMELINE_HEIGHT}
+      max={() => Math.max(90, (viewRef.current?.clientHeight ?? 700) - 260)} onSize={setTimelineHeight} />}<div className="experiment-timeline-title"><button className="ghost sm" onClick={() => setTimelineOpen(!timelineOpen)} aria-expanded={timelineOpen}>{timelineOpen ? "▾" : "▸"} {t("exp.timeline")}{!timelineOpen && events.length > 0 && <span className="experiment-node-count">{events.length}</span>}</button>{reportPath && (downloadUrl(reportPath)
         ? <a className="experiment-report download-link" href={downloadUrl(reportPath)!} download data-tip={reportPath}>{t("exp.reportSaved")} ↓</a>
         : <span className="experiment-report" data-tip={reportPath}>{t("exp.reportSaved")}</span>)}{lastRun && (lastRun.overridden || doc.profiles.length > 0) && <span className="experiment-run-profile">
       {lastRun.profile ? t("exp.runProfile", { name: lastRun.profile }) : t("exp.runDefaults")}{lastRun.overridden && ` · ${t("exp.overridden")}`}</span>}{doc.seed !== null
       ? <button className="ghost sm experiment-seed-chip pinned" data-tip={t("exp.unpinSeedHint")} onClick={() => edit((current) => ({ ...current, seed: null }))}>{t("exp.runSeed", { seed: doc.seed })} · {t("exp.unpinSeed")}</button>
       : lastSeed !== null && <button className="ghost sm experiment-seed-chip" data-tip={t("exp.pinSeedHint")} disabled={busy} onClick={() => edit((current) => ({ ...current, seed: lastSeed }))}>{t("exp.runSeed", { seed: lastSeed })} · {t("exp.pinSeed")}</button>}<strong className={outcome?.kind === "failed" ? "fail" : ""} data-tip={outcome?.kind === "failed" ? describe(outcome.error) : undefined}>{outcomeText}</strong></div>
-      {timelineOpen && <div className="experiment-events">{events.length === 0 ? <span className="experiment-empty">{t("exp.noEvents")}</span> : events.map((event, index) => <button key={index} onClick={() => { const node = doc.nodes.find((item) => item.id === event.node_id); if (node) showNode(node); }} className={event.state}><time>{new Date(event.ts).toLocaleTimeString()}</time><b>{label(doc.nodes.find((node) => node.id === event.node_id)?.type ?? "end")}</b><span data-tip={event.error?.detail}>{t(`exp.${event.state}`)}{stepText(event) && ` · ${stepText(event)}`}</span></button>)}</div>}
+      {timelineOpen && <div className="experiment-events">{events.length === 0 ? <span className="experiment-empty">{t("exp.noEvents")}</span> : events.map((event, index) => <button key={index} onClick={() => { const node = doc.nodes.find((item) => item.id === event.node_id); if (node) showNode(node); }} className={event.state}><time>{fmtTime(event.ts).slice(0, 8)}</time><b>{label(doc.nodes.find((node) => node.id === event.node_id)?.type ?? "end")}</b><span data-tip={event.error?.detail}>{t(`exp.${event.state}`)}{stepText(event) && ` · ${stepText(event)}`}</span></button>)}</div>}
       {timelineOpen && onShowFrame && events.some((event) => event.frame !== undefined) && <div className="experiment-frame-links">{events.filter((event) => event.frame !== undefined).map((event) =>
         <button key={`${event.node_id}-${event.frame}`} className="ghost sm" data-tip={t("exp.openFrameHint")} onClick={() => onShowFrame(event.frame!)}>◫ {label(doc.nodes.find((node) => node.id === event.node_id)?.type ?? "end")} · {t("exp.openFrame", { seq: event.frame! })}</button>)}</div>}
     </div>

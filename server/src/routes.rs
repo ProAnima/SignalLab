@@ -244,9 +244,39 @@ const RUSSIAN: LoginText = LoginText {
     wrong: "Токен не подходит.",
 };
 
+/// The sign-in page in every language the interface has (src/lib/locales/index.ts).
+const LOGIN_TEXTS: [&LoginText; 2] = [&ENGLISH, &RUSSIAN];
+
+/// The language of the sign-in page: the most preferred one of
+/// `Accept-Language` (by its `q` weights, then order) that the page has, by
+/// base language (`ru-RU` is `ru`); English when none matches.
 fn login_text(headers: &HeaderMap) -> &'static LoginText {
-    let preferred = headers.get(header::ACCEPT_LANGUAGE).and_then(|value| value.to_str().ok()).unwrap_or("");
-    if preferred.trim_start().to_ascii_lowercase().starts_with("ru") { &RUSSIAN } else { &ENGLISH }
+    let accept = headers.get(header::ACCEPT_LANGUAGE).and_then(|value| value.to_str().ok()).unwrap_or("");
+    preferred_languages(accept)
+        .iter()
+        .find_map(|tag| {
+            let base = tag.split('-').next().unwrap_or("");
+            LOGIN_TEXTS.into_iter().find(|text| text.lang == base)
+        })
+        .unwrap_or(&ENGLISH)
+}
+
+/// The tags of an `Accept-Language` header, most preferred first, without `q=0`.
+fn preferred_languages(accept: &str) -> Vec<String> {
+    let mut tags: Vec<(f32, usize, String)> = accept
+        .split(',')
+        .enumerate()
+        .filter_map(|(order, part)| {
+            let mut pieces = part.split(';');
+            let tag = pieces.next()?.trim().to_ascii_lowercase();
+            let weight = pieces
+                .find_map(|piece| piece.trim().strip_prefix("q=").map(|q| q.trim().parse::<f32>().unwrap_or(0.0)))
+                .unwrap_or(1.0);
+            (!tag.is_empty() && tag != "*" && weight > 0.0).then_some((weight, order, tag))
+        })
+        .collect();
+    tags.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
+    tags.into_iter().map(|(_, _, tag)| tag).collect()
 }
 
 fn login_html(text: &LoginText, wrong: bool) -> String {

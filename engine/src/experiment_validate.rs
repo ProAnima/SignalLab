@@ -8,7 +8,7 @@ use std::net::SocketAddr;
 use serde::Serialize;
 
 use super::error::{EngineError, EngineResult, Field};
-use super::experiment::{Edge, Experiment, NodeKind, Retry, MAX_NODES, PORTS, VERSION};
+use super::experiment::{Edge, Experiment, NodeKind, Repeat, RepeatUntil, Retry, MAX_LOOP, MAX_NODES, MAX_REPEATS, PORTS, RUN_LIMIT, VERSION};
 use super::experiment_data::{self as data, ExtractFrom};
 use super::matching::{UdpMode, MAX_ARG_INDEX};
 
@@ -77,6 +77,45 @@ fn check_retry(kind: &NodeKind, retry: &Retry) -> EngineResult<()> {
     }
     if retry.delay_ms > MAX_DELAY_MS {
         return Err(range(Field::new("retry_delay"), 0, MAX_DELAY_MS));
+    }
+    Ok(())
+}
+
+/// The shortest pause between two sends of a repeating step: 100 per second.
+pub const MIN_REPEAT_INTERVAL_MS: u64 = 10;
+
+/// Repeat sends again and again, so it is bounded twice: by its own numbers,
+/// and by the run, which every repetition must fit in.
+fn check_repeat(kind: &NodeKind, repeat: &Repeat) -> EngineResult<()> {
+    if !kind.is_action() {
+        return Err(EngineError::new("node.repeat_unsupported").in_field(Field::new("repeat")));
+    }
+    if !(MIN_REPEAT_INTERVAL_MS..=MAX_DELAY_MS).contains(&repeat.interval_ms) {
+        return Err(range(Field::new("repeat_interval"), MIN_REPEAT_INTERVAL_MS, MAX_DELAY_MS));
+    }
+    if repeat.jitter_ms > MAX_DELAY_MS {
+        return Err(range(Field::new("repeat_jitter"), 0, MAX_DELAY_MS));
+    }
+    let limit = RUN_LIMIT.as_millis() as u64;
+    let longest = match repeat.until {
+        RepeatUntil::Count => {
+            if !(2..=MAX_REPEATS).contains(&repeat.count) {
+                return Err(range(Field::new("repeat_count"), 2, MAX_REPEATS as u64));
+            }
+            (repeat.count as u64 - 1) * (repeat.interval_ms + repeat.jitter_ms)
+        }
+        RepeatUntil::Duration => {
+            if !(1..=limit).contains(&repeat.duration_ms) {
+                return Err(range(Field::new("repeat_duration"), 1, limit));
+            }
+            if repeat.duration_ms / repeat.interval_ms >= MAX_REPEATS as u64 {
+                return Err(EngineError::new("node.repeat_too_many").with("max", MAX_REPEATS).in_field(Field::new("repeat_interval")));
+            }
+            repeat.duration_ms
+        }
+    };
+    if longest > limit {
+        return Err(EngineError::new("node.repeat_too_long").with("seconds", RUN_LIMIT.as_secs()).in_field(Field::new("repeat")));
     }
     Ok(())
 }
@@ -216,6 +255,11 @@ fn check_node(kind: &NodeKind, params: &BTreeMap<String, String>) -> EngineResul
             }
         }
         NodeKind::AssertValue { .. } | NodeKind::BranchValue { .. } => {}
+        NodeKind::Loop { max, .. } => {
+            if !(1..=MAX_LOOP).contains(max) {
+                return Err(range(Field::new("loop_max"), 1, MAX_LOOP as u64));
+            }
+        }
         NodeKind::WaitOsc { bind, address, args, timeout_ms, .. } => {
             check_bind(bind)?;
             if address.trim().is_empty() {
@@ -301,6 +345,86 @@ pub fn validate_document(doc: &Experiment) -> EngineResult<()> {
     Ok(())
 }
 
+/// The loops of a document: each Loop's body — the nodes reached from its
+/// Body output that lead back to it — and the wires that come back. Those
+/// wires are the only cycles a runnable document may have; everything else
+/// sees the graph without them.
+#[derive(Default)]
+pub struct LoopShape<'a> {
+    /// `(from, port, to)` of every wire from a body back to its Loop.
+    pub back_edges: HashSet<(&'a str, &'a str, &'a str)>,
+    pub bodies: HashMap<&'a str, HashSet<&'a str>>,
+}
+
+impl<'a> LoopShape<'a> {
+    pub fn of(doc: &'a Experiment) -> Self {
+        let mut shape = LoopShape::default();
+        for node in doc.nodes.iter().filter(|node| matches!(node.kind, NodeKind::Loop { .. })) {
+            let id = node.id.as_str();
+            // Forward from Body, stopping at the loop; backward from the loop. The body is both.
+            let mut forward = HashSet::new();
+            let mut stack: Vec<&str> = doc.edges.iter().filter(|edge| edge.from == id && edge.port == "body").map(|edge| edge.to.as_str()).collect();
+            while let Some(current) = stack.pop() {
+                if current != id && forward.insert(current) {
+                    stack.extend(doc.edges.iter().filter(|edge| edge.from == current).map(|edge| edge.to.as_str()));
+                }
+            }
+            let mut back = HashSet::new();
+            let mut stack: Vec<&str> = doc.edges.iter().filter(|edge| edge.to == id).map(|edge| edge.from.as_str()).collect();
+            while let Some(current) = stack.pop() {
+                if current != id && back.insert(current) {
+                    stack.extend(doc.edges.iter().filter(|edge| edge.to == current).map(|edge| edge.from.as_str()));
+                }
+            }
+            let body: HashSet<&str> = forward.intersection(&back).copied().collect();
+            for edge in doc.edges.iter().filter(|edge| edge.to == id && body.contains(edge.from.as_str())) {
+                shape.back_edges.insert((edge.from.as_str(), edge.port.as_str(), id));
+            }
+            shape.bodies.insert(id, body);
+        }
+        shape
+    }
+
+    pub fn is_back(&self, edge: &Edge) -> bool {
+        self.back_edges.contains(&(edge.from.as_str(), edge.port.as_str(), edge.to.as_str()))
+    }
+}
+
+/// A body runs as one branch, one iteration after another: it leads only back
+/// to its Loop, is entered only through Body, has no parallel work, and holds
+/// no Start, End, Join or other Loop.
+fn check_loops(doc: &Experiment, shape: &LoopShape) -> EngineResult<()> {
+    let by_id: HashMap<&str, &NodeKind> = doc.nodes.iter().map(|node| (node.id.as_str(), &node.kind)).collect();
+    for node in doc.nodes.iter().filter(|node| matches!(node.kind, NodeKind::Loop { .. })) {
+        let id = node.id.as_str();
+        let body = &shape.bodies[id];
+        if !shape.back_edges.iter().any(|(_, _, to)| *to == id) {
+            return Err(EngineError::new("loop.no_return").at(id));
+        }
+        for &member in body {
+            if matches!(by_id[member], NodeKind::Start | NodeKind::End | NodeKind::Fork | NodeKind::Join | NodeKind::Loop { .. }) {
+                return Err(EngineError::new("loop.body_unsupported").at(member));
+            }
+            let mut ports = HashSet::new();
+            for edge in doc.edges.iter().filter(|edge| edge.from == member) {
+                if !ports.insert(edge.port.as_str()) {
+                    return Err(EngineError::new("loop.body_parallel").at(member));
+                }
+                if edge.to != id && !body.contains(edge.to.as_str()) {
+                    return Err(EngineError::new("loop.body_leaves").at(member));
+                }
+            }
+        }
+        for edge in doc.edges.iter().filter(|edge| body.contains(edge.to.as_str())) {
+            let through_body = edge.from == id && edge.port == "body";
+            if !through_body && !body.contains(edge.from.as_str()) {
+                return Err(EngineError::new("loop.body_entered").at(&edge.from));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn visit<'a>(
     id: &'a str,
     outgoing: &HashMap<&'a str, Vec<&'a Edge>>,
@@ -365,6 +489,9 @@ pub fn validate_with(doc: &Experiment, params: &BTreeMap<String, String>) -> Eng
         if let Some(retry) = &node.retry {
             check_retry(&node.kind, retry).map_err(|error| error.at(&node.id))?;
         }
+        if let Some(repeat) = &node.repeat {
+            check_repeat(&node.kind, repeat).map_err(|error| error.at(&node.id))?;
+        }
     }
     // validate_document guarantees exactly one Start.
     let start = doc.nodes.iter().find(|node| matches!(node.kind, NodeKind::Start)).map(|node| node.id.clone()).unwrap_or_default();
@@ -386,9 +513,28 @@ pub fn validate_with(doc: &Experiment, params: &BTreeMap<String, String>) -> Eng
             return Err(EngineError::new("graph.outputs_required").at(&node.id));
         }
     }
+    // A loop's way back is not a cycle; ordering and the checks below see the
+    // graph without it — and with the body before what follows Done, since a
+    // Loop leaves only after its body ran.
+    let shape = LoopShape::of(doc);
+    check_loops(doc, &shape)?;
+    let virtual_edges: Vec<Edge> = shape
+        .back_edges
+        .iter()
+        .flat_map(|(from, _, loop_id)| {
+            doc.edges
+                .iter()
+                .filter(move |edge| edge.from == *loop_id && edge.port != "body")
+                .map(move |exit| Edge { from: from.to_string(), to: exit.to.clone(), port: "next".into() })
+        })
+        .collect();
+    let mut ordered: HashMap<&str, Vec<&Edge>> = HashMap::new();
+    for edge in doc.edges.iter().filter(|edge| !shape.is_back(edge)).chain(virtual_edges.iter()) {
+        ordered.entry(&edge.from).or_default().push(edge);
+    }
     let mut marks = HashMap::new();
     let mut order = Vec::new();
-    visit(&start, &outgoing, &mut marks, &mut order)?;
+    visit(&start, &ordered, &mut marks, &mut order)?;
     if let Some(unreachable) = doc.nodes.iter().find(|node| !marks.contains_key(node.id.as_str())) {
         return Err(EngineError::new("graph.unreachable").at(&unreachable.id));
     }
@@ -410,7 +556,7 @@ pub fn validate_with(doc: &Experiment, params: &BTreeMap<String, String>) -> Eng
             }
         }
     }
-    data::check_values(doc, &order, params)?;
+    data::check_values(doc, &order, &shape, params)?;
     Ok(order)
 }
 
@@ -496,7 +642,7 @@ mod tests {
         doc.edges.pop();
         assert_eq!(problem(validate(&doc)), ("graph.outputs_required".into(), Some("check".into()), None));
         let mut doc = starter();
-        doc.nodes.push(Node { id: "orphan".into(), x: 0.0, y: 0.0, retry: None, kind: NodeKind::Log { message: "x".into() } });
+        doc.nodes.push(Node { id: "orphan".into(), x: 0.0, y: 0.0, retry: None, repeat: None, kind: NodeKind::Log { message: "x".into() } });
         doc.edges.push(Edge { from: "orphan".into(), to: "end".into(), port: "next".into() });
         assert_eq!(problem(validate(&doc)), ("graph.unreachable".into(), Some("orphan".into()), None));
     }
@@ -512,7 +658,7 @@ mod tests {
     fn branch_paths_join_and_incomplete_drafts_save() {
         let mut doc = starter();
         doc.nodes[2].kind = NodeKind::BranchStatus { status: 200 };
-        doc.nodes.push(Node { id: "good".into(), x: 540.0, y: 30.0, retry: None, kind: NodeKind::Delay { ms: 10 } });
+        doc.nodes.push(Node { id: "good".into(), x: 540.0, y: 30.0, retry: None, repeat: None, kind: NodeKind::Delay { ms: 10 } });
         doc.edges.pop();
         doc.edges.extend([
             Edge { from: "check".into(), to: "good".into(), port: "yes".into() },
@@ -576,8 +722,8 @@ mod tests {
         doc.nodes[1].id = "fork".into();
         doc.nodes[2].kind = NodeKind::Join;
         doc.nodes[2].id = "join".into();
-        doc.nodes.push(Node { id: "branch_a".into(), x: 240.0, y: 20.0, retry: None, kind: NodeKind::Delay { ms: 100 } });
-        doc.nodes.push(Node { id: "branch_b".into(), x: 240.0, y: 120.0, retry: None, kind: NodeKind::Log { message: "Parallel test".into() } });
+        doc.nodes.push(Node { id: "branch_a".into(), x: 240.0, y: 20.0, retry: None, repeat: None, kind: NodeKind::Delay { ms: 100 } });
+        doc.nodes.push(Node { id: "branch_b".into(), x: 240.0, y: 120.0, retry: None, repeat: None, kind: NodeKind::Log { message: "Parallel test".into() } });
         doc.edges = vec![
             Edge { from: "start".into(), to: "fork".into(), port: "next".into() },
             Edge { from: "fork".into(), to: "branch_a".into(), port: "branch1".into() },

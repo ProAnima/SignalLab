@@ -12,9 +12,9 @@ use serde_json::Value;
 use crate::host::Host;
 
 use super::error::{EngineError, EngineResult, Field};
-use super::experiment::{Experiment, Node, NodeKind};
+use super::experiment::{Experiment, Node, NodeKind, Repeat, RepeatUntil, RUN_LIMIT};
 use super::experiment_data as data;
-use super::experiment_steps::{self as steps, BranchContext, StepEnv};
+use super::experiment_steps::{self as steps, BranchContext, StepEnv, StepOutcome};
 use super::experiment_validate::{check_bind, check_reply_bind, validate_run};
 use super::http::HttpResponse;
 use super::jobs::{now_ms, JobInfo, JobRegistry, TaskGuard};
@@ -24,8 +24,8 @@ use super::subscribe::{self, Subscription, Subscriptions};
 use super::paths::data_dir;
 use super::template::{Renderer, Scope};
 
-/// A run that takes longer than this is stopped.
-const RUN_LIMIT: Duration = Duration::from_secs(300);
+/// How often a repeating step reports how far it has got.
+const REPEAT_REPORT_EVERY: Duration = Duration::from_secs(1);
 /// Version of the run report file.
 const REPORT_VERSION: u32 = 2;
 
@@ -163,6 +163,19 @@ impl Step {
 
     fn failed(error: EngineError) -> Self {
         Step { state: "failed", detail: String::new(), message: None, vars: None, error: Some(error), frame: None }
+    }
+
+    /// A repeating step's progress: the sends so far.
+    fn repeating(sent: u32, repeat: &Repeat, elapsed: Duration) -> Self {
+        let (key, params) = match repeat.until {
+            RepeatUntil::Count => ("exp.step.repeatingCount", serde_json::json!({ "n": sent, "count": repeat.count })),
+            RepeatUntil::Duration => ("exp.step.repeatingFor", serde_json::json!({
+                "n": sent,
+                "s": format!("{:.1}", elapsed.as_secs_f64()),
+                "total": format!("{:.1}", repeat.duration_ms as f64 / 1000.0),
+            })),
+        };
+        Step { state: "repeating", detail: format!("Sent {sent} times"), message: Some((key, params)), vars: None, error: None, frame: None }
     }
 
     /// An attempt failed and the step will run again after `pause`.
@@ -308,55 +321,30 @@ async fn run_branch(
         }
         emit(&shared, &current, Step::running());
 
-        // Templates are resolved per execution, against this branch's variables.
-        let count = {
-            let mut counts = shared.counts.lock().unwrap();
-            let count = counts.entry(current.clone()).or_insert(0);
-            *count += 1;
-            *count
-        };
-        let scope = Scope {
-            params: &shared.params,
-            vars: &context.vars,
-            secrets: &shared.secrets,
-            run_id: shared.job_id,
-            seed: shared.seed,
-            node_id: &current,
-            count,
-            now_ms: now_ms(),
-        };
-        let rendered = data::render_kind(&node.kind, &mut Renderer::new(scope));
+        // Templates are resolved per execution, against this branch's variables —
+        // except a Loop's exit condition as an iteration starts: it is read when
+        // the body comes back, and may test what the body sets.
+        let count = shared.next_count(&current);
+        let entering_loop = matches!(node.kind, NodeKind::Loop { .. }) && !context.loops.contains_key(&current);
+        let rendered = if entering_loop { Ok(node.kind.clone()) } else { render(&shared, &node, &context, count) };
         let env = StepEnv {
             host: &shared.host,
+            node_id: &current,
             client_id: format!("lab-{}", shared.job_id),
             seed: shared.seed,
             listeners: shared.listeners.lock().map(|listeners| listeners.clone()).unwrap_or_default(),
             subscriptions: shared.subscriptions.lock().map(|subscriptions| subscriptions.clone()).unwrap_or_default(),
             has_timeout: shared.outgoing.contains_key(&(current.clone(), "timeout".to_string())),
+            has_limit: shared.outgoing.contains_key(&(current.clone(), "limit".to_string())),
             inputs: shared.joins.lock().ok().and_then(|joins| joins.get(&current).map(|barrier| barrier.expected)).unwrap_or(1),
             run_started: shared.started,
         };
-        // A failed attempt of an action or wait is reported and made again
-        // after its pause; a template that does not resolve is not retried.
+        // A template that does not resolve is neither retried nor repeated.
         let result = match rendered {
-            Ok(kind) => {
-                let retry = node.retry.as_ref().filter(|_| node.kind.retries());
-                let mut attempt = 1;
-                loop {
-                    let result = steps::execute(&env, &kind, &mut context).await;
-                    let Some(retry) = retry else { break result };
-                    match result {
-                        Err(error) if attempt < retry.attempts && !shared.stop_flag.load(Ordering::Relaxed) => {
-                            let pause = retry.pause_before(attempt + 1);
-                            emit(&shared, &current, Step::retrying(error.at(&current), attempt, retry.attempts, pause));
-                            // Stop aborts this task, so the pause ends with it.
-                            tokio::time::sleep(pause).await;
-                            attempt += 1;
-                        }
-                        other => break other,
-                    }
-                }
-            }
+            Ok(kind) => match node.repeat.as_ref().filter(|_| node.kind.is_action()) {
+                Some(repeat) => repeated(&shared, &env, &node, kind, repeat, &mut context).await,
+                None => attempts(&shared, &env, &node, &kind, &mut context).await,
+            },
             Err(error) => Err(error),
         };
         let port = match result {
@@ -385,6 +373,80 @@ async fn run_branch(
 
     if active_tasks.fetch_sub(1, Ordering::SeqCst) == 1 {
         let _ = done_tx.send(()).await;
+    }
+}
+
+impl EngineShared {
+    /// One more execution of `node`: its number, for `{{counter}}` and its random stream.
+    fn next_count(&self, node: &str) -> u64 {
+        let mut counts = self.counts.lock().unwrap();
+        let count = counts.entry(node.to_string()).or_insert(0);
+        *count += 1;
+        *count
+    }
+}
+
+/// A node's fields with this execution's values in its templates.
+fn render(shared: &EngineShared, node: &Node, context: &BranchContext, count: u64) -> EngineResult<NodeKind> {
+    let scope = Scope {
+        params: &shared.params,
+        vars: &context.vars,
+        secrets: &shared.secrets,
+        run_id: shared.job_id,
+        seed: shared.seed,
+        node_id: &node.id,
+        count,
+        now_ms: now_ms(),
+    };
+    data::render_kind(&node.kind, &mut Renderer::new(scope))
+}
+
+/// One execution of a step, retried: a failed attempt of an action or wait is
+/// reported and made again after its pause.
+async fn attempts(shared: &EngineShared, env: &StepEnv<'_>, node: &Node, kind: &NodeKind, context: &mut BranchContext) -> EngineResult<StepOutcome> {
+    let retry = node.retry.as_ref().filter(|_| node.kind.retries());
+    let mut attempt = 1;
+    loop {
+        let result = steps::execute(env, kind, context).await;
+        let Some(retry) = retry else { return result };
+        match result {
+            Err(error) if attempt < retry.attempts && !shared.stop_flag.load(Ordering::Relaxed) => {
+                let pause = retry.pause_before(attempt + 1);
+                emit(shared, &node.id, Step::retrying(error.at(&node.id), attempt, retry.attempts, pause));
+                // Stop aborts this task, so the pause ends with it.
+                tokio::time::sleep(pause).await;
+                attempt += 1;
+            }
+            other => return other,
+        }
+    }
+}
+
+/// An action made again and again. Each send reads its templates afresh —
+/// `{{counter}}` is its number, `{{now}}` its time — and is retried like a
+/// single one; a send that fails for good fails the step. Progress is reported
+/// at most once a second, and the step passes with the last send's outcome.
+async fn repeated(shared: &EngineShared, env: &StepEnv<'_>, node: &Node, first: NodeKind, repeat: &Repeat, context: &mut BranchContext) -> EngineResult<StepOutcome> {
+    let started = Instant::now();
+    let mut reported = started;
+    let mut kind = first;
+    let mut sent = 0;
+    loop {
+        let mut outcome = attempts(shared, env, node, &kind, context).await?;
+        sent += 1;
+        let pause = repeat.pause_before(shared.seed, &node.id, sent + 1);
+        // Another branch failing stops the run; this one sends no more either.
+        if !repeat.more(sent, started.elapsed(), pause) || shared.stop_flag.load(Ordering::Relaxed) {
+            outcome.message = Some(("exp.step.repeated", serde_json::json!({ "n": sent, "ms": started.elapsed().as_millis() as u64 })));
+            return Ok(outcome);
+        }
+        if reported.elapsed() >= REPEAT_REPORT_EVERY {
+            reported = Instant::now();
+            emit(shared, &node.id, Step::repeating(sent, repeat, started.elapsed()));
+        }
+        // Stop aborts this task, so the pause ends with it.
+        tokio::time::sleep(pause).await;
+        kind = render(shared, node, context, shared.next_count(&node.id))?;
     }
 }
 
@@ -568,7 +630,7 @@ pub async fn start(
     let listeners = arm_listeners(&doc.nodes, Arc::new(host.clone())).await?;
     let subscriptions = arm_subscriptions(&host, &doc.nodes, &params).await?;
     let id = jobs.next_id();
-    let info = JobInfo { id, kind: "experiment".into(), label: doc.name.clone(), started_ms: now_ms() };
+    let info = JobInfo::new(id, "experiment", doc.name.clone()).with("name", &doc.name);
     let host_cl = host.clone();
     let jobs_cl = jobs.clone();
     let started_ms = info.started_ms;
@@ -642,12 +704,14 @@ pub async fn send_node(
     let subscriptions = arm_subscriptions(host, std::slice::from_ref(node), &params).await.map_err(failed)?;
     let env = StepEnv {
         host,
+        node_id,
         // A one-off client id: reusing one would knock another connection off the broker.
         client_id: format!("lab-send-{:08x}", rand::random::<u32>()),
         seed,
         listeners,
         subscriptions,
         has_timeout: false,
+        has_limit: false,
         inputs: 1,
         run_started: Instant::now(),
     };

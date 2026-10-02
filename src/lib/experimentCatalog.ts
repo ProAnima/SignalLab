@@ -24,6 +24,7 @@ export const NODE_CATALOG = {
   extract: { title: "exp.node.extract", description: "exp.description.extract", group: "data" },
   assert_value: { title: "exp.node.assert_value", description: "exp.description.assert_value", group: "check" },
   branch_value: { title: "exp.node.branch_value", description: "exp.description.branch_value", group: "flow" },
+  loop: { title: "exp.node.loop", description: "exp.description.loop", group: "flow" },
 } satisfies Record<NodeType, { title: TKey; description: TKey; group: NodeGroup }>;
 
 export type NodeGroup = "action" | "observe" | "data" | "check" | "flow";

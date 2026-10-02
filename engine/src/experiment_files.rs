@@ -126,6 +126,7 @@ mod tests {
             include_str!("../../experiments/templates/status-branch.json"),
             include_str!("../../experiments/templates/parallel-flows.json"),
             include_str!("../../experiments/templates/osc-ping-reply.json"),
+            include_str!("../../experiments/templates/poll-until-ready.json"),
         ] {
             let document = parse(text).unwrap();
             validate(&document).unwrap();

@@ -12,8 +12,10 @@ use crate::host::Host;
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpStream, UdpSocket};
 
+use super::error::EngineResult;
 use super::inspect::{self, Frame, Gate};
 use super::jobs::{now_ms, JobInfo, JobRegistry, TaskGuard};
+use super::osc::parse_target;
 
 #[derive(Clone, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
@@ -50,28 +52,19 @@ pub async fn start_storm(
     host: Host,
     jobs: JobRegistry,
     cfg: StormConfig,
-) -> Result<JobInfo, String> {
-    let target: SocketAddr = cfg
-        .target
-        .parse()
-        .map_err(|e| format!("invalid target '{}': {e}", cfg.target))?;
+) -> EngineResult<JobInfo> {
+    let target: SocketAddr = parse_target(&cfg.target)?;
     let size = cfg.size.clamp(1, 65_507);
 
     let id = jobs.next_id();
-    let info = JobInfo {
-        id,
-        kind: "storm".into(),
-        label: format!(
-            "Storm {} → {} @{}pps",
-            match cfg.protocol {
-                Protocol::Udp => "UDP",
-                Protocol::Tcp => "TCP",
-            },
-            cfg.target,
-            cfg.rate
-        ),
-        started_ms: now_ms(),
+    let protocol = match cfg.protocol {
+        Protocol::Udp => "UDP",
+        Protocol::Tcp => "TCP",
     };
+    let info = JobInfo::new(id, "storm", format!("Storm {protocol} → {} @{}pps", cfg.target, cfg.rate))
+        .with("protocol", protocol)
+        .with("target", &cfg.target)
+        .with("rate", cfg.rate);
 
     let host_cl = host.clone();
     let jobs_cl = jobs.clone();

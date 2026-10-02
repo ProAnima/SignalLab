@@ -20,6 +20,7 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src"],
+  // The e2e tour is type-checked with the interface: a renamed text breaks the build, not the run.
+  "include": ["src", "tests/e2e"],
   "references": [{ "path": "./tsconfig.node.json" }]
 }

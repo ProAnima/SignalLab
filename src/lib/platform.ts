@@ -42,6 +42,21 @@ export function downloadUrl(path: string): string | null {
   return isDesktop ? null : `/api/files?path=${encodeURIComponent(path)}`;
 }
 
+/**
+ * Save a file the server offers, without leaving the page: a link with
+ * `download` is followed as a download whatever the response is, where
+ * navigating to it would replace the interface with an error page.
+ */
+export function saveDownload(url: string): void {
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "";
+  link.hidden = true;
+  document.body.append(link);
+  link.click();
+  link.remove();
+}
+
 /** Whether the server serving this page asks for a token. */
 export async function serverNeedsSignIn(): Promise<boolean> {
   if (isDesktop) return false;

@@ -10,16 +10,22 @@ use super::experiment_data::{CompareOp, ExtractFrom, Param, Profile};
 use super::http::HttpRequest;
 use super::matching::{ArgRule, UdpMode};
 use super::osc_codec::OscArg;
+use super::template::Rng;
 
-pub const VERSION: u32 = 4;
+pub const VERSION: u32 = 5;
 /// Read and migrated on load (see `experiment_files::parse`): 1 had no
-/// parameters, 2 had no profiles, 3 had no retries or expected replies; serde
-/// defaults supply what is missing. Version 4 exists so that an older Signal
-/// Lab refuses a newer file instead of silently dropping those settings.
-pub const LEGACY_VERSIONS: &[u32] = &[1, 2, 3];
+/// parameters, 2 had no profiles, 3 had no retries or expected replies, 4 had
+/// no repeats or loops; serde defaults supply what is missing. Each new
+/// version exists so that an older Signal Lab refuses a newer file instead of
+/// silently dropping those settings.
+pub const LEGACY_VERSIONS: &[u32] = &[1, 2, 3, 4];
+/// A run that takes longer than this is stopped.
+pub const RUN_LIMIT: Duration = Duration::from_secs(300);
 pub const MAX_NODES: usize = 64;
 /// Every output name a document may use.
-pub const PORTS: &[&str] = &["next", "yes", "no", "branch1", "branch2", "matched", "timeout"];
+pub const PORTS: &[&str] = &["next", "yes", "no", "branch1", "branch2", "matched", "timeout", "body", "done", "limit"];
+/// The most iterations one Loop runs.
+pub const MAX_LOOP: u32 = 1000;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Experiment {
@@ -48,6 +54,9 @@ pub struct Node {
     /// Try again when the step fails: actions and waits only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retry: Option<Retry>,
+    /// Send more than once: actions only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repeat: Option<Repeat>,
     #[serde(flatten)]
     pub kind: NodeKind,
 }
@@ -86,6 +95,68 @@ impl Retry {
         };
         pause.min(MAX_RETRY_PAUSE)
     }
+}
+
+/// Sending an action more than once — a heartbeat, a poll, a steady stream —
+/// without a loop in the graph. Each send is made like a single one (its
+/// templates read afresh, retried by its Retry), and the step passes when
+/// every send did.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Repeat {
+    #[serde(default)]
+    pub until: RepeatUntil,
+    /// Sends in all, the first one included (`until: count`).
+    #[serde(default = "default_repeat_count")]
+    pub count: u32,
+    /// How long to keep sending, from the first send (`until: duration`).
+    #[serde(default = "default_repeat_duration")]
+    pub duration_ms: u64,
+    /// The pause between two sends.
+    pub interval_ms: u64,
+    /// Up to this much longer per pause, drawn from the run's seed.
+    #[serde(default)]
+    pub jitter_ms: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RepeatUntil {
+    /// A number of sends.
+    #[default]
+    Count,
+    /// As many as fit in a time.
+    Duration,
+}
+
+/// The most sends one repeating step makes, in either mode.
+pub const MAX_REPEATS: u32 = 10_000;
+/// Mixed into the seed, so jitter never draws the numbers a node's templates do.
+const JITTER_STREAM: u64 = 0x6a69_7474_6572_0001;
+
+impl Repeat {
+    /// Whether another send is due after `sent` sends, `elapsed` since the
+    /// first one began, with `pause` still to wait before it.
+    pub fn more(&self, sent: u32, elapsed: Duration, pause: Duration) -> bool {
+        match self.until {
+            RepeatUntil::Count => sent < self.count.min(MAX_REPEATS),
+            RepeatUntil::Duration => sent < MAX_REPEATS && elapsed + pause < Duration::from_millis(self.duration_ms),
+        }
+    }
+
+    /// The pause before send `n` (2 for the second): the interval and its
+    /// jitter, the same for the same seed every time.
+    pub fn pause_before(&self, seed: u64, node_id: &str, n: u32) -> Duration {
+        let jitter = if self.jitter_ms == 0 { 0 } else { Rng::for_node(seed ^ JITTER_STREAM, node_id, n as u64).below_u64(self.jitter_ms + 1) };
+        Duration::from_millis(self.interval_ms + jitter)
+    }
+}
+
+fn default_repeat_count() -> u32 {
+    10
+}
+
+fn default_repeat_duration() -> u64 {
+    10_000
 }
 
 /// An OSC reply an OSC message expects: the same matching as *Wait for OSC*.
@@ -221,6 +292,15 @@ pub enum NodeKind {
         #[serde(default = "default_reply_variable")]
         variable: String,
     },
+    /// Run the steps on Body — which lead back here — again and again: at
+    /// most `max` times, and only until `until` holds when there is one. The
+    /// condition is checked after each iteration, so the body always runs at
+    /// least once and can set what it tests.
+    Loop {
+        max: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        until: Option<Until>,
+    },
     /// Wait for a UDP datagram on `bind` whose payload matches.
     WaitUdp {
         bind: String,
@@ -233,6 +313,15 @@ pub enum NodeKind {
         #[serde(default = "default_reply_variable")]
         variable: String,
     },
+}
+
+/// A Loop's exit condition: the comparison of *Check value*.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Until {
+    pub value: String,
+    pub op: CompareOp,
+    #[serde(default)]
+    pub expected: String,
 }
 
 /// The outputs of a node: the ones a runnable graph must connect, and the
@@ -249,11 +338,14 @@ impl NodeKind {
             NodeKind::BranchStatus { .. } | NodeKind::BranchValue { .. } => &["yes", "no"],
             NodeKind::Fork => &["branch1", "branch2"],
             NodeKind::WaitOsc { .. } | NodeKind::WaitUdp { .. } | NodeKind::WaitMqtt { .. } => &["matched"],
+            NodeKind::Loop { .. } => &["body", "done"],
             _ => &["next"],
         };
         let optional: &'static [&'static str] = match self {
             // Without a Timeout wire, a timeout fails the step.
             NodeKind::WaitOsc { .. } | NodeKind::WaitUdp { .. } | NodeKind::WaitMqtt { .. } => &["timeout"],
+            // Without a Limit wire, running out of iterations before the exit condition fails the step.
+            NodeKind::Loop { .. } => &["limit"],
             _ => &[],
         };
         Outputs { required, optional }
@@ -344,6 +436,31 @@ pub fn starter() -> Experiment {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn repeat_counts_or_times_its_sends_and_jitters_the_same_way_for_the_same_seed() {
+        let count = Repeat { until: RepeatUntil::Count, count: 3, duration_ms: 0, interval_ms: 100, jitter_ms: 0 };
+        let pause = Duration::from_millis(100);
+        assert_eq!([1, 2, 3].map(|sent| count.more(sent, Duration::ZERO, pause)), [true, true, false]);
+        let timed = Repeat { until: RepeatUntil::Duration, count: 0, duration_ms: 1000, ..count.clone() };
+        assert!(timed.more(5, Duration::from_millis(850), pause), "the next send at 950 ms is in time");
+        assert!(!timed.more(5, Duration::from_millis(900), pause), "one at 1000 ms is not");
+        assert!(!timed.more(MAX_REPEATS, Duration::ZERO, pause), "never more than MAX_REPEATS");
+
+        assert_eq!(count.pause_before(1, "beat", 2), pause, "no jitter, the interval exactly");
+        let jittery = Repeat { jitter_ms: 50, ..count };
+        let pauses: Vec<Duration> = (2..40).map(|n| jittery.pause_before(42, "beat", n)).collect();
+        assert!(pauses.iter().all(|pause| (100..=150).contains(&pause.as_millis())), "{pauses:?}");
+        assert!(pauses.windows(2).any(|pair| pair[0] != pair[1]), "the jitter varies");
+        assert_eq!(pauses, (2..40).map(|n| jittery.pause_before(42, "beat", n)).collect::<Vec<_>>(), "the same seed, the same pauses");
+        assert_ne!(pauses, (2..40).map(|n| jittery.pause_before(43, "beat", n)).collect::<Vec<_>>(), "another seed, others");
+
+        // Absent in a document: no repeat, and nothing written back; partial: the defaults.
+        let node: Node = serde_json::from_value(serde_json::json!({ "id": "a", "x": 0, "y": 0, "type": "udp", "target": "127.0.0.1:9", "text": "x" })).unwrap();
+        assert!(node.repeat.is_none() && serde_json::to_value(&node).unwrap().get("repeat").is_none());
+        let node: Node = serde_json::from_value(serde_json::json!({ "id": "a", "x": 0, "y": 0, "type": "udp", "target": "127.0.0.1:9", "text": "x", "repeat": { "interval_ms": 250 } })).unwrap();
+        assert_eq!(node.repeat, Some(Repeat { until: RepeatUntil::Count, count: 10, duration_ms: 10_000, interval_ms: 250, jitter_ms: 0 }));
+    }
 
     #[test]
     fn wait_nodes_take_defaults_and_round_trip() {

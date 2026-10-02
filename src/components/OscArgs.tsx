@@ -74,6 +74,7 @@ export function OscArgsEditor({
         <div className="row tight" key={i} style={{ marginBottom: 6 }}>
           <select
             style={{ flex: "0 0 92px" }}
+            aria-label={t("common.argType", { n: i + 1 })}
             value={a.type}
             disabled={disabled}
             onChange={(e) => patch(i, { type: e.target.value as OscArg["type"] })}
@@ -83,14 +84,15 @@ export function OscArgsEditor({
             {TYPES.map((ty) => <option key={ty} value={ty}>{ty}</option>)}
           </select>
           {a.type === "bool" ? (
-            <select value={a.value} disabled={disabled} onChange={(e) => patch(i, { value: e.target.value })}>
+            <select aria-label={t("common.argValue", { n: i + 1 })} value={a.value} disabled={disabled} onChange={(e) => patch(i, { value: e.target.value })}>
               <option value="true">true</option>
               <option value="false">false</option>
             </select>
           ) : a.type === "nil" ? (
-            <input value="—" disabled readOnly />
+            <input aria-label={t("common.argValue", { n: i + 1 })} value="—" disabled readOnly />
           ) : (
             <input
+              aria-label={t("common.argValue", { n: i + 1 })}
               value={a.value}
               readOnly={a.type === "blob"}
               disabled={disabled}
@@ -102,6 +104,8 @@ export function OscArgsEditor({
             className="ghost sm"
             style={{ flex: "0 0 auto" }}
             disabled={disabled}
+            aria-label={t("common.removeArg", { n: i + 1 })}
+            data-tip={t("common.removeArg", { n: i + 1 })}
             onClick={() => onChange(args.filter((_, j) => j !== i))}
           >
             ✕

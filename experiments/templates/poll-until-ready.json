@@ -1,0 +1,32 @@
+{
+  "version": 5,
+  "name": "Poll until ready",
+  "params": [
+    { "name": "device", "value": "127.0.0.1:9000" }
+  ],
+  "profiles": [],
+  "profile": null,
+  "seed": null,
+  "nodes": [
+    { "id": "start", "type": "start", "x": 40, "y": 110 },
+    { "id": "poll", "type": "loop", "x": 260, "y": 110, "max": 10,
+      "until": { "value": "{{status.args[0]}}", "op": "eq", "expected": "ready" } },
+    { "id": "ask", "type": "osc", "x": 490, "y": 110,
+      "target": "{{device}}", "address": "/status", "args": [],
+      "reply": { "bind": "0.0.0.0:0", "address": "/status", "args": [], "timeout_ms": 1000, "variable": "status" } },
+    { "id": "pause", "type": "delay", "x": 720, "y": 110, "ms": 300 },
+    { "id": "ready", "type": "log", "x": 490, "y": 240, "message": "{{device}} is {{status.args[0]}}" },
+    { "id": "gave_up", "type": "log", "x": 490, "y": 370, "message": "{{device}} is still {{status.args[0]}} after 10 polls" },
+    { "id": "end", "type": "end", "x": 720, "y": 300 }
+  ],
+  "edges": [
+    { "from": "start", "to": "poll", "port": "next" },
+    { "from": "poll", "to": "ask", "port": "body" },
+    { "from": "ask", "to": "pause", "port": "next" },
+    { "from": "pause", "to": "poll", "port": "next" },
+    { "from": "poll", "to": "ready", "port": "done" },
+    { "from": "poll", "to": "gave_up", "port": "limit" },
+    { "from": "ready", "to": "end", "port": "next" },
+    { "from": "gave_up", "to": "end", "port": "next" }
+  ]
+}

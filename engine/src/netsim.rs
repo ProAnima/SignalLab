@@ -13,8 +13,12 @@ use serde::{Deserialize, Serialize};
 use crate::host::Host;
 use tokio::net::UdpSocket;
 
+use super::error::{EngineError, EngineResult};
 use super::inspect::{self, describe_payload, Frame, Gate};
 use super::jobs::{now_ms, JobInfo, JobRegistry, TaskGuard};
+use super::net;
+use super::osc::{parse_bind, parse_target};
+use super::transport;
 
 #[derive(Clone, Deserialize)]
 pub struct ImpairProfile {
@@ -192,38 +196,33 @@ pub async fn start_proxy(
     host: Host,
     jobs: JobRegistry,
     cfg: ProxyConfig,
-) -> Result<JobInfo, String> {
-    let listen_addr: SocketAddr = cfg
-        .listen
-        .parse()
-        .map_err(|e| format!("invalid listen '{}': {e}", cfg.listen))?;
-    let target_addr: SocketAddr = cfg
-        .target
-        .parse()
-        .map_err(|e| format!("invalid target '{}': {e}", cfg.target))?;
+) -> EngineResult<JobInfo> {
+    let listen_addr = parse_bind(&cfg.listen)?;
+    let target_addr = parse_target(&cfg.target)?;
 
     let downstream = Arc::new(
         UdpSocket::bind(listen_addr)
             .await
-            .map_err(|e| format!("bind {} failed: {e}", cfg.listen))?,
+            .map_err(|e| net::bind_error(&cfg.listen, e))?,
     );
+    let source = if target_addr.is_ipv6() { "[::]:0" } else { "0.0.0.0:0" };
     let upstream = Arc::new(
-        UdpSocket::bind("0.0.0.0:0")
+        UdpSocket::bind(source)
             .await
-            .map_err(|e| format!("upstream socket failed: {e}"))?,
+            .map_err(|e| net::bind_error(source, e))?,
     );
     upstream
         .connect(target_addr)
         .await
-        .map_err(|e| format!("connect {target_addr} failed: {e}"))?;
+        .map_err(|e| transport::of_io(&e).error(&cfg.target).because(e))?;
+    // Where each leg receives, for the reason a leg stopped.
+    let down_local = downstream.local_addr().map(|a| a.to_string()).unwrap_or_else(|_| cfg.listen.clone());
+    let up_local = upstream.local_addr().map(|a| a.to_string()).unwrap_or_else(|_| source.to_string());
 
     let id = jobs.next_id();
-    let info = JobInfo {
-        id,
-        kind: "netsim".into(),
-        label: format!("Impair {} → {}", cfg.listen, cfg.target),
-        started_ms: now_ms(),
-    };
+    let info = JobInfo::new(id, "netsim", format!("Impair {} → {}", cfg.listen, cfg.target))
+        .with("listen", &cfg.listen)
+        .with("target", &cfg.target);
 
     let profile = cfg.profile.clone();
     let stats = Arc::new(Stats::default());
@@ -253,11 +252,19 @@ pub async fn start_proxy(
                 peer: target_addr.to_string(),
                 gate: gate.clone(),
             };
+            let receiving = down_local.clone();
             tokio::spawn(async move {
                 let mut buf = vec![0u8; 65_536];
-                while let Ok((n, from)) = down.recv_from(&mut buf).await {
-                    *client_addr.lock().unwrap() = Some(from);
-                    schedule(buf[..n].to_vec(), &profile, &stats, up.clone(), None, &tap);
+                loop {
+                    match down.recv_from(&mut buf).await {
+                        Ok((n, from)) => {
+                            *client_addr.lock().unwrap() = Some(from);
+                            schedule(buf[..n].to_vec(), &profile, &stats, up.clone(), None, &tap);
+                        }
+                        // A reply to a client that has gone: the relay carries on.
+                        Err(e) if crate::net::udp_transient(&e) => continue,
+                        Err(e) => return EngineError::new("wait.receive_failed").with("target", &receiving).because(e),
+                    }
                 }
             })
         };
@@ -279,19 +286,21 @@ pub async fn start_proxy(
                 peer: target_addr.to_string(),
                 gate: gate.clone(),
             };
+            let receiving = up_local.clone();
             tokio::spawn(async move {
                 let mut buf = vec![0u8; 65_536];
-                while let Ok(n) = up.recv(&mut buf).await {
-                    let dest = *client_addr.lock().unwrap();
-                    if let Some(addr) = dest {
-                        schedule(
-                            buf[..n].to_vec(),
-                            &profile,
-                            &stats,
-                            down.clone(),
-                            Some(addr),
-                            &tap,
-                        );
+                loop {
+                    match up.recv(&mut buf).await {
+                        Ok(n) => {
+                            let dest = *client_addr.lock().unwrap();
+                            if let Some(addr) = dest {
+                                schedule(buf[..n].to_vec(), &profile, &stats, down.clone(), Some(addr), &tap);
+                            }
+                        }
+                        // The target is not listening (yet): the upstream socket is
+                        // connected, so the OS says so here. It may come up later.
+                        Err(e) if crate::net::udp_transient(&e) => continue,
+                        Err(e) => return EngineError::new("wait.receive_failed").with("target", &receiving).because(e),
                     }
                 }
             })
@@ -319,20 +328,119 @@ pub async fn start_proxy(
             })
         };
 
-        // The relay runs until the job is stopped. Both legs and the reporter
-        // are children of this task; without the guard, stopping the job would
-        // abort only this supervisor and leave the relay forwarding traffic and
-        // the reporter emitting. The guard aborts all three when this task's
-        // future is dropped on cancel.
+        // The relay runs until the job is stopped, or until a leg cannot
+        // receive any more. Both legs and the reporter are children of this
+        // task; without the guard, stopping the job would abort only this
+        // supervisor and leave the relay forwarding traffic and the reporter
+        // emitting. The guard aborts all three when this task's future is
+        // dropped on cancel, and when a leg has failed.
         let mut guard = TaskGuard::new();
         guard.watch(c2s.abort_handle());
         guard.watch(s2c.abort_handle());
         guard.watch(reporter.abort_handle());
-        std::future::pending::<()>().await;
+        let (mut c2s, mut s2c) = (c2s, s2c);
+        // A leg that panicked ends the relay the same way, its panic as detail.
+        let error = tokio::select! {
+            ended = &mut c2s => ended.unwrap_or_else(|e| EngineError::new("wait.receive_failed").with("target", &down_local).because(e)),
+            ended = &mut s2c => ended.unwrap_or_else(|e| EngineError::new("wait.receive_failed").with("target", &up_local).because(e)),
+        };
         drop(guard);
+        host_cl.emit("job://ended", serde_json::json!({ "job_id": id, "kind": "netsim", "error": error }));
         jobs_cl.finish(id);
     });
 
     jobs.insert(info.clone(), handle);
     Ok(info)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::host::Recorder;
+    use crate::inspect::Capture;
+
+    fn calm() -> ImpairProfile {
+        ImpairProfile { latency_ms: 0.0, jitter_ms: 0.0, loss: 0.0, duplicate: 0.0, corrupt: 0.0 }
+    }
+
+    async fn recv(socket: &UdpSocket) -> (Vec<u8>, SocketAddr) {
+        let mut buf = vec![0u8; 1024];
+        let (n, from) = tokio::time::timeout(Duration::from_secs(2), socket.recv_from(&mut buf)).await.expect("nothing arrived within 2 s").unwrap();
+        (buf[..n].to_vec(), from)
+    }
+
+    /// The relay's target may come up after the relay: datagrams sent while it
+    /// was not listening come back as an error on the connected upstream socket
+    /// (refused here, WSAECONNRESET on Windows), which must not end either leg.
+    #[tokio::test]
+    async fn keeps_relaying_after_the_target_was_not_listening() {
+        let host = Host::new(Recorder::new(), Capture::new());
+        let jobs = JobRegistry::new();
+        let target_port = UdpSocket::bind("127.0.0.1:0").await.unwrap().local_addr().unwrap().port();
+        let listen_port = UdpSocket::bind("127.0.0.1:0").await.unwrap().local_addr().unwrap().port();
+        let cfg = ProxyConfig { listen: format!("127.0.0.1:{listen_port}"), target: format!("127.0.0.1:{target_port}"), profile: calm() };
+        let job = start_proxy(host, jobs.clone(), cfg).await.unwrap();
+        let client = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let relay: SocketAddr = format!("127.0.0.1:{listen_port}").parse().unwrap();
+
+        // Nobody listens at the target: these are lost, and the OS says so.
+        for _ in 0..3 {
+            client.send_to(b"early", relay).await.unwrap();
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let target = UdpSocket::bind(("127.0.0.1", target_port)).await.unwrap();
+        client.send_to(b"ping", relay).await.unwrap();
+        let (bytes, upstream) = recv(&target).await;
+        assert_eq!(bytes, b"ping", "client → target still relays");
+        target.send_to(b"pong", upstream).await.unwrap();
+        let (bytes, from) = recv(&client).await;
+        assert_eq!((bytes.as_slice(), from), (&b"pong"[..], relay), "target → client still relays");
+        assert!(jobs.list().iter().any(|info| info.id == job.id), "the job is still running");
+        jobs.stop(job.id);
+    }
+
+    #[tokio::test]
+    async fn addresses_that_cannot_work_are_refused_with_a_code() {
+        let host = Host::new(Recorder::new(), Capture::new());
+        let jobs = JobRegistry::new();
+        let start = |listen: &str, target: &str| {
+            start_proxy(host.clone(), jobs.clone(), ProxyConfig { listen: listen.into(), target: target.into(), profile: calm() })
+        };
+        assert!(start("127.0.0.1", "127.0.0.1:9").await.unwrap_err().is("node.bind_invalid"));
+        assert!(start("127.0.0.1:0", "localhost").await.unwrap_err().is("transport.target_invalid"));
+        let taken = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let bind = taken.local_addr().unwrap().to_string();
+        let error = start(&bind, "127.0.0.1:9").await.unwrap_err();
+        assert_eq!((error.code.as_str(), error.params["target"].as_str()), ("transport.address_in_use", bind.as_str()));
+        assert!(jobs.list().is_empty());
+    }
+
+    /// A reply to a client that has gone must not end the relay either.
+    #[tokio::test]
+    async fn keeps_relaying_after_a_client_went_away() {
+        let host = Host::new(Recorder::new(), Capture::new());
+        let jobs = JobRegistry::new();
+        let target = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let listen_port = UdpSocket::bind("127.0.0.1:0").await.unwrap().local_addr().unwrap().port();
+        let cfg = ProxyConfig { listen: format!("127.0.0.1:{listen_port}"), target: target.local_addr().unwrap().to_string(), profile: calm() };
+        let job = start_proxy(host, jobs.clone(), cfg).await.unwrap();
+        let relay: SocketAddr = format!("127.0.0.1:{listen_port}").parse().unwrap();
+
+        let gone = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        gone.send_to(b"hello", relay).await.unwrap();
+        let (_, upstream) = recv(&target).await;
+        drop(gone);
+        target.send_to(b"to nobody", upstream).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let client = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        client.send_to(b"again", relay).await.unwrap();
+        let (bytes, upstream) = recv(&target).await;
+        assert_eq!(bytes, b"again");
+        target.send_to(b"back", upstream).await.unwrap();
+        assert_eq!(recv(&client).await.0, b"back");
+        assert!(jobs.list().iter().any(|info| info.id == job.id));
+        jobs.stop(job.id);
+    }
+}
+

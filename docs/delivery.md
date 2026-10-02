@@ -36,6 +36,8 @@ Docker image — with the interface in a browser.
 | `npm run build:linux` | Linux packages (`.deb`, `.rpm`, `.AppImage`) and their checksums into `artifacts/linux/`, in Docker |
 | `npm run check:image` | The server image (`Dockerfile`) built as `signallab:dev` and smoke-tested (§7) |
 | `npm run check:webkit` | Tooltips in WebKitGTK — the Linux desktop webview — driven with real pointer and key events, in Docker (`docker/webkit`, Ubuntu 22.04) |
+| `npm run e2e` | Every screen end to end in the desktop app (WebView2) and the server (Edge or Chrome) on this machine (§8) |
+| `npm run e2e:linux` | The same on Linux in Docker: the desktop app and the server in WebKitGTK; `-- --image signallab:dev` tours the image instead of a build |
 | `cargo run -p signal-lab-server` | The server on `127.0.0.1:1430` against `dist/` (after `npm run build`) |
 | `npm run release -- X.Y.Z [--dry-run \| --push]` | Cut a release (§4) |
 | `node scripts/version.mjs [check \| set X.Y.Z]` | Print, check or set the version |
@@ -67,10 +69,12 @@ the first stage of a release:
 
 | Job | Runner | Steps |
 | --- | --- | --- |
-| Checks (Windows) | `windows-latest` | Node 24, Rust stable + clippy, cached Cargo build, `npm ci`, `node scripts/check.mjs` |
-| Checks (Linux) | `ubuntu-22.04` | the same, plus WebKitGTK 4.1, librsvg, libxdo, OpenSSL, patchelf; then tooltips in WebKitGTK (`xvfb-run -a node scripts/webkit.mjs --native`) |
-| Server image (x64) | `ubuntu-24.04` | the `Dockerfile` built with Buildx (layers cached in GitHub's cache), then `node scripts/image.mjs smoke` |
+| Checks (Windows) | `windows-latest` | Node 24, Rust stable + clippy, cached Cargo build, `npm ci`, `node scripts/check.mjs`; then the end-to-end tour (`node scripts/e2e.mjs`: the desktop app in WebView2, the server in Edge) |
+| Checks (Linux) | `ubuntu-22.04` | the same, plus WebKitGTK 4.1, librsvg, libxdo, OpenSSL, patchelf; then tooltips in WebKitGTK (`xvfb-run -a node scripts/webkit.mjs --native`) and the tour (`xvfb-run -a node scripts/e2e.mjs --native`) |
+| Server image (x64) | `ubuntu-24.04` | the `Dockerfile` built with Buildx (layers cached in GitHub's cache), `node scripts/image.mjs smoke`, then the tour of the server the image serves, in WebKitGTK |
 | Server image (arm64) | `ubuntu-24.04-arm` | the same, natively on Arm |
+
+A failed tour keeps its screenshots and report as the job's artifact (`e2e-*`, seven days).
 
 Linux runs on 22.04 rather than the newest image so packages built against its glibc
 also run on older distributions. A newer push to a pull request cancels the older run;
@@ -315,3 +319,45 @@ label does that).
 | **D2** Server | `signal-lab-server`: command table, invoke + events + health + files, token rules, data dir, file secrets | Done — `server/tests/server.rs` |
 | **D3** Browser UI | Transport selection, capabilities, desktop-only features adapted | Done — checked in a browser against the server: experiment run with report download, reconnect banner, sign-in and sign-out |
 | **D4** Docker | Image, `deploy/compose.yaml`, GHCR publishing, documentation | Done — the image is smoke-tested in CI on both architectures; first published with the next release |
+
+## 8. The end-to-end tour
+
+`scripts/e2e.mjs` walks every screen of the real app the way a person does and
+checks the far end of everything it sends. The tour itself,
+`tests/e2e/tour.ts`, runs inside the page: it finds controls by their visible
+English labels (from `en.ts`, so a renamed text is a type error, not a broken
+test), types, clicks only what is on screen, enabled and not covered, and reads
+results off the screen. The runner injects it, calls its steps one by one,
+screenshots each, and between steps checks the loopback fixtures
+(`scripts/e2e/fixtures.mjs`): an HTTP API, a UDP and a TCP sink, an OSC device
+(`/ping` → `/pong`, `/status` busy twice then ready) and a small MQTT 3.1.1 broker.
+
+| Target | Here (Windows) | Linux (Docker, CI) |
+| --- | --- | --- |
+| desktop | the debug build of the app (`tauri build --debug --no-bundle`) in WebView2, over DevTools (`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`), with a profile and data folder of its own | the same build in WebKitGTK, driven by WebKitWebDriver (`TAURI_WEBVIEW_AUTOMATION=true`) on Xvfb |
+| server | `signal-lab-server` on a free loopback port, in headless Edge or Chrome on a fresh profile | the server, or the image (`--image`, sharing the tour's network namespace), in MiniBrowser |
+
+What it covers, in order: the shell (every screen, its heading, no horizontal
+overflow, every field and button has an accessible name, every icon button a
+tooltip, the console), capture in the Inspector tab of the bottom panel,
+OSC (monitor, sender, arguments, Enter, generator, *Wait for this*), Signals
+(new, fire, palette, delete), MQTT (connect, subscriptions, retained values,
+*Wait for this*, clear), Broadcast and discovery (a probe and its answer, a
+beacon), the impairment relay (20 datagrams through it), Storm (UDP and TCP,
+counted at the sink), the scanner, HTTP (GET, POST, headers, raw, a burst of 40),
+the library (*Save…* from HTTP into a new folder, `Ctrl+S` after a change, the
+chip that opens it in Signals, a new folder renamed at once, a signal dragged
+into it, `F2`, closing and opening a folder, *Open in HTTP*, a folder removed with
+its contents moving up — and the file on disk: version 2, the empty folder kept),
+experiments (templates, *Send now*, runs, the add menu and undo, a reply
+matched and its frame in the Inspector, Repeat, Loop, parallel flows, export,
+a wire picked and deleted, a hovered wire's ×, undo, and every pane handle by
+pointer and keyboard),
+the Inspector (protocols, filters, a frame and its bytes, *Save as signal*,
+export and download), every screen in Russian with no English left — the
+sidebar, header, console and Inspector tab included — and Stop all. Page errors and engine panics fail the tour.
+
+Screenshots and `report.md` land in `artifacts/e2e/<platform>-<target>/`.
+`--steps a,b` runs only some steps (the shell always runs), `--no-build` reuses
+the last build, `--server-url` tours a server that is already running.
+

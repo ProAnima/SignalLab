@@ -31,11 +31,11 @@ choice. See [Interface & localization](#interface--localization).
 | Module | What it does |
 | --- | --- |
 | **Experiments** | A node canvas for mixed HTTP, OSC, UDP, TCP and MQTT tests. Add a node after the selected one with `A`, drag a wire out of a port to create or connect the next step, send any single action node on its own, branch on a status or a value, and run work in parallel — several wires out of one output (Start included) run their nodes at the same time, and a Join waits for all of them. Focus and native fullscreen modes give the graph more room. Runs highlight each step and save a JSON report under `Documents/SignalLab/runs/`. Event listeners, loops and retries are planned in [ROADMAP.md](ROADMAP.md). |
-| **Signals** | The library: a named, editable packet you can fire again — OSC, raw UDP or an HTTP request — grouped, searchable, and fired from anywhere with `Ctrl+K`. Ships with the recipes for the gear it was written against, saves itself as hand-editable JSON in `Documents/SignalLab/signals.json`, and turns any frame the Inspector caught into a byte-exact replay. |
+| **Signals** | The library: a named, editable packet you can fire again — OSC, raw UDP, an HTTP request or an MQTT publish — in nested folders that open and close, searchable, and fired from anywhere with `Ctrl+K`. *Save…* on the HTTP, OSC and MQTT screens files what you just sent into a folder and keeps the screen tied to it: *Save* (`Ctrl+S`) updates it, *Save as…* copies it, and a chip says where it lives and whether it changed. Folders are made, renamed (`F2`), dragged and removed (their contents move up); *Open in…* loads a signal back into its screen. Ships with the recipes for the gear it was written against, saves itself as hand-editable JSON in `Documents/SignalLab/signals.json`, and turns any frame the Inspector caught into a byte-exact replay. |
 | **OSC** | Send OSC 1.0 messages with typed arguments, monitor an incoming port with live decoding, and drive continuous waveforms (sine / triangle / saw / square / ramp / random) into any endpoint with an on-screen oscilloscope. |
 | **MQTT** | Connect to a broker, subscribe to `#` and watch every topic it holds build up as a live tree — last value, retain flag, QoS, message count. Publish at QoS 0/1/2, announce a last will, and **clear a retained value** (the empty-payload trick), which is the one thing a stuck broker needs and no other tool makes easy. MQTT 3.1.1, hand-written, plain TCP. |
 | **Broadcast** | Fan a payload — OSC, text, or raw hex — out to a **list** of hosts, a **broadcast** address (`SO_BROADCAST`), a **multicast** group, or every host in a **CIDR sweep**. One-shot or as a repeating beacon. The paired **discovery listener** joins multicast groups, tables every peer that answers, and can auto-reply to impersonate a device. |
-| **Inspector** | One timeline for every module: each OSC send, monitor packet, beacon, discovery probe and impaired relay frame, decoded, with a hex dump and the relay's verdict on it. Filter by protocol / direction / text, then export the buffer to `.jsonl` or `.txt`. |
+| **Inspector** | One timeline for every module, in the bottom panel next to the console so it is there on every screen: each OSC send, monitor packet, beacon, discovery probe and impaired relay frame, decoded, with a hex dump and the relay's verdict on it. Its tab shows when capture is on and how many frames it holds; the panel can be maximised. Filter by protocol / direction / text, then export the buffer to `.jsonl` or `.txt`. |
 | **HTTP** | Inspect a single request/response (status, latency, headers, body), then run a concurrent **load burst** with live RPS and min/avg/max latency (percentiles and rate profiles are planned in [ROADMAP.md](ROADMAP.md)). |
 | **Impairment** | A UDP relay that sits between a client and a target and injects **latency, jitter, packet loss, duplication and corruption** — a software network conditioner. |
 | **Storm** | A controlled **UDP/TCP traffic generator** for stress-testing your own servers, with live pps / Mbps metering and a bounded duration. |
@@ -47,8 +47,9 @@ events and can be stopped individually or all at once from the console strip.
 ### Working with an experiment
 
 The **Experiments** button beside the document name opens the templates:
-empty, HTTP status check, HTTP → OSC with a status branch, parallel flows, and
-*OSC ping → reply* (send `/ping` with the run id, wait for `/pong` carrying it).
+empty, HTTP status check, HTTP → OSC with a status branch, parallel flows,
+*OSC ping → reply* (send `/ping` with the run id, wait for `/pong` carrying it),
+and *Poll until ready* (ask a device for `/status` until it answers `ready`).
 The same dialog imports JSON files of any earlier version (up to 4 MiB; they are
 migrated on open) and exports the current document to
 `Documents/SignalLab/exports/`. Import checks the file before showing a preview;
@@ -63,8 +64,15 @@ output), downstream nodes make room, and its main field — URL, OSC address, to
 delay — is focused and selected, so you can type straight away. `Escape` returns
 from the form to the canvas for the next `A`. With the mouse, drag from an output
 port onto a node to connect it, or onto empty canvas to create the next node right
-there; the ＋ on a wire inserts into it. Saved Signals appear in the same menu and
-become nodes with their parameters filled in.
+there; the ＋ on a wire inserts into it. A click on a wire selects it — the
+properties show what it connects — and `Delete` removes it; hovering a wire also
+shows a × above its ＋. Saved Signals appear in the same menu and become nodes with
+their parameters filled in.
+
+The console, the properties pane and the run timeline have handles on their edges:
+drag one, or focus it with Tab and use the arrow keys (Shift for bigger steps); a
+double click or Enter gives the pane its default size back. Sizes, and whether the
+console is open, are kept for the next time.
 
 **Parameters** (`{ }` in the toolbar) hold values such as `api = http://127.0.0.1:8080`;
 any text field can use them as `{{api}}/login`. Typing `{{` (or `Ctrl+Space`) suggests
@@ -140,6 +148,11 @@ src/                     React + TypeScript UI (Vite)
   lib/api.ts             typed command wrappers + event channels
   lib/store.tsx          shared jobs, console and signal-library state
   lib/signals.ts         firing, describing and capturing library signals
+  lib/library.ts         library folders as paths: tree, rename, move, remove (pure)
+  components/SaveSignal.tsx  Save… / Save / Save as… on the sending screens
+  components/SignalTree.tsx  the folder tree: open/close, drag & drop, F2, Delete
+  components/Splitter.tsx    a resizable pane edge (pointer and keyboard)
+  components/TooltipLayer.tsx  the one tooltip: any data-tip, hover + keyboard focus
   lib/experimentGraph.ts graph editing, duplication and DAG layout
   lib/experimentData.ts  template suggestions, upstream variables, JSON paths
   lib/editHistory.ts     bounded, grouped document history (pure reducer)
@@ -148,7 +161,9 @@ src/                     React + TypeScript UI (Vite)
   lib/experimentTemplates.ts template catalog (shared JSON definitions)
   lib/errors.ts          one renderer for every failure: engine errors and legacy text
   components/ErrorMessage.tsx  where · what — why, with the technical detail folded
-  lib/i18n.tsx           locale provider + t() with {placeholder} interpolation
+  lib/i18n.tsx           language provider, detection, useT()
+  lib/translate.ts       placeholders, ICU plurals, numbers for a language (pure)
+  lib/locales/index.ts   the list of languages
   lib/locales/en.ts      source-of-truth dictionary (every key)
   lib/locales/ru.ts      Russian, typed against en.ts
   components/Scope.tsx   canvas oscilloscope / charts (no chart libs)
@@ -228,26 +243,33 @@ The UI is fully bilingual (**English / Russian**), switched live from the header
 - `src/lib/locales/en.ts` is the **source of truth**. Its keys define the
   `Dict` type; `ru.ts` is typed against it, so a missing or misspelled key is a
   **compile error**, never a blank label at runtime.
-- `t("key", { name })` fills `{name}` placeholders. Unknown keys fall back to
-  English, then to the key string itself.
-- **Errors are translated too.** The experiment engine never builds a sentence:
-  it reports an `EngineError` — a stable `code`, values, the node and field it is
+- `t("key", { name })` fills `{name}` placeholders; counts use ICU plurals —
+  `{n, plural, one {# signal} other {# signals}}` — chosen by each language's
+  own rules (`Intl.PluralRules`: Russian has *one*, *few*, *many*). Numbers and
+  sizes are written the language's way. Unknown keys fall back to English, then
+  to the key string itself.
+- **Errors are translated too.** The engine never builds a sentence: every
+  command and every job reports an `EngineError` — a stable `code`, values, the node and field it is
   about, and the system's own wording as `detail`. `src/lib/errors.ts` renders it
   as *Node · Field — message* from `err.<code>` and `field.<key>`, with the
   detail folded underneath, in the banner, the properties panel, the timeline,
   *Send now*, the console and the HTTP screen alike. Network failures are
   classified (refused, timeout, name not found, unreachable, port in use, TLS …)
   because each has a different fix. A `cargo test` scans the engine for every
-  code and field key and fails if `en.ts` has no text for one. Commands outside
-  the experiment engine still reject with plain text, which is shown as it is.
+  code and field key and fails if `en.ts` has no text for one. The jobs in the
+  console strip are named the same way (`job.<kind>` with their values).
 - Console log lines store a **key + params**, not finished text, so switching
   language re-renders the whole history in the new one.
-- The initial language comes from `navigator.language`, and the choice persists
-  in `localStorage`.
+- The initial language is the first of the system's languages
+  (`navigator.languages`) that Signal Lab has, and the choice persists in
+  `localStorage`. The starter signals are written in it on first run; the
+  server's sign-in page follows the browser's `Accept-Language`.
+- Help is in tooltips, in the current language, on hover and on keyboard focus —
+  a field shows its label's.
 
-**Adding a language:** copy `en.ts` to e.g. `de.ts`, translate the values, then
-register it in `LANGS` and `DICTS` in `src/lib/i18n.tsx`. TypeScript will list
-any keys you missed.
+**Adding a language** is a dictionary and one line in `src/lib/locales/index.ts`;
+[docs/localization.md](docs/localization.md) walks through it and lists what the
+checks catch (missing texts, other placeholders, missing plural forms).
 
 **Translating a label?** Keep single words short, or let them wrap — metric
 captions sit in ~112px cards. `.metric .k` uses `overflow-wrap: anywhere` as a
@@ -301,7 +323,14 @@ Before pushing, run **`npm run check`** — the same checks CI runs on Windows a
 Linux, in order: versions agree, UI tests, TypeScript + production build, `clippy`
 with warnings as errors, Rust tests for the whole workspace. `npm run check:linux` runs
 them on Linux in Docker, and `npm run check:image` builds and smoke-tests the server
-image. How CI, releases and server mode work: [docs/delivery.md](docs/delivery.md).
+image.
+
+**`npm run e2e`** walks every screen of the real app — the desktop app and the
+server in a browser — sending real traffic to loopback stand-ins (an HTTP API, UDP and
+TCP sinks, an OSC device, an MQTT broker) and checking what arrived; `npm run e2e:linux`
+does the same on Linux in WebKitGTK, and CI runs both for every change and for the
+server image. Screenshots of every step land in `artifacts/e2e/`. How CI, releases and
+server mode work: [docs/delivery.md](docs/delivery.md).
 
 ## Build a desktop bundle
 
@@ -449,9 +478,9 @@ Issues and pull requests are welcome. A few things worth knowing:
 ### Experiment node catalogue
 
 The editor supports Start/End, HTTP requests, OSC messages, UDP datagrams, TCP,
-MQTT publishing, Log, Delay, **Wait for OSC** and **Wait for UDP**, Extract, value
-checks and branches, status branching, parallel branch/join, and HTTP
-status/body/header/latency checks. The palette groups actions, waits (*Observe*),
+MQTT publishing, Log, Delay, **Wait for OSC**, **Wait for UDP** and **Wait for MQTT**,
+Extract, value checks and branches, status branching, parallel branch/join, **Loop**,
+and HTTP status/body/header/latency checks. The palette groups actions, waits (*Observe*),
 data, checks and flow; search supports Russian/English labels and protocol names,
 with arrow-key selection and Enter to insert. HTTP node forms include request
 headers, and OSC forms include typed arguments.
@@ -468,8 +497,19 @@ without it a timeout fails the step and says how many other messages arrived.
 A port that cannot be opened stops the run before any traffic. *Listen now* on a
 wait listens with that step alone.
 
+Every step that sends or listens can **retry** (attempts, the same or a doubling
+pause), and every step that sends can **repeat** — a number of times or for a time,
+every so many milliseconds with an optional seeded jitter; `{{counter}}` numbers the
+sends. An OSC message or UDP datagram can **wait for its reply** in the same step.
+
+A **Loop** runs the steps on its *Body* output, which lead back to it, again and
+again — at most a set number of times, and until an exit condition holds when it has
+one (checked after each iteration, so the body can set what it tests). *Done*
+follows; the optional *Limit* when the iterations ran out first. Inside the body
+`{{counter}}` is the iteration's number; the wire back is the only one that may go
+backwards, and a body runs as one branch (no parallel work inside).
+
 MQTT nodes use unauthenticated brokers (QoS 0–2, retain, 15-second deadline).
 Body checks search the bounded HTTP preview: a match succeeds; a missing match in
 a truncated preview fails explicitly. Header names are case-insensitive; values
-and body text are case-sensitive. Retries, repeats, loops and Wait for MQTT are
-on the roadmap.
+and body text are case-sensitive.

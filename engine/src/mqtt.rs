@@ -23,6 +23,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
+use super::error::{EngineError, EngineResult};
+use super::experiment_actions::host_port;
 use super::inspect::{self, Frame, Gate};
 use super::jobs::{now_ms, JobInfo, JobRegistry};
 use super::transport::{self, Cause};
@@ -111,7 +113,8 @@ struct StateEvent {
     /// `connected`, `subscribed`, `closed`.
     state: &'static str,
     broker: String,
-    error: Option<String>,
+    /// Why a `closed` connection ended; none for a clean close.
+    error: Option<EngineError>,
     grants: Vec<Grant>,
 }
 
@@ -130,7 +133,7 @@ fn emit_state(
     job_id: u64,
     broker: &str,
     state: &'static str,
-    error: Option<String>,
+    error: Option<EngineError>,
     grants: Vec<Grant>,
 ) {
     host.emit(
@@ -185,13 +188,11 @@ impl MqttHub {
         }
     }
 
-    pub fn send(&self, id: u64, cmd: Cmd) -> Result<(), String> {
-        let map = self.inner.lock().map_err(|_| "connection table is poisoned")?;
-        let tx = map
-            .get(&id)
-            .ok_or_else(|| format!("connection #{id} is not open"))?;
-        tx.send(cmd)
-            .map_err(|_| format!("connection #{id} has already closed"))
+    pub fn send(&self, id: u64, cmd: Cmd) -> EngineResult<()> {
+        let closed = || EngineError::new("mqtt.not_connected").with("id", id);
+        let map = self.inner.lock().map_err(|_| closed())?;
+        let tx = map.get(&id).ok_or_else(closed)?;
+        tx.send(cmd).map_err(|_| closed())
     }
 }
 
@@ -223,11 +224,12 @@ fn connect_opts<'a>(cfg: &'a MqttConfig) -> ConnectOpts<'a> {
     }
 }
 
-/// Why connecting or a one-shot publish failed: the sentence the MQTT screen
-/// shows, and the cause, which experiments report as a localized error.
+/// Why connecting or a one-shot publish failed: the cause, which becomes the
+/// code a person reads, and the socket's or the broker's own wording.
 #[derive(Debug)]
 pub struct MqttFailure {
     pub cause: MqttCause,
+    /// Technical detail (an OS error, a packet), possibly empty.
     pub text: String,
 }
 
@@ -250,36 +252,53 @@ impl MqttFailure {
         MqttFailure { cause, text: text.into() }
     }
 
-    fn io(error: &std::io::Error, text: String) -> Self {
-        MqttFailure::new(MqttCause::Transport(transport::of_io(error)), text)
+    fn io(error: &std::io::Error) -> Self {
+        MqttFailure::new(MqttCause::Transport(transport::of_io(error)), error.to_string())
+    }
+
+    /// The failure as a person reads it, about `broker`; the text is its detail.
+    pub fn error(self, broker: &str) -> EngineError {
+        let error = match self.cause {
+            MqttCause::Transport(cause) => cause.error(broker),
+            // The return codes 3.1.1 defines each have a fix of their own.
+            MqttCause::Refused(code) => match code {
+                1 => EngineError::new("mqtt.refused_protocol"),
+                2 => EngineError::new("mqtt.refused_client_id"),
+                3 => EngineError::new("mqtt.refused_unavailable"),
+                4 => EngineError::new("mqtt.refused_credentials"),
+                5 => EngineError::new("mqtt.refused_not_authorized"),
+                _ => EngineError::new("mqtt.refused"),
+            }
+            .with("broker", broker)
+            .with("code", code),
+            MqttCause::NoAnswer => EngineError::new("mqtt.no_answer").with("broker", broker),
+            MqttCause::Topic => EngineError::new("mqtt.topic_invalid"),
+            MqttCause::Protocol => EngineError::new("mqtt.protocol").with("broker", broker),
+        };
+        error.because(self.text)
     }
 }
 
-/// The MQTT screen and the library show the sentence.
-impl From<MqttFailure> for String {
-    fn from(failure: MqttFailure) -> String {
-        failure.text
-    }
+/// The broker a configuration dials, `host:port` (IPv6 in brackets).
+pub fn broker_of(cfg: &MqttConfig) -> String {
+    host_port(&cfg.host, cfg.port)
 }
 
 /// Dial and complete CONNECT/CONNACK before the job exists, so a wrong password
 /// or a closed port is an error on the button rather than a job that dies a
 /// moment later somewhere else.
 pub(crate) async fn dial(cfg: &MqttConfig) -> Result<(TcpStream, String), MqttFailure> {
-    if cfg.client_id.trim().is_empty() {
-        return Err(MqttFailure::new(MqttCause::Protocol, "a client id is required — brokers reject an empty one"));
-    }
-    let broker = format!("{}:{}", cfg.host.trim(), cfg.port);
+    let broker = broker_of(cfg);
     let mut stream = tokio::time::timeout(HANDSHAKE_TIMEOUT, TcpStream::connect(&broker))
         .await
-        .map_err(|_| MqttFailure::new(MqttCause::Transport(Cause::Timeout), format!("connecting to {broker} timed out")))?
-        .map_err(|e| MqttFailure::io(&e, format!("connect {broker} failed: {e}")))?;
+        .map_err(|_| MqttFailure::new(MqttCause::Transport(Cause::Timeout), ""))?
+        .map_err(|e| MqttFailure::io(&e))?;
     let _ = stream.set_nodelay(true);
 
     stream
         .write_all(&encode_connect(&connect_opts(cfg)))
         .await
-        .map_err(|e| MqttFailure::io(&e, format!("sending CONNECT to {broker} failed: {e}")))?;
+        .map_err(|e| MqttFailure::io(&e))?;
 
     let mut buf = Vec::with_capacity(64);
     let mut chunk = [0u8; 512];
@@ -287,28 +306,23 @@ pub(crate) async fn dial(cfg: &MqttConfig) -> Result<(TcpStream, String), MqttFa
     let connack = tokio::time::timeout(HANDSHAKE_TIMEOUT, async {
         loop {
             match stream.read(&mut chunk).await {
-                Ok(0) => return Err(protocol(format!("{broker} closed the connection without a CONNACK"))),
+                Ok(0) => return Err(protocol("closed the connection without a CONNACK".into())),
                 Ok(n) => buf.extend_from_slice(&chunk[..n]),
-                Err(e) => return Err(MqttFailure::io(&e, format!("reading CONNACK from {broker} failed: {e}"))),
+                Err(e) => return Err(MqttFailure::io(&e)),
             }
             match decode(&buf) {
                 Ok(Some((Packet::ConnAck { code, .. }, _))) => return Ok(code),
-                Ok(Some((other, _))) => {
-                    return Err(protocol(format!("{broker} answered CONNECT with {other:?}")))
-                }
+                Ok(Some((other, _))) => return Err(protocol(format!("answered CONNECT with {other:?}"))),
                 Ok(None) => continue,
-                Err(e) => return Err(protocol(format!("{broker} sent a malformed CONNACK: {e}"))),
+                Err(e) => return Err(protocol(format!("malformed CONNACK: {e}"))),
             }
         }
     })
     .await
-    .map_err(|_| MqttFailure::new(MqttCause::NoAnswer, format!("{broker} accepted the socket but never sent a CONNACK")))??;
+    .map_err(|_| MqttFailure::new(MqttCause::NoAnswer, ""))??;
 
     if connack != 0 {
-        return Err(MqttFailure::new(
-            MqttCause::Refused(connack),
-            format!("{broker} refused the connection: {}", connack_reason(connack)),
-        ));
+        return Err(MqttFailure::new(MqttCause::Refused(connack), connack_reason(connack)));
     }
     Ok((stream, broker))
 }
@@ -330,16 +344,17 @@ pub async fn start_client(
     jobs: JobRegistry,
     hub: MqttHub,
     cfg: MqttConfig,
-) -> Result<JobInfo, String> {
-    let (stream, broker) = dial(&cfg).await?;
+) -> EngineResult<JobInfo> {
+    // Brokers reject an empty one, or invent one nobody can recognize.
+    if cfg.client_id.trim().is_empty() {
+        return Err(EngineError::new("mqtt.client_id_required"));
+    }
+    let (stream, broker) = dial(&cfg).await.map_err(|failure| failure.error(&broker_of(&cfg)))?;
 
     let id = jobs.next_id();
-    let info = JobInfo {
-        id,
-        kind: "mqtt".into(),
-        label: format!("MQTT {broker} as {}", cfg.client_id),
-        started_ms: now_ms(),
-    };
+    let info = JobInfo::new(id, "mqtt", format!("MQTT {broker} as {}", cfg.client_id))
+        .with("broker", &broker)
+        .with("client", &cfg.client_id);
 
     let (tx, rx) = unbounded_channel();
     hub.insert(id, tx);
@@ -369,12 +384,14 @@ async fn run(
     stream: TcpStream,
     cfg: MqttConfig,
     mut rx: UnboundedReceiver<Cmd>,
-) -> Option<String> {
+) -> Option<EngineError> {
     let local = stream
         .local_addr()
         .map(|a| a.to_string())
         .unwrap_or_default();
     let (mut rd, mut wr) = tokio::io::split(stream);
+    // Reading or writing failed: the network's cause, about the broker.
+    let lost = |e: std::io::Error| Some(transport::of_io(&e).error(broker).because(e));
 
     emit_state(host, id, broker, "connected", None, Vec::new());
 
@@ -396,7 +413,7 @@ async fn run(
             .map(|s| (s.filter.clone(), s.qos))
             .collect();
         if let Err(e) = wr.write_all(&encode_subscribe(pid, &filters)).await {
-            return Some(format!("sending SUBSCRIBE failed: {e}"));
+            return lost(e);
         }
         pending_subs.insert(pid, cfg.subscribe.clone());
     }
@@ -419,9 +436,9 @@ async fn run(
         tokio::select! {
             read = rd.read(&mut chunk) => {
                 match read {
-                    Ok(0) => return Some(format!("{broker} closed the connection")),
+                    Ok(0) => return Some(Cause::Reset.error(broker)),
                     Ok(n) => inbuf.extend_from_slice(&chunk[..n]),
-                    Err(e) => return Some(format!("read from {broker} failed: {e}")),
+                    Err(e) => return lost(e),
                 }
                 let mut at = 0usize;
                 loop {
@@ -461,20 +478,20 @@ async fn run(
                                     };
                                     if let Some(bytes) = reply {
                                         if let Err(e) = wr.write_all(&bytes).await {
-                                            return Some(format!("acknowledging a message failed: {e}"));
+                                            return lost(e);
                                         }
                                     }
                                 }
                                 Packet::PubRel(pid) => {
                                     pending_in.remove(&pid);
                                     if let Err(e) = wr.write_all(&encode_pubcomp(pid)).await {
-                                        return Some(format!("completing a QoS 2 message failed: {e}"));
+                                        return lost(e);
                                     }
                                 }
                                 // Our own QoS 2 publish: the broker has it, release it.
                                 Packet::PubRec(pid) => {
                                     if let Err(e) = wr.write_all(&encode_pubrel(pid)).await {
-                                        return Some(format!("releasing a QoS 2 publish failed: {e}"));
+                                        return lost(e);
                                     }
                                 }
                                 Packet::PubAck(pid) | Packet::PubComp(pid) => {
@@ -506,7 +523,7 @@ async fn run(
                             }
                         }
                         Ok(None) => break,
-                        Err(e) => return Some(format!("{broker} sent a malformed packet: {e}")),
+                        Err(e) => return Some(EngineError::new("mqtt.protocol").with("broker", broker).because(e)),
                     }
                 }
                 if at > 0 { inbuf.drain(..at); }
@@ -544,14 +561,14 @@ async fn run(
                     }
                 };
                 if let Err(e) = wr.write_all(&bytes).await {
-                    return Some(format!("write to {broker} failed: {e}"));
+                    return lost(e);
                 }
             }
 
             _ = pinger.tick() => {
                 if cfg.keep_alive_s > 0 {
                     if let Err(e) = wr.write_all(&encode_pingreq()).await {
-                        return Some(format!("keepalive to {broker} failed: {e}"));
+                        return lost(e);
                     }
                 }
             }
@@ -576,14 +593,12 @@ async fn run(
 
 /// Publishing to a filter is a typo that costs a connection and comes back as a
 /// confusing broker-side error, so it is refused before dialling.
-fn validate_publish_topic(topic: &str) -> Option<String> {
+fn validate_publish_topic(topic: &str) -> Option<EngineError> {
     if topic.trim().is_empty() {
-        return Some("a topic is required".into());
+        return Some(EngineError::new("mqtt.topic_required"));
     }
     if topic.contains('+') || topic.contains('#') {
-        return Some(format!(
-            "'{topic}' is a filter, not a topic — publishing cannot use wildcards"
-        ));
+        return Some(EngineError::new("node.topic_wildcard"));
     }
     None
 }
@@ -599,8 +614,12 @@ pub async fn publish_once(
     payload: String,
     qos: u8,
     retain: bool,
-) -> Result<String, String> {
-    publish(host, cfg, topic, payload, qos, retain).await.map_err(String::from)
+) -> EngineResult<String> {
+    if let Some(refused) = validate_publish_topic(&topic) {
+        return Err(refused);
+    }
+    let broker = broker_of(&cfg);
+    publish(host, cfg, topic, payload, qos, retain).await.map_err(|failure| failure.error(&broker))
 }
 
 /// `publish_once` with the cause of a failure kept.
@@ -612,8 +631,8 @@ pub async fn publish(
     qos: u8,
     retain: bool,
 ) -> Result<String, MqttFailure> {
-    if let Some(refused) = validate_publish_topic(&topic) {
-        return Err(MqttFailure::new(MqttCause::Topic, refused));
+    if validate_publish_topic(&topic).is_some() {
+        return Err(MqttFailure::new(MqttCause::Topic, ""));
     }
     // Brokers evict the older client when a new one arrives with the same id, so
     // a one-shot publish that reused it would knock the live connection off the
@@ -651,7 +670,7 @@ pub async fn publish(
     stream
         .write_all(&framed)
         .await
-        .map_err(|e| MqttFailure::io(&e, format!("publish to {broker} failed: {e}")))?;
+        .map_err(|e| MqttFailure::io(&e))?;
 
     // QoS 0 is done when the bytes are out; the others owe us a round trip, and
     // reporting success before it lands would defeat the point of asking for it.
@@ -662,11 +681,11 @@ pub async fn publish(
             loop {
                 match stream.read(&mut chunk).await {
                     Ok(0) => {
-                        let text = format!("{broker} closed before acknowledging");
+                        let text = "closed the connection before acknowledging the publish";
                         return Err(MqttFailure::new(MqttCause::Transport(Cause::Reset), text));
                     }
                     Ok(n) => buf.extend_from_slice(&chunk[..n]),
-                    Err(e) => return Err(MqttFailure::io(&e, format!("reading the acknowledgement failed: {e}"))),
+                    Err(e) => return Err(MqttFailure::io(&e)),
                 }
                 let mut at = 0usize;
                 loop {
@@ -679,7 +698,7 @@ pub async fn publish(
                                     stream
                                         .write_all(&encode_pubrel(pid))
                                         .await
-                                        .map_err(|e| MqttFailure::io(&e, format!("PUBREL failed: {e}")))?;
+                                        .map_err(|e| MqttFailure::io(&e))?;
                                 }
                                 Packet::PubComp(_) => return Ok(()),
                                 _ => {}
@@ -697,7 +716,7 @@ pub async fn publish(
             }
         })
         .await
-        .map_err(|_| MqttFailure::new(MqttCause::NoAnswer, format!("{broker} never acknowledged the publish")))?;
+        .map_err(|_| MqttFailure::new(MqttCause::NoAnswer, "the publish was never acknowledged"))?;
         settled?;
     }
 
@@ -741,10 +760,56 @@ mod tests {
     }
 
     #[test]
+    fn failures_become_codes_about_the_broker() {
+        let refused = |code| MqttFailure::new(MqttCause::Refused(code), connack_reason(code)).error("b:1883");
+        let credentials = refused(4);
+        assert_eq!((credentials.code.as_str(), credentials.params["broker"].as_str(), credentials.params["code"].as_str()), ("mqtt.refused_credentials", "b:1883", "4"));
+        assert_eq!(credentials.detail.as_deref(), Some("bad username or password"));
+        let codes: Vec<String> = [1, 2, 3, 5, 9].into_iter().map(|code| refused(code).into_code()).collect();
+        assert_eq!(codes, ["mqtt.refused_protocol", "mqtt.refused_client_id", "mqtt.refused_unavailable", "mqtt.refused_not_authorized", "mqtt.refused"]);
+        let lost = MqttFailure::io(&std::io::Error::from(std::io::ErrorKind::ConnectionRefused)).error("b:1883");
+        assert_eq!((lost.code.as_str(), lost.params["target"].as_str()), ("transport.refused", "b:1883"));
+        assert_eq!(MqttFailure::new(MqttCause::NoAnswer, "").error("b:1883").detail, None, "no text, no detail");
+        assert_eq!(broker_of(&MqttConfig { host: " ::1 ".into(), ..config() }), "[::1]:1883");
+    }
+
+    #[tokio::test]
+    async fn a_closed_port_and_a_missing_client_id_are_refused_before_any_job() {
+        let host = Host::new(crate::host::Recorder::new(), crate::inspect::Capture::new());
+        let jobs = JobRegistry::new();
+        let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let closed = MqttConfig { port, ..config() };
+        let error = start_client(host.clone(), jobs.clone(), MqttHub::new(), closed.clone()).await.unwrap_err();
+        assert_eq!((error.code.as_str(), error.params["target"].clone()), ("transport.refused", format!("127.0.0.1:{port}")));
+        let nameless = MqttConfig { client_id: "  ".into(), ..closed.clone() };
+        assert!(start_client(host.clone(), jobs.clone(), MqttHub::new(), nameless).await.unwrap_err().is("mqtt.client_id_required"));
+        let topic = publish_once(host.clone(), closed.clone(), "a/#".into(), String::new(), 0, false).await.unwrap_err();
+        assert!(topic.is("node.topic_wildcard"), "refused before dialling: {topic}");
+        let publish = publish_once(host, closed, "a/b".into(), String::new(), 0, false).await.unwrap_err();
+        assert!(publish.is("transport.refused"), "{publish}");
+        assert!(jobs.list().is_empty());
+    }
+
+    fn config() -> MqttConfig {
+        MqttConfig {
+            host: "127.0.0.1".into(),
+            port: 1883,
+            client_id: "lab".into(),
+            username: String::new(),
+            password: String::new(),
+            keep_alive_s: 60,
+            clean_session: true,
+            will: None,
+            subscribe: Vec::new(),
+        }
+    }
+
+    #[test]
     fn a_wildcard_cannot_be_published_to() {
-        assert!(validate_publish_topic("zone/+/command").is_some());
-        assert!(validate_publish_topic("global/#").is_some());
-        assert!(validate_publish_topic("   ").is_some());
+        let refused = |topic: &str| validate_publish_topic(topic).map(EngineError::into_code);
+        assert_eq!(refused("zone/+/command").as_deref(), Some("node.topic_wildcard"));
+        assert_eq!(refused("global/#").as_deref(), Some("node.topic_wildcard"));
+        assert_eq!(refused("   ").as_deref(), Some("mqtt.topic_required"));
         assert!(validate_publish_topic("site/device/command/restart").is_none());
         // A retained value is cleared by publishing an empty payload to a real
         // topic, so an empty *payload* must stay legal.

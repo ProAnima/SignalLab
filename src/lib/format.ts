@@ -1,15 +1,29 @@
+import { formatNumber } from "./translate.ts";
+
+/** Unit names for sizes, from the dictionary of the current language. */
+export interface SizeUnits { b: string; kb: string; mb: string; gb: string }
+
+let language = "en";
+let units: SizeUnits = { b: "B", kb: "KB", mb: "MB", gb: "GB" };
+
+/**
+ * Numbers and sizes follow the interface language (grouping, decimal sign,
+ * unit names). Set by the language provider before anything renders.
+ */
+export function setFormatLanguage(lang: string, names: SizeUnits) {
+  language = lang;
+  units = names;
+}
+
 export function fmtBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(2)} MB`;
-  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
+  if (n < 1024) return `${formatNumber(n, language, 0)} ${units.b}`;
+  if (n < 1024 * 1024) return `${formatNumber(n / 1024, language, 1)} ${units.kb}`;
+  if (n < 1024 * 1024 * 1024) return `${formatNumber(n / 1024 / 1024, language, 2)} ${units.mb}`;
+  return `${formatNumber(n / 1024 / 1024 / 1024, language, 2)} ${units.gb}`;
 }
 
 export function fmtNum(n: number, digits = 0): string {
-  return n.toLocaleString("en-US", {
-    minimumFractionDigits: digits,
-    maximumFractionDigits: digits,
-  });
+  return formatNumber(n, language, digits);
 }
 
 export function fmtTime(ts: number): string {

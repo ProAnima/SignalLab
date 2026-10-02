@@ -6,7 +6,7 @@ import {
 } from "../lib/api";
 import { useStore } from "../lib/store";
 import { useT, type TKey, type Translate } from "../lib/i18n";
-import { useJobStream } from "../lib/hooks";
+import { useFieldIds, useJobStream } from "../lib/hooks";
 import { OscArgsEditor, toOscArg, type ArgRow } from "../components/OscArgs";
 import { fmtBytes, fmtNum } from "../lib/format";
 
@@ -40,10 +40,11 @@ function PayloadEditor({
   disabled?: boolean;
   t: Translate;
 }) {
+  const fid = useFieldIds();
   return (
     <>
       <div className="field">
-        <label>{t("bc.payload")}</label>
+        <label data-tip={t("bc.payloadHint")}>{t("bc.payload")}</label>
         <div className="chips" role="radiogroup" aria-label={t("bc.payload")}>
           {(["osc", "text", "hex"] as PayloadKind[]).map((k) => (
             <button
@@ -63,15 +64,15 @@ function PayloadEditor({
       {value.kind === "osc" && (
         <>
           <div className="field">
-            <label>{t("common.address")}</label>
-            <input
+            <label htmlFor={fid("address")} data-tip={t("common.addressHint")}>{t("common.address")}</label>
+            <input id={fid("address")}
               value={value.address}
               disabled={disabled}
               onChange={(e) => onChange({ ...value, address: e.target.value })}
             />
           </div>
           <div className="field">
-            <label>{t("common.arguments")}</label>
+            <label data-tip={t("common.argumentsHint")}>{t("common.arguments")}</label>
             <OscArgsEditor
               args={value.args}
               disabled={disabled}
@@ -83,8 +84,8 @@ function PayloadEditor({
 
       {value.kind === "text" && (
         <div className="field">
-          <label data-tip={t("bc.textHint")}>{t("bc.text")}</label>
-          <textarea
+          <label htmlFor={fid("text")} data-tip={t("bc.textHint")}>{t("bc.text")}</label>
+          <textarea id={fid("text")}
             value={value.text}
             disabled={disabled}
             style={{ minHeight: 56 }}
@@ -95,8 +96,8 @@ function PayloadEditor({
 
       {value.kind === "hex" && (
         <div className="field">
-          <label data-tip={t("bc.hexHint")}>{t("bc.hex")}</label>
-          <textarea
+          <label htmlFor={fid("hex")} data-tip={t("bc.hexHint")}>{t("bc.hex")}</label>
+          <textarea id={fid("hex")}
             value={value.hex}
             disabled={disabled}
             style={{ minHeight: 56 }}
@@ -134,6 +135,7 @@ function fromLocalIp(ip: string, mode: TargetMode): string | null {
 export function BroadcastView() {
   const { pushLog, pushError, refreshJobs, stopJob, jobGone, host } = useStore();
   const t = useT();
+  const fid = useFieldIds();
 
   // ---- emitter ----
   const [mode, setMode] = useState<TargetMode>("broadcast");
@@ -339,8 +341,8 @@ export function BroadcastView() {
 
           {mode === "sweep" && (
             <div className="field">
-              <label>{t("bc.port")}</label>
-              <input type="number" value={port} onChange={(e) => setPort(+e.target.value)} />
+              <label htmlFor={fid("port")} data-tip={t("bc.portHint")}>{t("bc.port")}</label>
+              <input id={fid("port")} type="number" value={port} onChange={(e) => setPort(+e.target.value)} />
             </div>
           )}
 
@@ -353,17 +355,17 @@ export function BroadcastView() {
             <div style={{ marginTop: 10 }}>
               <div className="row">
                 <div className="field">
-                  <label>{t("bc.bindSource")}</label>
-                  <input value={bind} onChange={(e) => setBind(e.target.value)} placeholder="0.0.0.0:0" />
+                  <label htmlFor={fid("bind-source")} data-tip={t("bc.bindSourceHint")}>{t("bc.bindSource")}</label>
+                  <input id={fid("bind-source")} value={bind} onChange={(e) => setBind(e.target.value)} placeholder="0.0.0.0:0" />
                 </div>
                 <div className="field">
-                  <label>{t("bc.ttl")}</label>
-                  <input type="number" value={ttl} onChange={(e) => setTtl(+e.target.value)} />
+                  <label htmlFor={fid("ttl")} data-tip={t("bc.ttlHint")}>{t("bc.ttl")}</label>
+                  <input id={fid("ttl")} type="number" value={ttl} onChange={(e) => setTtl(+e.target.value)} />
                 </div>
               </div>
               {mode === "multicast" && (
                 <div className="field">
-                  <label className="checkbox">
+                  <label className="checkbox" data-tip={t("bc.mcastLoopHint")}>
                     <input type="checkbox" checked={mcastLoop} onChange={(e) => setMcastLoop(e.target.checked)} />
                     {t("bc.mcastLoop")}
                   </label>
@@ -381,16 +383,16 @@ export function BroadcastView() {
           <p className="section-label" style={{ marginTop: 20 }}>{t("bc.beacon")}</p>
           <div className="row">
             <div className="field">
-              <label>{t("bc.beaconRate")}</label>
-              <input type="number" step="0.5" value={rate} disabled={!!beaconJob} onChange={(e) => setRate(+e.target.value)} />
+              <label htmlFor={fid("beacon-rate")} data-tip={t("bc.beaconRateHint")}>{t("bc.beaconRate")}</label>
+              <input id={fid("beacon-rate")} type="number" step="0.5" value={rate} disabled={!!beaconJob} onChange={(e) => setRate(+e.target.value)} />
             </div>
             <div className="field">
-              <label data-tip={t("common.zeroUnlimited")}>{t("bc.beaconRounds")}</label>
-              <input type="number" value={count} disabled={!!beaconJob} onChange={(e) => setCount(+e.target.value)} />
+              <label htmlFor={fid("beacon-rounds")} data-tip={t("common.zeroUnlimited")}>{t("bc.beaconRounds")}</label>
+              <input id={fid("beacon-rounds")} type="number" value={count} disabled={!!beaconJob} onChange={(e) => setCount(+e.target.value)} />
             </div>
             <div className="field">
-              <label data-tip={t("common.zeroUnlimited")}>{t("bc.beaconSeconds")}</label>
-              <input type="number" value={duration} disabled={!!beaconJob} onChange={(e) => setDuration(+e.target.value)} />
+              <label htmlFor={fid("beacon-seconds")} data-tip={t("common.zeroUnlimited")}>{t("bc.beaconSeconds")}</label>
+              <input id={fid("beacon-seconds")} type="number" value={duration} disabled={!!beaconJob} onChange={(e) => setDuration(+e.target.value)} />
             </div>
           </div>
           <div className="btn-row">
@@ -450,18 +452,18 @@ export function BroadcastView() {
             <p className="section-label" data-tip={t("bc.firewallHint")}>{t("bc.discovery")}</p>
             <div className="row">
               <div className="field">
-                <label>{t("common.bind")}</label>
-                <input value={dBind} disabled={!!discJob} onChange={(e) => setDBind(e.target.value)} />
+                <label htmlFor={fid("discovery-bind")} data-tip={t("common.bindHint")}>{t("common.bind")}</label>
+                <input id={fid("discovery-bind")} value={dBind} disabled={!!discJob} onChange={(e) => setDBind(e.target.value)} />
               </div>
               <div className="field">
-                <label>{t("bc.joinGroups")}</label>
-                <input value={groups} disabled={!!discJob} placeholder="239.1.1.1, 224.0.0.251" onChange={(e) => setGroups(e.target.value)} />
+                <label htmlFor={fid("groups")} data-tip={t("bc.joinGroupsHint")}>{t("bc.joinGroups")}</label>
+                <input id={fid("groups")} value={groups} disabled={!!discJob} placeholder="239.1.1.1, 224.0.0.251" onChange={(e) => setGroups(e.target.value)} />
               </div>
             </div>
             <div className="row">
               <div className="field">
-                <label data-tip={t("bc.interfaceHint")}>{t("bc.interface")}</label>
-                <input value={iface} disabled={!!discJob} placeholder={host?.local_ip ?? "0.0.0.0"} onChange={(e) => setIface(e.target.value)} />
+                <label htmlFor={fid("interface")} data-tip={t("bc.interfaceHint")}>{t("bc.interface")}</label>
+                <input id={fid("interface")} value={iface} disabled={!!discJob} placeholder={host?.local_ip ?? "0.0.0.0"} onChange={(e) => setIface(e.target.value)} />
               </div>
               <div className="field check">
                 <label className="checkbox" data-tip={t("bc.reuseHint")}>
@@ -483,12 +485,12 @@ export function BroadcastView() {
                 <PayloadEditor value={response} onChange={setResponse} disabled={!!discJob} t={t} />
                 <div className="row">
                   <div className="field">
-                    <label>{t("bc.replyDelay")}</label>
-                    <input type="number" value={respondDelay} disabled={!!discJob} onChange={(e) => setRespondDelay(+e.target.value)} />
+                    <label htmlFor={fid("reply-delay")} data-tip={t("bc.replyDelayHint")}>{t("bc.replyDelay")}</label>
+                    <input id={fid("reply-delay")} type="number" value={respondDelay} disabled={!!discJob} onChange={(e) => setRespondDelay(+e.target.value)} />
                   </div>
                   <div className="field">
-                    <label>{t("bc.matchContains")}</label>
-                    <input value={matchContains} disabled={!!discJob} placeholder={t("common.anything")} onChange={(e) => setMatchContains(e.target.value)} />
+                    <label htmlFor={fid("match-contains")} data-tip={t("bc.matchContainsHint")}>{t("bc.matchContains")}</label>
+                    <input id={fid("match-contains")} value={matchContains} disabled={!!discJob} placeholder={t("common.anything")} onChange={(e) => setMatchContains(e.target.value)} />
                   </div>
                 </div>
               </div>
@@ -503,8 +505,8 @@ export function BroadcastView() {
             <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "16px 0 8px", flexWrap: "wrap" }}>
               <p className="section-label" style={{ margin: 0 }}>{t("bc.peers")}</p>
               <span className="tag-chip">{t("bc.peersSeen", { n: peers.length })}</span>
-              {report && <span className="tag-chip">{t("bc.peersPackets", { n: fmtNum(report.packets) })}</span>}
-              {report && report.responses > 0 && <span className="tag-chip">{t("bc.peersReplies", { n: fmtNum(report.responses) })}</span>}
+              {report && <span className="tag-chip">{t("bc.peersPackets", { n: report.packets })}</span>}
+              {report && report.responses > 0 && <span className="tag-chip">{t("bc.peersReplies", { n: report.responses })}</span>}
             </div>
             <div className="scroll-y" style={{ maxHeight: 260, border: "1px solid var(--border)", borderRadius: "var(--radius-sm)" }}>
               <table className="grid">
@@ -528,7 +530,7 @@ export function BroadcastView() {
                         </td>
                         <td style={{ color: p.proto === "osc" ? "var(--accent)" : "var(--text-dim)" }}>{p.proto}</td>
                         <td>{fmtNum(p.packets)}</td>
-                        <td style={{ color: "var(--text-faint)" }}>{(age / 1000).toFixed(1)}s</td>
+                        <td style={{ color: "var(--text-faint)" }}>{fmtNum(age / 1000, 1)} {t("unit.s")}</td>
                         <td style={{ color: "var(--text-dim)" }}>{p.last_summary}</td>
                       </tr>
                     );

@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { api, on, EV, type CaptureStats, type Frame, type InspectBatch } from "../lib/api";
 import { useStore } from "../lib/store";
-import { downloadUrl } from "../lib/platform";
+import { downloadUrl, saveDownload } from "../lib/platform";
 import { useT } from "../lib/i18n";
 import { fmtBytes, fmtNum, fmtTime } from "../lib/format";
 import { signalFromFrame } from "../lib/signals";
@@ -23,7 +23,10 @@ function verdictClass(v: string | null): string {
   return "verdict-ok";
 }
 
-/** `reveal`: a frame to select (from the experiment timeline); `at` makes a repeat a new request. */
+/**
+ * The Inspector, in the bottom panel beside the console. `reveal`: a frame to
+ * select (from the experiment timeline); `at` makes a repeat a new request.
+ */
 export function InspectView({ reveal }: { reveal?: { seq: number; at: number } | null } = {}) {
   const { pushLog, pushError, library, setLibrary } = useStore();
   const t = useT();
@@ -48,8 +51,13 @@ export function InspectView({ reveal }: { reveal?: { seq: number; at: number } |
   }, [reveal]);
 
   // Repopulate from the engine's ring so switching views doesn't lose history.
+  // Frames arrive in number order; one the view already holds is never added twice
+  // (the snapshot and the first batch can overlap).
   useEffect(() => {
-    api.inspectSnapshot(VIEW_CAPACITY).then(setRows).catch(() => {});
+    api.inspectSnapshot(VIEW_CAPACITY).then((snapshot) => setRows((prev) => {
+      const last = snapshot.length ? snapshot[snapshot.length - 1].seq : 0;
+      return [...snapshot, ...prev.filter((f) => f.seq > last)];
+    })).catch(() => {});
     api.inspectStats().then(setStats).catch(() => {});
 
     const un = on<InspectBatch>(EV.inspectBatch, (e) => {
@@ -57,9 +65,12 @@ export function InspectView({ reveal }: { reveal?: { seq: number; at: number } |
       setStats(b.stats);
       if (pausedRef.current || b.frames.length === 0) return;
       setRows((prev) => {
+        const last = prev.length ? prev[prev.length - 1].seq : 0;
+        const fresh = b.frames.filter((f) => f.seq > last);
+        if (fresh.length === 0) return prev;
         const incoming: Row[] = b.skipped_now > 0
-          ? b.frames.map((f, i) => (i === 0 ? { ...f, gap: b.skipped_now } : f))
-          : b.frames;
+          ? fresh.map((f, i) => (i === 0 ? { ...f, gap: b.skipped_now } : f))
+          : fresh;
         const next = prev.concat(incoming);
         return next.length > VIEW_CAPACITY ? next.slice(next.length - VIEW_CAPACITY) : next;
       });
@@ -88,7 +99,7 @@ export function InspectView({ reveal }: { reveal?: { seq: number; at: number } |
    */
   const saveAsSignal = (frame: Frame) => {
     const name = (frame.summary || `${frame.proto} #${frame.seq}`).slice(0, 48);
-    const signal = signalFromFrame(frame, library, name);
+    const signal = signalFromFrame(frame, library, name, t);
     if (!signal) return;
     setLibrary([...library, signal]);
     pushLog("ok", "inspect", "log.signalCaptured", { seq: frame.seq, name: signal.name });
@@ -100,7 +111,7 @@ export function InspectView({ reveal }: { reveal?: { seq: number; at: number } |
       pushLog("ok", "inspect", "log.captureSaved", { path });
       // In a browser the file is on the server: hand it to the browser to save.
       const url = downloadUrl(path);
-      if (url) window.location.assign(url);
+      if (url) saveDownload(url);
     } catch (e) {
       pushError("inspect", e);
     }
@@ -138,22 +149,18 @@ export function InspectView({ reveal }: { reveal?: { seq: number; at: number } |
   const armed = stats?.enabled ?? false;
 
   return (
-    <div>
-      <div className="view-head">
-        <h1 data-tip={t("ins.blurb")}>{t("ins.title")}</h1>
-      </div>
-
+    <div className="inspect-view">
       <div className="capture-bar">
         <span className={"rec-dot " + (armed ? (paused ? "paused" : "live") : "")} />
-        <button className={armed ? "danger" : "primary"} onClick={() => arm(!armed)}>
+        <button className={armed ? "danger" : "primary"} data-tip={t("ins.armHint")} onClick={() => arm(!armed)}>
           {armed ? t("ins.disarm") : t("ins.arm")}
         </button>
-        <button className="ghost" onClick={() => setPaused(!paused)} disabled={!armed}>
+        <button className="ghost" data-tip={t("ins.pauseHint")} onClick={() => setPaused(!paused)} disabled={!armed}>
           {paused ? t("ins.resume") : t("ins.pause")}
         </button>
-        <button className="ghost" onClick={clear}>{t("common.clear")}</button>
-        <button className="ghost sm" onClick={() => exportTo("jsonl")}>{t("ins.exportJsonl")}</button>
-        <button className="ghost sm" onClick={() => exportTo("txt")}>{t("ins.exportTxt")}</button>
+        <button className="ghost" data-tip={t("ins.clearHint")} onClick={clear}>{t("common.clear")}</button>
+        <button className="ghost sm" data-tip={t("ins.exportHint")} onClick={() => exportTo("jsonl")}>{t("ins.exportJsonl")}</button>
+        <button className="ghost sm" data-tip={t("ins.exportHint")} onClick={() => exportTo("txt")}>{t("ins.exportTxt")}</button>
         <div style={{ flex: 1 }} />
         <span className="tag-chip">{t("ins.captured", { n: fmtNum(stats?.total ?? 0) })}</span>
         <span className="tag-chip">{fmtBytes(stats?.bytes ?? 0)}</span>
@@ -171,24 +178,25 @@ export function InspectView({ reveal }: { reveal?: { seq: number; at: number } |
         <input
           style={{ flex: "1 1 240px", maxWidth: 320 }}
           placeholder={t("ins.filterPlaceholder")}
+          aria-label={t("ins.filterPlaceholder")}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
         <div className="chips" role="group" aria-label={t("common.protocol")}>
           {PROTOS.map((p) => (
             <button key={p} className={"chip" + (protoFilter.includes(p) ? " on" : "")}
-              aria-pressed={protoFilter.includes(p)}
+              aria-pressed={protoFilter.includes(p)} data-tip={t("ins.protoHint", { proto: p })}
               onClick={() => toggle(protoFilter, setProtoFilter, p)}>{p}</button>
           ))}
         </div>
         <div className="chips" role="group" aria-label={t("ins.dir")}>
           {["tx", "rx"].map((d) => (
             <button key={d} className={"chip" + (dirFilter.includes(d) ? " on" : "")}
-              aria-pressed={dirFilter.includes(d)}
+              aria-pressed={dirFilter.includes(d)} data-tip={t(d === "tx" ? "ins.txHint" : "ins.rxHint")}
               onClick={() => toggle(dirFilter, setDirFilter, d)}>{d}</button>
           ))}
         </div>
-        {(query || protoFilter.length || dirFilter.length) && (
+        {(query !== "" || protoFilter.length > 0 || dirFilter.length > 0) && (
           <button className="ghost sm" onClick={() => { setQuery(""); setProtoFilter([]); setDirFilter([]); }}>
             {t("common.reset")}
           </button>
@@ -235,7 +243,7 @@ export function InspectView({ reveal }: { reveal?: { seq: number; at: number } |
                         that follows it in time. */}
                     {!!f.gap && (
                       <tr className="gap" data-tip={t("ins.gapHint")}>
-                        <td colSpan={7}>{t("ins.gap", { n: fmtNum(f.gap) })}</td>
+                        <td colSpan={7}>{t("ins.gap", { n: f.gap })}</td>
                       </tr>
                     )}
                   </Fragment>

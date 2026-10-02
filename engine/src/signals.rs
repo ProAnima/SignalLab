@@ -10,10 +10,11 @@
 //! hand-editable, and small enough to commit next to the project whose gear it
 //! describes.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use super::error::{EngineError, EngineResult};
 use super::http::HttpRequest;
 use super::osc_codec::OscArg;
 
@@ -82,6 +83,11 @@ pub struct Library {
     pub version: u32,
     #[serde(default)]
     pub signals: Vec<Signal>,
+    /// Every folder, as paths ("API/Auth"), so an empty one is kept. A
+    /// signal's `group` that no folder lists is a folder too (a version 1
+    /// file, a hand edit).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub folders: Vec<String>,
 }
 
 /// The library plus where it came from, so the UI can point at the file.
@@ -93,7 +99,8 @@ pub struct LibraryFile {
     pub seeded: bool,
 }
 
-const VERSION: u32 = 1;
+/// 2 added `folders`; a version 1 file reads the same, without empty folders.
+const VERSION: u32 = 2;
 
 fn sig(id: &str, group: &str, name: &str, note: &str, body: SignalBody) -> Signal {
     Signal {
@@ -122,6 +129,7 @@ fn osc(target: &str, address: &str, args: Vec<OscArg>) -> SignalBody {
 pub fn seed() -> Library {
     Library {
         version: VERSION,
+        folders: Vec::new(),
         signals: vec![
             sig(
                 "osc-fader",
@@ -134,7 +142,7 @@ pub fn seed() -> Library {
                 "osc-types",
                 "OSC",
                 "Every argument type",
-                "What the far end decodes back, for a device that is picky about type tags. Note that                  an OSC bool is a tag (T or F) and carries no payload byte — sending the string                  \"true\" instead is the classic silent drop.",
+                "What the far end decodes back, for a device that is picky about type tags. Note that an OSC bool is a tag (T or F) and carries no payload byte — sending the string \"true\" instead is the classic silent drop.",
                 osc(
                     "127.0.0.1:9000",
                     "/types",
@@ -153,7 +161,7 @@ pub fn seed() -> Library {
                 "osc-id-and-value",
                 "OSC",
                 "Identifier and value",
-                "Two strings: which device, and what it read. Card readers and scanners usually report                  this way, and receivers often check the first argument and ignore anything that does                  not match — so a mismatch looks exactly like nothing arriving at all.",
+                "Two strings: which device, and what it read. Card readers and scanners usually report this way, and receivers often check the first argument and ignore anything that does not match — so a mismatch looks exactly like nothing arriving at all.",
                 osc(
                     "127.0.0.1:9000",
                     "/tag",
@@ -167,14 +175,14 @@ pub fn seed() -> Library {
                 "osc-trigger",
                 "OSC",
                 "Trigger with no arguments",
-                "An address on its own. A type tag string is still on the wire, which strict parsers                  require and hand-rolled ones often forget to send.",
+                "An address on its own. A type tag string is still on the wire, which strict parsers require and hand-rolled ones often forget to send.",
                 osc("127.0.0.1:9000", "/cue/go", Vec::new()),
             ),
             sig(
                 "mqtt-publish",
                 "MQTT",
                 "Publish a value",
-                "QoS 0: out on the wire and forgotten. Fine for telemetry, wrong for a command you                  need to know landed.",
+                "QoS 0: out on the wire and forgotten. Fine for telemetry, wrong for a command you need to know landed.",
                 SignalBody::Mqtt {
                     broker: "127.0.0.1:1883".into(),
                     topic: "lab/example/value".into(),
@@ -187,7 +195,7 @@ pub fn seed() -> Library {
                 "mqtt-retained",
                 "MQTT",
                 "Set a retained value",
-                "The broker keeps it and hands it to every client that subscribes afterwards — which                  is how a device picks up its configuration at boot without asking anyone for it.",
+                "The broker keeps it and hands it to every client that subscribes afterwards — which is how a device picks up its configuration at boot without asking anyone for it.",
                 SignalBody::Mqtt {
                     broker: "127.0.0.1:1883".into(),
                     topic: "lab/example/config".into(),
@@ -200,7 +208,7 @@ pub fn seed() -> Library {
                 "mqtt-clear-retained",
                 "MQTT",
                 "Clear a retained value",
-                "An empty payload with retain set is the only way to remove one. A stale retained                  value is a classic reason a device boots into the wrong state with nothing in the                  logs to explain it.",
+                "An empty payload with retain set is the only way to remove one. A stale retained value is a classic reason a device boots into the wrong state with nothing in the logs to explain it.",
                 SignalBody::Mqtt {
                     broker: "127.0.0.1:1883".into(),
                     topic: "lab/example/config".into(),
@@ -213,7 +221,7 @@ pub fn seed() -> Library {
                 "http-reachable",
                 "HTTP",
                 "Is the service up?",
-                "A plain reachability check. A refused connection is reported as an error rather than                  a status code, which is the difference between \"wrong answer\" and \"nobody home\".",
+                "A plain reachability check. A refused connection is reported as an error rather than a status code, which is the difference between \"wrong answer\" and \"nobody home\".",
                 SignalBody::Http {
                     request: HttpRequest {
                         method: "GET".into(),
@@ -228,7 +236,7 @@ pub fn seed() -> Library {
                 "udp-raw",
                 "Raw",
                 "Raw UDP bytes",
-                "An opaque payload — the same form a frame saved out of the Inspector takes, so a                  captured packet replays byte for byte.",
+                "An opaque payload — the same form a frame saved out of the Inspector takes, so a captured packet replays byte for byte.",
                 SignalBody::Udp {
                     target: "127.0.0.1:9000".into(),
                     payload: RawPayload::Hex {
@@ -240,16 +248,30 @@ pub fn seed() -> Library {
     }
 }
 
+fn io_error(path: &Path, error: std::io::Error) -> EngineError {
+    EngineError::new("file.io").with("path", path.display()).because(error)
+}
+
+/// The library in `text`, read from `path`. A broken file names itself: the
+/// fix is to edit or delete it, and it is hand-editable by design — so it is
+/// reported, never replaced with the starter set.
+fn parse(text: &str, path: &Path) -> EngineResult<Library> {
+    serde_json::from_str(text).map_err(|error| {
+        EngineError::new("signals.json_invalid")
+            .with("path", path.display())
+            .with("line", error.line())
+            .with("column", error.column())
+            .because(error)
+    })
+}
+
 /// Read the library, writing the starter set the first time.
-pub fn load() -> Result<LibraryFile, String> {
+pub fn load() -> EngineResult<LibraryFile> {
     let path = library_path();
     let shown = path.display().to_string();
     match std::fs::read_to_string(&path) {
         Ok(text) => {
-            let library: Library = serde_json::from_str(&text)
-                // Naming the file matters more than naming the serde path: the
-                // fix is to edit or delete it, and it is hand-editable by design.
-                .map_err(|e| format!("{shown} is not a valid signal library: {e}"))?;
+            let library = parse(&text, &path)?;
             Ok(LibraryFile {
                 path: shown,
                 library,
@@ -265,26 +287,36 @@ pub fn load() -> Result<LibraryFile, String> {
                 seeded: true,
             })
         }
-        Err(e) => Err(format!("cannot read {shown}: {e}")),
+        Err(e) => Err(io_error(&path, e)),
     }
 }
 
 /// Replace the file with this library. The UI owns the list and hands back the
 /// whole thing — with a few dozen entries there is nothing to be gained from a
 /// merge protocol, and plenty to lose.
-pub fn save(library: &Library) -> Result<String, String> {
+pub fn save(library: &Library) -> EngineResult<String> {
     let dir = super::paths::data_dir();
-    std::fs::create_dir_all(&dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
+    std::fs::create_dir_all(&dir).map_err(|e| io_error(&dir, e))?;
     let path = library_path();
-    let text =
-        serde_json::to_string_pretty(library).map_err(|e| format!("cannot encode library: {e}"))?;
-    std::fs::write(&path, text).map_err(|e| format!("cannot write {}: {e}", path.display()))?;
+    let text = serde_json::to_string_pretty(library).map_err(|e| EngineError::new("signals.encode").because(e))?;
+    std::fs::write(&path, text).map_err(|e| io_error(&path, e))?;
     Ok(path.display().to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_library_from_before_folders_reads_and_empty_folders_round_trip() {
+        let old: Library = serde_json::from_str(r#"{"version":1,"signals":[]}"#).unwrap();
+        assert!(old.folders.is_empty());
+        let library = Library { version: VERSION, signals: vec![], folders: vec!["Venue/Stage".into()] };
+        let text = serde_json::to_string(&library).unwrap();
+        assert_eq!(serde_json::from_str::<Library>(&text).unwrap().folders, ["Venue/Stage"]);
+        // No list at all when there is nothing to keep, so the file stays as it was.
+        assert!(!serde_json::to_string(&seed()).unwrap().contains("folders"));
+    }
 
     #[test]
     fn seed_round_trips_through_json() {
@@ -296,6 +328,17 @@ mod tests {
             back.signals.iter().any(|s| matches!(s.body, SignalBody::Mqtt { .. })),
             "the mqtt variant has to survive the round trip too"
         );
+    }
+
+    /// Notes are read in a text box, where a run of spaces shows; the
+    /// interface also matches them to its texts by id (`seed.<id>.note`).
+    #[test]
+    fn seed_texts_are_plain_sentences() {
+        for s in seed().signals {
+            for text in [&s.name, &s.note] {
+                assert!(!text.contains("  ") && text.trim() == text.as_str(), "{}: {text:?}", s.id);
+            }
+        }
     }
 
     #[test]
@@ -343,9 +386,15 @@ mod tests {
 
     #[test]
     fn a_broken_file_names_itself_instead_of_being_replaced() {
-        let err = serde_json::from_str::<Library>("{ not json }")
-            .map_err(|e| format!("{} is not a valid signal library: {e}", library_path().display()))
-            .unwrap_err();
-        assert!(err.contains("signals.json"), "error should name the file: {err}");
+        let path = library_path();
+        let error = parse("{
+  \"version\": 2,
+  not json }", &path).unwrap_err();
+        assert_eq!(error.code, "signals.json_invalid");
+        assert!(error.params["path"].ends_with("signals.json"), "the error names the file: {error}");
+        assert_eq!((error.params["line"].as_str(), error.params["column"].as_str()), ("3", "3"));
+        assert!(error.detail.is_some(), "the parser's wording is the detail");
+        // A file of the wrong shape is reported the same way.
+        assert!(parse(r#"{"signals": []}"#, &path).unwrap_err().is("signals.json_invalid"));
     }
 }

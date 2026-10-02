@@ -36,25 +36,17 @@ use crate::secrets::{self, SecretStore};
 use crate::signals::{self, Library};
 use crate::storm::{self, StormConfig};
 
-/// How a command failed: a structured engine error (experiments, secrets,
-/// arguments), or the text the older modules report. Serialized as it is, so
-/// the interface receives exactly what the desktop app always received.
+/// How a command failed: always an engine error, a code the interface words
+/// in the reader's language. Serialized as the error itself.
 #[derive(Debug, Serialize)]
 #[serde(untagged)]
 pub enum Failure {
     Engine(EngineError),
-    Text(String),
 }
 
 impl From<EngineError> for Failure {
     fn from(error: EngineError) -> Self {
         Failure::Engine(error)
-    }
-}
-
-impl From<String> for Failure {
-    fn from(text: String) -> Self {
-        Failure::Text(text)
     }
 }
 
@@ -322,7 +314,7 @@ impl Service {
             "mqtt_subscribe" => {
                 let a = args!(command, value, { job_id: u64, filters: Vec<Sub> });
                 if a.filters.is_empty() {
-                    return Err(Failure::Text("nothing to subscribe to".into()));
+                    return Err(EngineError::new("mqtt.filter_required").into());
                 }
                 self.mqtt.send(a.job_id, Cmd::Subscribe(a.filters))?;
                 reply(())
@@ -330,7 +322,7 @@ impl Service {
             "mqtt_unsubscribe" => {
                 let a = args!(command, value, { job_id: u64, filters: Vec<String> });
                 if a.filters.is_empty() {
-                    return Err(Failure::Text("nothing to unsubscribe from".into()));
+                    return Err(EngineError::new("mqtt.filter_required").into());
                 }
                 self.mqtt.send(a.job_id, Cmd::Unsubscribe(a.filters))?;
                 reply(())
@@ -368,7 +360,7 @@ mod tests {
     fn code(reply: Reply) -> String {
         match reply {
             Err(Failure::Engine(error)) => error.into_code(),
-            other => panic!("expected an engine error, got {other:?}"),
+            Ok(value) => panic!("expected an engine error, got {value}"),
         }
     }
 
@@ -388,9 +380,32 @@ mod tests {
         assert_eq!(parsed["version"], crate::experiment::VERSION);
         let failure = service.invoke("experiment_parse", json!({ "text": "{" })).await.unwrap_err();
         assert!(matches!(&failure, Failure::Engine(error) if error.is("file.json_invalid")), "{failure:?}");
-        // Legacy modules still fail with their text.
-        let text = service.invoke("mqtt_subscribe", json!({ "jobId": 1, "filters": [] })).await.unwrap_err();
-        assert_eq!(serde_json::to_value(text).unwrap(), json!("nothing to subscribe to"));
+    }
+
+    /// Every module fails with a code; nothing reaches the interface as a sentence.
+    #[tokio::test]
+    async fn the_tool_screens_fail_with_codes_too() {
+        let (service, recorder) = service();
+        let failures = [
+            ("mqtt_subscribe", json!({ "jobId": 1, "filters": [] }), "mqtt.filter_required"),
+            ("mqtt_unsubscribe", json!({ "jobId": 1, "filters": [] }), "mqtt.filter_required"),
+            ("mqtt_publish", json!({ "jobId": 7, "topic": "a", "payload": "", "qos": 0, "retain": false }), "mqtt.not_connected"),
+            ("osc_send", json!({ "target": "127.0.0.1", "address": "/x", "args": [] }), "transport.target_invalid"),
+            ("osc_monitor_start", json!({ "bind": "nowhere" }), "node.bind_invalid"),
+            ("scan_start", json!({ "config": { "host": " ", "port_start": 1, "port_end": 2 } }), "scan.host_required"),
+            ("storm_start", json!({ "config": { "target": "x", "protocol": "udp", "size": 1, "rate": 1 } }), "transport.target_invalid"),
+            ("inspect_export", json!({ "format": "jsonl" }), "inspect.empty"),
+        ];
+        for (command, args, expected) in failures {
+            let failure = service.invoke(command, args).await.unwrap_err();
+            let value = serde_json::to_value(&failure).unwrap();
+            assert_eq!(value["code"], expected, "{command}: {value}");
+        }
+        let mqtt = service.invoke("mqtt_publish", json!({ "jobId": 7, "topic": "a", "payload": "", "qos": 0, "retain": false })).await.unwrap_err();
+        assert_eq!(serde_json::to_value(mqtt).unwrap(), json!({ "code": "mqtt.not_connected", "params": { "id": "7" } }));
+        let client = json!({ "host": "127.0.0.1", "port": 1, "client_id": " " });
+        assert_eq!(code(service.invoke("mqtt_connect", json!({ "config": client })).await), "mqtt.client_id_required");
+        assert!(service.jobs().list().is_empty() && recorder.events().is_empty(), "nothing started, nothing emitted");
     }
 
     #[tokio::test]

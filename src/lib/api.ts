@@ -5,7 +5,10 @@ import { invoke, listen, type UnlistenFn, type EventCallback } from "./transport
 export interface JobInfo {
   id: number;
   kind: string;
+  /** English, for logs; show `job.<kind>` filled in with `params` instead. */
   label: string;
+  /** The values `job.<kind>` names (target, bind, host, …). */
+  params?: Record<string, string>;
   started_ms: number;
 }
 
@@ -52,10 +55,10 @@ export type TransportCause = "refused" | "timeout" | "dns" | "unreachable" | "re
   | "address_unavailable" | "denied" | "tls" | "target_invalid" | "failed";
 
 /**
- * The structured error of the experiment engine (`engine/error.rs`): a code
- * the interface translates as `err.<code>`, values for its message, and where
- * it happened. Other modules still reject with plain strings; `lib/errors.ts`
- * renders both.
+ * The engine's one error shape (`engine/error.rs`): a code the interface
+ * translates as `err.<code>`, values for its message, where it happened, and
+ * the system's own words as `detail`. Every command rejects with one;
+ * `lib/errors.ts` renders it.
  */
 export interface EngineError {
   code: string;
@@ -73,6 +76,11 @@ export type CompareOp = "eq" | "ne" | "lt" | "le" | "gt" | "ge" | "contains" | "
 
 /** Try a failed send or wait again: attempts in all, the pause before the second, fixed or doubling. */
 export interface Retry { attempts: number; delay_ms: number; backoff?: "fixed" | "exponential" }
+/**
+ * Send an action more than once: `count` sends, or as many as fit in
+ * `duration_ms`, `interval_ms` apart plus up to `jitter_ms` (from the seed).
+ */
+export interface Repeat { until: "count" | "duration"; count: number; duration_ms: number; interval_ms: number; jitter_ms: number }
 /** The answer an OSC message waits for in the same step (the matching of Wait for OSC). */
 export interface OscReply { bind: string; address: string; args: ArgRule[]; timeout_ms: number; variable: string }
 /** The answer a datagram waits for in the same step (the matching of Wait for UDP). */
@@ -82,6 +90,8 @@ export type ExperimentNode = {
   id: string; x: number; y: number;
   /** Actions and waits only. */
   retry?: Retry;
+  /** Actions only. */
+  repeat?: Repeat;
 } & (
   | { type: "start" | "end" | "fork" | "join" }
   | { type: "delay"; ms: number }
@@ -97,6 +107,7 @@ export type ExperimentNode = {
   | { type: "osc"; target: string; address: string; args: OscArg[]; reply?: OscReply }
   | { type: "udp"; target: string; text: string; reply?: UdpReply }
   | { type: "extract"; variable: string; from: ExtractFrom; expr: string }
+  | { type: "loop"; max: number; until?: LoopUntil | null }
   | { type: "assert_value"; value: string; op: CompareOp; expected: string }
   | { type: "branch_value"; value: string; op: CompareOp; expected: string }
   | { type: "wait_osc"; bind: string; address: string; args: ArgRule[]; timeout_ms: number; variable: string }
@@ -108,7 +119,9 @@ export type ExperimentNode = {
 /** `args[index] <op> value` on a received OSC message; the value is a template. */
 export interface ArgRule { index: number; op: CompareOp; value: string }
 export type UdpMode = "any" | "contains" | "regex" | "hex";
-export type ExperimentPort = "next" | "yes" | "no" | "branch1" | "branch2" | "matched" | "timeout";
+export type ExperimentPort = "next" | "yes" | "no" | "branch1" | "branch2" | "matched" | "timeout" | "body" | "done" | "limit";
+/** A Loop's exit condition, checked after each iteration: the comparison of Check value. */
+export interface LoopUntil { value: string; op: CompareOp; expected: string }
 
 export interface ExperimentParam { name: string; value: string }
 /** What Send now reports; the resolved request never comes back. */
@@ -140,7 +153,7 @@ export interface Experiment {
 export interface ExperimentStep {
   job_id: number; ts: number; node_id: string;
   /** `retry`: an attempt failed (`error` says why) and the step runs again after a pause. */
-  state: "running" | "passed" | "failed" | "retry"; detail: string;
+  state: "running" | "passed" | "failed" | "retry" | "repeating"; detail: string;
   message_key?: string | null; message_params?: Record<string, string | number>;
   /** Variables this step wrote. */
   vars?: Record<string, unknown>;
@@ -243,6 +256,8 @@ export interface EmitResult {
   errors: number;
   resolved: string[];
   summary: string;
+  /** Why the first failed packet failed, when one did. */
+  error?: EngineError;
 }
 
 export interface DiscoveryConfig {
@@ -340,6 +355,8 @@ export interface Signal {
 export interface Library {
   version: number;
   signals: Signal[];
+  /** Every folder, as paths ("API/Auth"), empty ones included; a signal's `group` is a folder too. */
+  folders?: string[];
 }
 
 export interface LibraryFile {
@@ -384,7 +401,8 @@ export interface OscInbound {
   from: string;
   bytes: number;
   messages: OscMessage[];
-  error: string | null;
+  /** A packet that did not decode (`osc.packet_malformed`, the parser's words as detail). */
+  error: EngineError | null;
 }
 export interface GenTick { job_id: number; ts: number; value: number; sent: number; }
 export interface BurstProgress {
@@ -403,7 +421,7 @@ export interface StormStat {
 export interface OpenPort { job_id: number; ts: number; port: number; banner: string | null; }
 export interface ScanProgress { job_id: number; ts: number; done: number; total: number; open: number; }
 /** Experiments end with an `EngineError`; the other jobs with text. */
-export interface JobEnded { job_id: number; kind: string; error: string | EngineError | null; }
+export interface JobEnded { job_id: number; kind: string; error: EngineError | null; }
 export interface EmitStat {
   job_id: number; ts: number; rounds: number; packets: number;
   bytes: number; errors: number; pps: number;
@@ -424,7 +442,7 @@ export interface MqttStateEvent {
   ts: number;
   state: "connected" | "subscribed" | "closed";
   broker: string;
-  error: string | null;
+  error: EngineError | null;
   grants: MqttGrant[];
 }
 export interface MqttAck {

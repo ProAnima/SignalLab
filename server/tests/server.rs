@@ -124,6 +124,11 @@ async fn with_a_token_everything_but_health_and_sign_in_needs_it() {
     let english = client().get(format!("{}/login", running.url)).header("accept-language", "en-GB,en;q=0.8").send().await.unwrap().text().await.unwrap();
     assert!(english.contains(r#"data-tip="The token is set where the server runs"#), "{english}");
     assert!(!english.contains("{{"), "every placeholder is filled in");
+    // The most preferred language the page has, by weight — not just the first tag.
+    for (accept, lang) in [("de-DE,ru;q=0.9,en;q=0.8", "ru"), ("en;q=0.5, ru", "ru"), ("ru;q=0, en", "en"), ("fr, ja", "en"), ("", "en")] {
+        let page = client().get(format!("{}/login", running.url)).header("accept-language", accept).send().await.unwrap().text().await.unwrap();
+        assert!(page.contains(&format!(r#"<html lang="{lang}">"#)), "{accept}: {lang}");
+    }
 
     // Signing in sets an HttpOnly, SameSite=Strict session cookie; signing out ends it.
     let wrong = client().post(format!("{}/login", running.url)).form(&[("token", "nope")]).send().await.unwrap();
@@ -150,8 +155,8 @@ async fn failures_keep_their_shape_and_unknown_routes_say_so() {
     assert_eq!(unknown.json::<Value>().await.unwrap()["code"], "command.unknown");
     let invalid = invoke(&running, "experiment_parse", json!({ "text": "{" }), None).await.json::<Value>().await.unwrap();
     assert_eq!(invalid["code"], "file.json_invalid");
-    let text = invoke(&running, "mqtt_subscribe", json!({ "jobId": 1, "filters": [] }), None).await.json::<Value>().await.unwrap();
-    assert_eq!(text, json!("nothing to subscribe to"), "legacy modules still answer with text");
+    let tool = invoke(&running, "mqtt_subscribe", json!({ "jobId": 1, "filters": [] }), None).await.json::<Value>().await.unwrap();
+    assert_eq!(tool["code"], "mqtt.filter_required", "the tool screens' commands fail with codes too");
     let read_only = invoke(&running, "secret_set", json!({ "name": "API_TOKEN", "value": "x" }), None).await.json::<Value>().await.unwrap();
     assert_eq!(read_only["code"], "secret.read_only");
     let missing = client().get(format!("{}/api/nothing", running.url)).send().await.unwrap();

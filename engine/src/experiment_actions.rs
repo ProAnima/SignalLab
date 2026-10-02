@@ -46,15 +46,10 @@ fn io_error(error: std::io::Error, target: &str) -> EngineError {
     transport::of_io(&error).error(target).because(error)
 }
 
+/// The MQTT screen's error, about the node's broker or topic field.
 pub(crate) fn mqtt_error(failure: MqttFailure, broker: &str) -> EngineError {
-    let error = match failure.cause {
-        MqttCause::Transport(cause) => cause.error(broker),
-        MqttCause::Refused(code) => EngineError::new("mqtt.refused").with("broker", broker).with("code", code),
-        MqttCause::NoAnswer => EngineError::new("mqtt.no_answer").with("broker", broker),
-        MqttCause::Topic => EngineError::new("mqtt.topic_invalid").in_field(Field::new("topic")),
-        MqttCause::Protocol => EngineError::new("mqtt.protocol").with("broker", broker),
-    };
-    error.because(failure.text).in_field(Field::new("broker"))
+    let field = if failure.cause == MqttCause::Topic { Field::new("topic") } else { Field::new("broker") };
+    failure.error(broker).in_field(field)
 }
 
 async fn tcp(host: &str, port: u16, payload: &str, timeout_ms: u64) -> EngineResult<ActionOutcome> {
@@ -79,9 +74,7 @@ async fn tcp(host: &str, port: u16, payload: &str, timeout_ms: u64) -> EngineRes
 
 async fn http_request(host: &Host, request: &http::HttpRequest) -> EngineResult<ActionOutcome> {
     let in_url = |error: EngineError| error.in_field(Field::new("url"));
-    let response = http::request_once(host.clone(), request.clone())
-        .await
-        .map_err(|error| in_url(EngineError::new("transport.failed").with("target", &request.url).because(error)))?;
+    let response = http::request_once(host.clone(), request.clone()).await.map_err(in_url)?;
     match &response.error {
         Some(error) => {
             let cause = response.cause.unwrap_or(Cause::Failed);
@@ -124,9 +117,7 @@ async fn udp(host: &Host, target: &str, text: &str) -> EngineResult<ActionOutcom
         count: 1,
         duration_s: 0.0,
     };
-    let result = broadcast::send_once(host.clone(), config)
-        .await
-        .map_err(|error| in_target(EngineError::new("transport.failed").with("target", target).because(error)))?;
+    let result = broadcast::send_once(host.clone(), config).await.map_err(in_target)?;
     if result.errors > 0 {
         let (cause, text) = result.first_error.unwrap_or((Cause::Failed, String::new()));
         let failed = cause.error(target).with("failed", result.errors).with("total", result.targets).because(text);

@@ -1,5 +1,5 @@
-import type { ExperimentNode, OscReply, Retry, UdpMode, UdpReply } from "../lib/api";
-import { DEFAULT_RETRY, defaultReply } from "../lib/experimentData";
+import type { ExperimentNode, OscReply, Repeat, Retry, UdpMode, UdpReply } from "../lib/api";
+import { DEFAULT_REPEAT, DEFAULT_RETRY, defaultReply } from "../lib/experimentData";
 import { useT, type TKey } from "../lib/i18n";
 import { ArgRules } from "./ExperimentNodeFields";
 import { TemplateField } from "./TemplateField";
@@ -59,6 +59,28 @@ function UdpReplyFields({ reply, onChange }: { reply: UdpReply; onChange: (reply
       {UDP_MODES.map((mode) => <option key={mode} value={mode}>{t(`exp.mode.${mode}` as TKey)}</option>)}</select></label>
     {reply.mode !== "any" && <label>{t("field.pattern")}<TemplateField value={reply.pattern} placeholder={MODE_PLACEHOLDER[reply.mode]} onChange={(pattern) => onChange({ ...reply, pattern })} /></label>}
     <CommonReplyFields reply={reply} onChange={onChange} />
+  </div>;
+}
+
+/** Send again and again, for the steps that send: a number of times or for a time. */
+export function RepeatFields({ repeat, patch }: { repeat: Repeat | undefined; patch: Patch }) {
+  const t = useT();
+  const change = (next: Partial<Repeat>) => repeat && patch({ repeat: { ...repeat, ...next } });
+  return <div className="experiment-option">
+    <label className="checkbox experiment-check" data-tip={t("exp.repeatHint")}>
+      <input type="checkbox" checked={!!repeat} onChange={(event) => patch({ repeat: event.target.checked ? { ...DEFAULT_REPEAT } : undefined })} />{t("exp.repeatOn")}
+    </label>
+    {repeat && <div className="experiment-option-fields experiment-repeat-fields">
+      <label>{t("exp.repeatBy")}<select value={repeat.until} onChange={(event) => change({ until: event.target.value as Repeat["until"] })}>
+        <option value="count">{t("exp.repeatBy.count")}</option>
+        <option value="duration">{t("exp.repeatBy.duration")}</option>
+      </select></label>
+      {repeat.until === "count"
+        ? <label>{t("exp.repeatCount")}<input type="number" min="2" max="10000" value={repeat.count} onChange={(event) => change({ count: Number(event.target.value) })} /></label>
+        : <label>{t("exp.repeatDuration")}<input type="number" min="1" max="300000" step="1000" value={repeat.duration_ms} onChange={(event) => change({ duration_ms: Number(event.target.value) })} /></label>}
+      <label>{t("exp.repeatInterval")}<input type="number" min="10" max="60000" step="100" value={repeat.interval_ms} onChange={(event) => change({ interval_ms: Number(event.target.value) })} /></label>
+      <label data-tip={t("exp.repeatJitterHint")}>{t("exp.repeatJitter")}<input type="number" min="0" max="60000" step="10" value={repeat.jitter_ms} onChange={(event) => change({ jitter_ms: Number(event.target.value) })} /></label>
+    </div>}
   </div>;
 }
 

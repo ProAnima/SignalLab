@@ -8,16 +8,28 @@ const WARM_FOR = 500;
 const POINTER_FOCUS = 150;
 const TIP_ID = "signal-lab-tooltip";
 
-interface Shown { target: HTMLElement; text: string }
+/** `target` carries the tip and places it; `described` is what a screen reader hears it on. */
+interface Shown { target: HTMLElement; text: string; described: HTMLElement }
 
 const tipOf = (node: EventTarget | null) =>
   node instanceof Element ? node.closest<HTMLElement>("[data-tip]") : null;
 
+/** On focus: the control's own tip, or else the one on the label that names it. */
+const focusTipOf = (node: EventTarget | null) => {
+  const own = tipOf(node);
+  if (own) return own;
+  if (node instanceof HTMLInputElement || node instanceof HTMLSelectElement || node instanceof HTMLTextAreaElement) {
+    for (const label of node.labels ?? []) if (label.dataset.tip?.trim()) return label;
+  }
+  return null;
+};
+
 /**
  * The one tooltip of the interface. Any element with `data-tip` gets it: on
- * hover after a short delay, at once on keyboard focus; gone on Escape, typing,
- * a press, scrolling or leaving. While shown, the element is described by it
- * (`aria-describedby`), so a screen reader reads the same help.
+ * hover after a short delay, at once on keyboard focus (a field shows the tip of
+ * its label); gone on Escape, typing, a press, scrolling or leaving. While
+ * shown, the element is described by it (`aria-describedby`), so a screen
+ * reader reads the same help.
  *
  * Mounted once in the shell. Use `data-tip`, never the native `title`.
  */
@@ -33,10 +45,10 @@ export function TooltipLayer() {
     let pressedAt = 0;
     // Pressed: no tooltip for it again until the pointer has left it.
     let pressed: HTMLElement | null = null;
-    const show = (target: HTMLElement) => {
+    const show = (target: HTMLElement, described: HTMLElement = target) => {
       const text = target.dataset.tip?.trim();
       if (!text) return;
-      current.current = { target, text };
+      current.current = { target, text, described };
       setShown(current.current);
     };
     const hide = () => {
@@ -76,13 +88,13 @@ export function TooltipLayer() {
     };
     const onFocus = (event: FocusEvent) => {
       if (Date.now() - pressedAt < POINTER_FOCUS) return;
-      const target = tipOf(event.target);
+      const target = focusTipOf(event.target);
       if (!target) return;
       window.clearTimeout(timer);
-      show(target);
+      show(target, target.contains(event.target as Node) ? target : event.target as HTMLElement);
     };
     const onBlur = (event: FocusEvent) => {
-      if (current.current && tipOf(event.target) === current.current.target) hide();
+      if (current.current && focusTipOf(event.target) === current.current.target) hide();
     };
     // Tab moves on (and focus shows the next one); any other key means work has started.
     const onKey = (event: KeyboardEvent) => {
@@ -136,14 +148,14 @@ export function TooltipLayer() {
   // Described by the tooltip while it shows — unless it only repeats the element's name.
   useEffect(() => {
     if (!shown) return;
-    const { target, text } = shown;
+    const { target, text, described } = shown;
     const name = (target.getAttribute("aria-label") ?? target.textContent ?? "").trim();
     if (name === text) return;
-    const before = target.getAttribute("aria-describedby");
-    target.setAttribute("aria-describedby", before ? `${before} ${TIP_ID}` : TIP_ID);
+    const before = described.getAttribute("aria-describedby");
+    described.setAttribute("aria-describedby", before ? `${before} ${TIP_ID}` : TIP_ID);
     return () => {
-      if (before) target.setAttribute("aria-describedby", before);
-      else target.removeAttribute("aria-describedby");
+      if (before) described.setAttribute("aria-describedby", before);
+      else described.removeAttribute("aria-describedby");
     };
   }, [shown]);
 

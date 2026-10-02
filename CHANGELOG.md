@@ -12,6 +12,43 @@ release notes — so what is written here is what users read. See
 
 ### Added
 
+- **Save from where you send.** The HTTP, OSC and MQTT screens have *Save…*:
+  name it, pick a folder, and what you just sent is in the library. The screen
+  stays tied to it — *Save* (`Ctrl+S`) updates it, *Save as…* makes a copy, and a
+  chip says where it lives and whether it has changed; a click on the chip shows
+  it in Signals.
+- **Folders in the signal library.** Nested folders that open and close (and
+  stay that way), made, renamed (`F2`), moved and removed — what was in a removed
+  folder moves up a level; drag a signal or a folder onto another folder.
+  *Open in HTTP / OSC / MQTT* loads a signal back into its screen. Library files
+  are now version 2 and keep empty folders; older ones open as before.
+- **Ready for more languages.** Counts agree with their number in every
+  language (“1 signal”, “5 сигналов”), numbers and sizes are written the
+  language's way, the language is picked from the system's list of preferred
+  ones, and the starter signals are created in it. Adding a language is a
+  dictionary and one line — see `docs/localization.md`; the checks name every
+  missing text, placeholder or plural form.
+- **Every error in your language.** The tool screens — OSC, Broadcast,
+  MQTT, impairment, Storm, Scanner, HTTP, the library and the Inspector — now
+  report failures the way experiments do: what happened and what to do, in
+  English or Russian, with the system's own text folded underneath. A refusing
+  MQTT broker says why (protocol, client id, unavailable, credentials, not
+  authorized), and jobs in the console strip are named in your language.
+
+- **Repeat.** Any step that sends can send again and again — a number of times
+  or for a time, every so many milliseconds with an optional seeded jitter — for
+  heartbeats and polling. `{{counter}}` numbers the sends, Retry applies to each,
+  a send that waits for a reply waits for its own, and the timeline shows the
+  progress once a second.
+- **Loop.** A bounded loop node: the steps on *Body* run and come back, up to a
+  maximum, until an exit condition holds (checked after each iteration, so the
+  body can set what it tests); *Done* follows, or *Limit* when the iterations ran
+  out first. The wire back is drawn over the body. New template *Poll until
+  ready*. Experiment files are now version 5; older ones open as before.
+- **Every screen checked end to end.** `npm run e2e` walks every tab of the real
+  app — the desktop app and the server in a browser, on Windows (WebView2, Edge)
+  and Linux (WebKitGTK) — sending real traffic to loopback stand-ins and checking
+  what arrived; CI does it on every change, also for the published image.
 - **Wait for MQTT.** Wait for a message on a topic filter (`+`, `#`) whose payload
   matches; the run subscribes before its first step, so a quick answer is not
   missed, and retained values replayed on subscribing are ignored.
@@ -59,6 +96,23 @@ release notes — so what is written here is what users read. See
 
 ### Changed
 
+- **The Inspector lives in the bottom panel**, a tab next to the console, so it
+  is at hand on every screen; the tab shows when capture is on and how many
+  frames it holds, and the panel can be maximised. *Open frame* links go there.
+- **Help where it was missing.** Tooltips, in your language, on the fields whose
+  meaning is not obvious — bind addresses, TTL, keepalive, client id, QoS,
+  concurrency, timeouts, banners, every impairment slider — on every icon button,
+  and on the Inspector's buttons and filters. Keyboard focus on a field shows
+  its label's help.
+- The server's sign-in page picks the most preferred of the browser's languages
+  that it has, not only the first.
+- **Wires can be picked and removed.** A click on a wire selects it (the
+  properties say what it connects) and `Delete` removes it; hovering a wire shows
+  a × above its ＋ that removes it at once. Undo brings it back.
+- **Panes you can size.** Drag the top edge of the console, the left edge of the
+  properties pane or the top of the run timeline — or focus the handle and use the
+  arrow keys; a double click restores the default. Sizes and whether the console is
+  open are remembered.
 - Ports are easier to hit: the area that takes the pointer is several times the
   dot and grows when the canvas is zoomed out, and a wire released next to a
   node connects to it. Dragging a wire always adds one; *A*, *Add next* and the
@@ -76,6 +130,29 @@ release notes — so what is written here is what users read. See
 
 ### Fixed
 
+- A failed UDP signal reported its payload instead of the reason; a failed HTTP
+  signal showed the HTTP client's raw English; an MQTT broker given as an IPv6
+  address was dialled without brackets. The starter signals' notes carried long
+  runs of spaces.
+- Counts read wrongly for one (“1 signals”, “Joined 1 branches”) and for most
+  numbers in Russian (“2 шагов”); units (ms, Mbps, KB) and the run timeline's
+  clock were not in the interface language; captured signals went into an
+  English “Captured” folder.
+- On Windows, a discovery listener that answers probes stopped as soon as a prober
+  closed its port, and the impairment relay stopped forwarding — while still
+  looking alive — after its target or client went away for a moment. Both carry
+  on now, and a relay that really cannot receive any more ends with the reason.
+- The Inspector could list the same frames many times over when several sources
+  captured at once (a port scan), leaving rows that no filter removed.
+- Every field is tied to its label: screen readers name it, and a click on the
+  label puts the cursor in it. Argument rows and icon buttons have names too.
+- A stray "0" next to the Inspector's filters, an accent bar on every cell of the
+  selected frame instead of one, a stretched QoS badge in MQTT subscriptions, and
+  a white square where two scrollbars meet.
+- The HTTP screen's default URL pointed at an outside service; it is loopback now,
+  like every default target.
+- Downloading an export from the server never navigates away from the interface,
+  even when the server answers with an error.
 - `package-lock.json` carried version 0.1.0 instead of the app's version.
 
 ## [0.3.1] - 2026-08-27

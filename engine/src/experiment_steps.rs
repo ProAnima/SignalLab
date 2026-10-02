@@ -11,7 +11,7 @@ use serde_json::{json, Value};
 use crate::host::Host;
 
 use super::error::{EngineError, EngineResult, Field};
-use super::experiment::NodeKind;
+use super::experiment::{NodeKind, Until};
 use super::experiment_actions as actions;
 use super::experiment_data as data;
 use super::http::HttpResponse;
@@ -29,6 +29,8 @@ pub struct BranchContext {
     /// When the latest network action on this branch started. A wait counts
     /// replies from then on — from the start of the run before any action.
     pub last_action: Option<Instant>,
+    /// The Loops this branch is inside, with the iterations each has completed.
+    pub loops: BTreeMap<String, u32>,
 }
 
 impl BranchContext {
@@ -48,6 +50,7 @@ impl BranchContext {
                 (Some(a), Some(b)) => Some(a.min(b)),
                 (a, b) => a.or(b),
             };
+            merged.loops.extend(state.loops.iter().map(|(id, done)| (id.clone(), *done)));
         }
         merged
     }
@@ -65,7 +68,11 @@ pub struct StepOutcome {
 
 impl StepOutcome {
     fn next(detail: impl Into<String>) -> Self {
-        StepOutcome { port: "next", detail: detail.into(), message: None, written: None, frame: None }
+        StepOutcome::on("next", detail)
+    }
+
+    fn on(port: &'static str, detail: impl Into<String>) -> Self {
+        StepOutcome { port, detail: detail.into(), message: None, written: None, frame: None }
     }
 
     fn said(mut self, key: &'static str, params: Value) -> Self {
@@ -77,6 +84,8 @@ impl StepOutcome {
 /// What a step may use besides its branch's state.
 pub struct StepEnv<'a> {
     pub host: &'a Host,
+    /// The node this step is.
+    pub node_id: &'a str,
     pub client_id: String,
     pub seed: u64,
     pub listeners: Listeners,
@@ -84,9 +93,42 @@ pub struct StepEnv<'a> {
     pub subscriptions: Subscriptions,
     /// The node's Timeout output is connected.
     pub has_timeout: bool,
+    /// A Loop's Limit output is connected.
+    pub has_limit: bool,
     /// Inputs of the node (a Join reports how many it merged).
     pub inputs: usize,
     pub run_started: Instant,
+}
+
+/// A Loop is reached from outside (an iteration starts) or from its body (one
+/// ended): then the exit condition, when there is one, decides — Done when it
+/// holds, another iteration while any are left, else Limit (or a failure when
+/// Limit is not wired). Without a condition the body runs `max` times.
+fn loop_step(env: &StepEnv<'_>, max: u32, until: Option<&Until>, context: &mut BranchContext) -> EngineResult<StepOutcome> {
+    let id = env.node_id;
+    let Some(&completed) = context.loops.get(id) else {
+        context.loops.insert(id.to_string(), 0);
+        return Ok(StepOutcome::on("body", format!("Iteration 1 of {max}")).said("exp.step.loopIteration", json!({ "n": 1, "max": max })));
+    };
+    let completed = completed + 1;
+    if let Some(until) = until {
+        let (holds, comparison) = data::compare(&until.value, until.op, &until.expected).map_err(|error| error.in_field(Field::new("expected")))?;
+        if holds {
+            context.loops.remove(id);
+            return Ok(StepOutcome::on("done", comparison.text()).said("exp.step.loopDone", json!({ "n": completed })));
+        }
+    }
+    if completed >= max {
+        context.loops.remove(id);
+        return match until {
+            None => Ok(StepOutcome::on("done", format!("{completed} iterations")).said("exp.step.loopFinished", json!({ "n": completed }))),
+            Some(_) if env.has_limit => Ok(StepOutcome::on("limit", format!("No exit after {max} iterations")).said("exp.step.loopLimit", json!({ "max": max }))),
+            Some(_) => Err(EngineError::new("loop.limit").with("max", max)),
+        };
+    }
+    context.loops.insert(id.to_string(), completed);
+    let n = completed + 1;
+    Ok(StepOutcome::on("body", format!("Iteration {n} of {max}")).said("exp.step.loopIteration", json!({ "n": n, "max": max })))
 }
 
 /// Checks consume the latest response on the executed path, never another branch's.
@@ -338,6 +380,7 @@ pub async fn execute(env: &StepEnv<'_>, kind: &NodeKind, context: &mut BranchCon
             let (port, key) = if holds { ("yes", "exp.step.valueYes") } else { ("no", "exp.step.valueNo") };
             Ok(StepOutcome { port, detail: comparison.text(), message: Some((key, comparison.params())), written: None, frame: None })
         }
+        NodeKind::Loop { max, until } => loop_step(env, *max, until.as_ref(), context),
         NodeKind::WaitOsc { .. } | NodeKind::WaitUdp { .. } | NodeKind::WaitMqtt { .. } => {
             let outcome = wait(env, kind, context).await?;
             if let Some(written) = &outcome.written {
@@ -420,7 +463,7 @@ mod tests {
     }
 
     fn env<'a>(host: &'a Host, listeners: &Listeners, has_timeout: bool, started: Instant) -> StepEnv<'a> {
-        StepEnv { host, client_id: "test".into(), seed: 0, listeners: listeners.clone(), subscriptions: Subscriptions::new(), has_timeout, inputs: 1, run_started: started }
+        StepEnv { host, node_id: "wait", client_id: "test".into(), seed: 0, listeners: listeners.clone(), subscriptions: Subscriptions::new(), has_timeout, has_limit: false, inputs: 1, run_started: started }
     }
 
     /// `wait` as the old signature read, for the tests below.

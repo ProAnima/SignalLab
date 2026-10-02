@@ -7,6 +7,7 @@ use std::time::Instant;
 use serde::{Deserialize, Serialize};
 use crate::host::Host;
 
+use super::error::{EngineError, EngineResult};
 use super::inspect::{self, Frame, Gate};
 use super::jobs::{now_ms, JobInfo, JobRegistry, TaskGuard};
 use super::transport::{self, Cause};
@@ -48,13 +49,13 @@ pub struct HttpResponse {
 
 const MAX_BODY_PREVIEW: usize = 256 * 1024;
 
-fn build_client(timeout_ms: u64) -> Result<reqwest::Client, String> {
+fn build_client(timeout_ms: u64) -> EngineResult<reqwest::Client> {
     reqwest::Client::builder()
         .timeout(std::time::Duration::from_millis(timeout_ms.max(1)))
         .danger_accept_invalid_certs(false)
         .user_agent("SignalLab/0.1")
         .build()
-        .map_err(|e| e.to_string())
+        .map_err(|e| EngineError::new("http.client_failed").because(transport::chain(&e)))
 }
 
 async fn execute(client: &reqwest::Client, req: &HttpRequest) -> HttpResponse {
@@ -155,7 +156,9 @@ fn exchange_frame(req: &HttpRequest, resp: &HttpResponse, job_id: Option<u64>) -
 }
 
 /// Fire a single request and return the full response for the inspector.
-pub async fn request_once(host: Host, req: HttpRequest) -> Result<HttpResponse, String> {
+/// A failure to connect or to get an answer is in the response (`error`,
+/// `cause`); the error is only for a client that could not be built.
+pub async fn request_once(host: Host, req: HttpRequest) -> EngineResult<HttpResponse> {
     let client = build_client(req.timeout_ms)?;
     let resp = execute(&client, &req).await;
     if inspect::armed(&host) {
@@ -201,17 +204,14 @@ pub async fn start_burst(
     host: Host,
     jobs: JobRegistry,
     cfg: BurstConfig,
-) -> Result<JobInfo, String> {
+) -> EngineResult<JobInfo> {
     let client = build_client(cfg.request.timeout_ms)?;
     let concurrency = cfg.concurrency.clamp(1, 512);
 
     let id = jobs.next_id();
-    let info = JobInfo {
-        id,
-        kind: "http-burst".into(),
-        label: format!("HTTP burst {} {}", cfg.request.method, cfg.request.url),
-        started_ms: now_ms(),
-    };
+    let info = JobInfo::new(id, "http-burst", format!("HTTP burst {} {}", cfg.request.method, cfg.request.url))
+        .with("method", &cfg.request.method)
+        .with("url", &cfg.request.url);
 
     let host_cl = host.clone();
     let jobs_cl = jobs.clone();

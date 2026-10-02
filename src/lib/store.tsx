@@ -2,6 +2,7 @@ import {
   createContext, useCallback, useContext, useEffect, useRef, useState,
   type ReactNode,
 } from "react";
+import { localizeSeed, type LibraryState } from "./library";
 import {
   api, on, EV,
   type AppInfo, type JobInfo, type JobEnded, type HostInfo, type MqttBatch, type Signal,
@@ -10,7 +11,8 @@ import { watchConnection, type ConnectionState } from "./transport";
 import { fireSignal } from "./signals";
 import { ingestTopic, makeTopicRoot, type TopicNode } from "./topics";
 import { describeError, type Failure } from "./errors";
-import type { TextKey, Translate } from "./i18n";
+import { useI18n, type TextKey, type Translate } from "./i18n";
+import { en } from "./locales/en";
 
 export type LogLevel = "info" | "ok" | "warn" | "err";
 
@@ -81,6 +83,10 @@ interface Store {
 
   /** The signal library, in file order. */
   library: Signal[];
+  /** Every folder of the library (see lib/library.ts). */
+  folders: string[];
+  /** Signals and folders at once, as a folder rename or move changes both. */
+  setLibraryState: (next: LibraryState) => void;
   libraryPath: string;
   /** Set when the file on disk could not be read — the list is then empty. */
   libraryError: Failure | null;
@@ -122,13 +128,21 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [jobsAt, setJobsAt] = useState(0);
   const jobsAtRef = useRef(0);
   const [log, setLog] = useState<LogEntry[]>([]);
-  const [library, setLibraryState] = useState<Signal[]>([]);
+  const [library, setSignals] = useState<Signal[]>([]);
+  const [folders, setFolders] = useState<string[]>([]);
+  // What the file must hold once the debounce runs: always the latest of both.
+  const latestLibrary = useRef<LibraryState>({ signals: [], folders: [] });
+  // The current language, for texts written into files (the starter set) — a ref,
+  // so a language switch does not re-run what depends on it.
+  const { t } = useI18n();
+  const translate = useRef(t);
+  translate.current = t;
   const [libraryPath, setLibraryPath] = useState("");
   const [libraryError, setLibraryError] = useState<Failure | null>(null);
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const [lastFired, setLastFired] = useState<Record<string, number>>({});
   const saveTimer = useRef<number | null>(null);
-  const pendingSave = useRef<Signal[] | null>(null);
+  const pendingSave = useRef<LibraryState | null>(null);
   const mqttTopics = useRef<TopicNode>(makeTopicRoot());
   const [mqttVersion, setMqttVersion] = useState(0);
   const [mqttDropped, setMqttDropped] = useState(0);
@@ -194,7 +208,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const loadLibrary = useCallback(() => {
     api.signalsLoad().then(
       (file) => {
-        setLibraryState(file.library.signals);
+        latestLibrary.current = { signals: file.library.signals, folders: file.library.folders ?? [] };
+        if (file.seeded) {
+          // The starter set, in the language of the person who opened it first.
+          const text = (key: string) => key in en ? translate.current(key) : null;
+          latestLibrary.current = { ...latestLibrary.current, signals: localizeSeed(file.library.signals, text) };
+          api.signalsSave({ version: 2, ...latestLibrary.current }).catch((e) => pushError("signals", e));
+        }
+        setSignals(latestLibrary.current.signals);
+        setFolders(latestLibrary.current.folders);
         setLibraryPath(file.path);
         setLibraryError(null);
         if (file.seeded) pushLog("ok", "signals", "log.librarySeeded", { path: file.path });
@@ -209,8 +231,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     );
   }, [pushLog, pushError]);
 
-  const writeLibrary = useCallback((next: Signal[]) => {
-    api.signalsSave({ version: 1, signals: next }).then(
+  const writeLibrary = useCallback((next: LibraryState) => {
+    api.signalsSave({ version: 2, signals: next.signals, folders: next.folders }).then(
       () => setSaveState("saved"),
       (e) => {
         setSaveState("error");
@@ -224,25 +246,29 @@ export function StoreProvider({ children }: { children: ReactNode }) {
    * anyone remember to save — which matters on a show site, where the thing you
    * forget is the thing you needed. Debounced so typing a name is one write.
    */
-  const setLibrary = useCallback((next: Signal[]) => {
-    setLibraryState(next);
+  const setLibraryState = useCallback((next: LibraryState) => {
+    latestLibrary.current = next;
+    setSignals(next.signals);
+    setFolders(next.folders);
     pendingSave.current = next;
     if (saveTimer.current !== null) window.clearTimeout(saveTimer.current);
     setSaveState("saving");
     saveTimer.current = window.setTimeout(() => {
       saveTimer.current = null;
+      const pending = pendingSave.current;
       pendingSave.current = null;
-      writeLibrary(next);
+      if (pending) writeLibrary(pending);
     }, SAVE_DEBOUNCE_MS);
   }, [writeLibrary]);
+  const setLibrary = useCallback((next: Signal[]) => setLibraryState({ signals: next, folders: latestLibrary.current.folders }), [setLibraryState]);
 
   const fire = useCallback(async (signal: Signal) => {
     try {
       // An MQTT signal rides an open connection when there is one.
       const live = jobs.find((j) => j.kind === "mqtt")?.id ?? null;
-      const detail = await fireSignal(signal, live);
+      const fired = await fireSignal(signal, live);
       setLastFired((prev) => ({ ...prev, [signal.id]: Date.now() }));
-      pushLog("ok", "signals", "log.signalFired", { name: signal.name, detail });
+      pushLog("ok", "signals", fired.key, { name: signal.name, ...fired.params });
     } catch (e) {
       pushError("signals", e, "log.signalFailed", { name: signal.name });
     }
@@ -307,7 +333,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const value: Store = {
     host, info, connection, jobs, refreshJobs, jobGone, stopJob, stopAll, log, pushLog, pushError, clearLog,
-    library, libraryPath, libraryError, saveState, setLibrary,
+    library, folders, setLibraryState, libraryPath, libraryError, saveState, setLibrary,
     reloadLibrary: loadLibrary, fire, lastFired,
     mqttTopics, mqttVersion, mqttDropped, clearMqttTopics,
   };

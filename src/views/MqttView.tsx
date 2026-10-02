@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   api, on, EV,
-  type ExperimentNode, type JobInfo, type MqttAck, type MqttConfig, type MqttGrant, type MqttStateEvent,
+  type ExperimentNode, type JobInfo, type MqttAck, type MqttConfig, type MqttGrant, type MqttStateEvent, type Signal,
 } from "../lib/api";
+import { SaveSignal, saveShortcut } from "../components/SaveSignal";
 import { useStore } from "../lib/store";
 import { useT } from "../lib/i18n";
 import { fmtNum, fmtTime } from "../lib/format";
-import { signalFromMqttTopic } from "../lib/signals";
+import { signalFromMqttTopic, splitBroker } from "../lib/signals";
 import { waitForMqttMessage } from "../lib/experimentGraph";
 import { flattenTopics, sortedChildren, type TopicNode } from "../lib/topics";
 
@@ -16,7 +17,12 @@ function defaultClientId(): string {
   return `signal-lab-${Math.random().toString(16).slice(2, 8)}`;
 }
 
-export function MqttView({ onWaitFor }: { onWaitFor?: (node: ExperimentNode) => void } = {}) {
+/** `load`: a stored MQTT signal to publish from here; `onShowSignal` opens the one the publisher is saved as. */
+export function MqttView({ onWaitFor, load, onShowSignal }: {
+  onWaitFor?: (node: ExperimentNode) => void;
+  load?: { signal: Signal; at: number } | null;
+  onShowSignal?: (id: string) => void;
+} = {}) {
   const {
     pushLog, pushError, jobGone, stopJob, refreshJobs, library, setLibrary,
     mqttTopics, mqttVersion, mqttDropped, clearMqttTopics,
@@ -47,8 +53,18 @@ export function MqttView({ onWaitFor }: { onWaitFor?: (node: ExperimentNode) => 
   const [query, setQuery] = useState("");
 
   const [pub, setPub] = useState({ topic: "", payload: "", qos: 0, retain: false });
+  const [signalId, setSignalId] = useState<string | null>(null);
   const [confirmClear, setConfirmClear] = useState<string | null>(null);
   const [sub, setSub] = useState({ filter: "", qos: 0 });
+
+  // A stored signal opened here: its message, and its broker while not connected elsewhere.
+  useEffect(() => {
+    if (load?.signal.body.transport !== "mqtt") return;
+    const { broker, topic, payload, qos, retain } = load.signal.body;
+    setPub({ topic, payload, qos, retain });
+    if (!job) { const { host, port } = splitBroker(broker); setCfg((prior) => ({ ...prior, host, port })); }
+    setSignalId(load.signal.id);
+  }, [load]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Messages are ingested by the store, so the tree survives leaving this tab.
   useEffect(() => {
@@ -69,7 +85,7 @@ export function MqttView({ onWaitFor }: { onWaitFor?: (node: ExperimentNode) => 
         if (s.state === "closed") {
           setJob(null);
           setGrants([]);
-          if (s.error) pushLog("err", "mqtt", "log.mqttClosed", { broker: s.broker, error: s.error });
+          if (s.error) pushError("mqtt", s.error, "log.mqttClosed", { broker: s.broker });
         }
       }),
       on<MqttAck>(EV.mqttAck, (e) => {
@@ -172,6 +188,7 @@ export function MqttView({ onWaitFor }: { onWaitFor?: (node: ExperimentNode) => 
       node.last?.qos ?? 0,
       node.last?.retain ?? false,
       library,
+      t,
     );
     setLibrary([...library, signal]);
     pushLog("ok", "mqtt", "log.mqttSaved", { topic: node.path, name: signal.name });
@@ -223,30 +240,30 @@ export function MqttView({ onWaitFor }: { onWaitFor?: (node: ExperimentNode) => 
             </div>
           </div>
           <div className="field">
-            <label htmlFor="mq-id">{t("mq.clientId")}</label>
+            <label htmlFor="mq-id" data-tip={t("mq.clientIdHint")}>{t("mq.clientId")}</label>
             <input id="mq-id" value={cfg.client_id} disabled={!!job}
               onChange={(e) => setCfg({ ...cfg, client_id: e.target.value })} />
           </div>
           <div className="row">
             <div className="field">
-              <label htmlFor="mq-user">{t("mq.username")}</label>
+              <label htmlFor="mq-user" data-tip={t("mq.credentialsHint")}>{t("mq.username")}</label>
               <input id="mq-user" value={cfg.username} disabled={!!job}
                 onChange={(e) => setCfg({ ...cfg, username: e.target.value })} />
             </div>
             <div className="field">
-              <label htmlFor="mq-pass">{t("mq.password")}</label>
+              <label htmlFor="mq-pass" data-tip={t("mq.credentialsHint")}>{t("mq.password")}</label>
               <input id="mq-pass" type="password" value={cfg.password} disabled={!!job}
                 onChange={(e) => setCfg({ ...cfg, password: e.target.value })} />
             </div>
           </div>
           <div className="row">
             <div className="field" style={{ flex: "0 0 104px" }}>
-              <label htmlFor="mq-keep">{t("mq.keepAlive")}</label>
+              <label htmlFor="mq-keep" data-tip={t("mq.keepAliveHint")}>{t("mq.keepAlive")}</label>
               <input id="mq-keep" type="number" value={cfg.keep_alive_s} disabled={!!job}
                 onChange={(e) => setCfg({ ...cfg, keep_alive_s: +e.target.value })} />
             </div>
             <div className="field check">
-              <label className="checkbox">
+              <label className="checkbox" data-tip={t("mq.cleanSessionHint")}>
                 <input type="checkbox" checked={cfg.clean_session} disabled={!!job}
                   onChange={(e) => setCfg({ ...cfg, clean_session: e.target.checked })} />
                 {t("mq.cleanSession")}
@@ -261,7 +278,7 @@ export function MqttView({ onWaitFor }: { onWaitFor?: (node: ExperimentNode) => 
                 onChange={(e) => setScanFilter(e.target.value)} />
             </div>
             <div className="field" style={{ flex: "0 0 88px" }}>
-              <label htmlFor="mq-scan-qos">{t("mq.qos")}</label>
+              <label htmlFor="mq-scan-qos" data-tip={t("mq.qosHint")}>{t("mq.qos")}</label>
               <select id="mq-scan-qos" value={scanQos} disabled={!!job}
                 onChange={(e) => setScanQos(+e.target.value)}>
                 {QOS.map((q) => <option key={q} value={q}>{q}</option>)}
@@ -318,13 +335,13 @@ export function MqttView({ onWaitFor }: { onWaitFor?: (node: ExperimentNode) => 
 
           <div className="row" style={{ marginTop: 12 }}>
             <div className="field" style={{ margin: 0 }}>
-              <label htmlFor="mq-sub">{t("mq.addSubscription")}</label>
+              <label htmlFor="mq-sub" data-tip={t("mq.filterHint")}>{t("mq.addSubscription")}</label>
               <input id="mq-sub" value={sub.filter} disabled={!job} placeholder="sensors/+/state/#"
                 onChange={(e) => setSub({ ...sub, filter: e.target.value })}
                 onKeyDown={(e) => { if (e.key === "Enter") void subscribe(); }} />
             </div>
             <div className="field" style={{ flex: "0 0 88px", margin: 0 }}>
-              <label htmlFor="mq-sub-qos">{t("mq.qos")}</label>
+              <label htmlFor="mq-sub-qos" data-tip={t("mq.qosHint")}>{t("mq.qos")}</label>
               <select id="mq-sub-qos" value={sub.qos} disabled={!job}
                 onChange={(e) => setSub({ ...sub, qos: +e.target.value })}>
                 {QOS.map((q) => <option key={q} value={q}>{q}</option>)}
@@ -342,7 +359,7 @@ export function MqttView({ onWaitFor }: { onWaitFor?: (node: ExperimentNode) => 
           <div className="panel" style={{ display: "flex", flexDirection: "column", minHeight: 360 }}>
             <div className="row" style={{ alignItems: "flex-end", marginBottom: 10 }}>
               <div className="field" style={{ margin: 0 }}>
-                <label htmlFor="mq-find">{t("mq.topics")}</label>
+                <label htmlFor="mq-find" data-tip={t("mq.findHint")}>{t("mq.topics")}</label>
                 <input id="mq-find" value={query} placeholder={t("mq.find")}
                   onChange={(e) => setQuery(e.target.value)} />
               </div>
@@ -352,7 +369,7 @@ export function MqttView({ onWaitFor }: { onWaitFor?: (node: ExperimentNode) => 
             </div>
 
             <div className="mq-stats">
-              <span>{t("mq.topicCount", { n: fmtNum(all.length) })}</span>
+              <span>{t("mq.topicCount", { n: all.length })}</span>
               <span>{t("mq.retainedCount", { n: fmtNum(retainedCount) })}</span>
               {mqttDropped > 0 && <span className="warn">{t("mq.dropped", { n: fmtNum(mqttDropped) })}</span>}
               <span className="spacer" />
@@ -430,7 +447,7 @@ export function MqttView({ onWaitFor }: { onWaitFor?: (node: ExperimentNode) => 
           )}
 
           {/* ---- publish ---- */}
-          <div className="panel" style={{ marginTop: 16 }}>
+          <div className="panel" style={{ marginTop: 16 }} onKeyDown={saveShortcut}>
             <p className="section-label">{t("mq.publish")}</p>
             <div className="row">
               <div className="field">
@@ -439,7 +456,7 @@ export function MqttView({ onWaitFor }: { onWaitFor?: (node: ExperimentNode) => 
                   onChange={(e) => setPub({ ...pub, topic: e.target.value })} />
               </div>
               <div className="field" style={{ flex: "0 0 88px" }}>
-                <label htmlFor="mq-pub-qos">{t("mq.qos")}</label>
+                <label htmlFor="mq-pub-qos" data-tip={t("mq.qosHint")}>{t("mq.qos")}</label>
                 <select id="mq-pub-qos" value={pub.qos}
                   onChange={(e) => setPub({ ...pub, qos: +e.target.value })}>
                   {QOS.map((q) => <option key={q} value={q}>{q}</option>)}
@@ -464,6 +481,8 @@ export function MqttView({ onWaitFor }: { onWaitFor?: (node: ExperimentNode) => 
                 {t("mq.publishBtn")}
               </button>
             </div>
+            <SaveSignal body={{ transport: "mqtt", broker: `${cfg.host}:${cfg.port}`, topic: pub.topic, payload: pub.payload, qos: pub.qos, retain: pub.retain }}
+              signalId={signalId} onSignalId={setSignalId} suggestName={pub.topic || t("mq.publish")} onShow={onShowSignal} />
           </div>
         </div>
       </div>

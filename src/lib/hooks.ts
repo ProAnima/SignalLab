@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { on } from "./api";
 
 /** Held events, bounded: a firehose must not become a memory leak. */
@@ -112,3 +112,14 @@ export function usePersistentState<T>(
   }, [key, value]);
   return [value, setValue] as const;
 }
+
+/**
+ * Ids that tie a label to its field (`htmlFor` → `id`), unique to this
+ * instance of the component: every screen stays mounted, so two screens can
+ * both have a "target" field.
+ */
+export function useFieldIds(): (name: string) => string {
+  const base = useId();
+  return useCallback((name: string) => `${base}${name}`, [base]);
+}
+

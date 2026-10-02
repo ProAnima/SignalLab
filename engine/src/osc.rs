@@ -7,11 +7,14 @@ use serde::{Deserialize, Serialize};
 use crate::host::Host;
 use tokio::net::UdpSocket;
 
+use super::error::{EngineError, EngineResult};
 use super::inspect::{self, Frame, Gate};
 use super::jobs::{now_ms, JobInfo, JobRegistry};
+use super::net;
 use super::osc_codec::{
     arg_str, decode_packet, encode_message, summarize_messages, OscArg, OscMessage,
 };
+use super::transport::{self, Cause};
 
 /// One decoded inbound OSC packet, forwarded to the UI on `osc://message`.
 #[derive(Clone, Serialize)]
@@ -21,15 +24,15 @@ struct OscInbound {
     from: String,
     bytes: usize,
     messages: Vec<OscMessage>,
-    /// Decode error, if the packet was malformed.
-    error: Option<String>,
+    /// `osc.packet_malformed`, the decoder's text as detail, if the packet was malformed.
+    error: Option<EngineError>,
 }
 
 #[derive(Clone, Serialize)]
 struct JobEnded {
     job_id: u64,
     kind: String,
-    error: Option<String>,
+    error: Option<EngineError>,
 }
 
 /// Every message in a packet, one per line, for the Inspector's detail pane.
@@ -48,7 +51,7 @@ fn detail_lines(messages: &[OscMessage]) -> String {
         .join("\n")
 }
 
-fn emit_ended(host: &Host, job_id: u64, kind: &str, error: Option<String>) {
+fn emit_ended(host: &Host, job_id: u64, kind: &str, error: Option<EngineError>) {
     host.emit(
         "job://ended",
         JobEnded {
@@ -63,29 +66,32 @@ fn emit_ended(host: &Host, job_id: u64, kind: &str, error: Option<String>) {
 // Monitor
 // ---------------------------------------------------------------------------
 
+/// A local address to listen on, `IP:port`.
+pub(crate) fn parse_bind(bind: &str) -> EngineResult<SocketAddr> {
+    bind.trim().parse().map_err(|_| EngineError::new("node.bind_invalid").with("value", bind))
+}
+
+/// A destination, `IP:port`.
+pub(crate) fn parse_target(target: &str) -> EngineResult<SocketAddr> {
+    target.trim().parse().map_err(|_| Cause::TargetInvalid.error(target))
+}
+
 pub async fn start_monitor(
     host: Host,
     jobs: JobRegistry,
     bind: String,
-) -> Result<JobInfo, String> {
-    let addr: SocketAddr = bind
-        .parse()
-        .map_err(|e| format!("invalid bind address '{bind}': {e}"))?;
+) -> EngineResult<JobInfo> {
+    let addr = parse_bind(&bind)?;
     let socket = UdpSocket::bind(addr)
         .await
-        .map_err(|e| format!("bind {bind} failed: {e}"))?;
+        .map_err(|e| net::bind_error(&bind, e))?;
     let local = socket
         .local_addr()
         .map(|a| a.to_string())
         .unwrap_or(bind.clone());
 
     let id = jobs.next_id();
-    let info = JobInfo {
-        id,
-        kind: "osc-monitor".into(),
-        label: format!("OSC monitor {local}"),
-        started_ms: now_ms(),
-    };
+    let info = JobInfo::new(id, "osc-monitor", format!("OSC monitor {local}")).with("bind", &local);
 
     let jobs_cl = jobs.clone();
     let host_cl = host.clone();
@@ -94,6 +100,7 @@ pub async fn start_monitor(
         let mut buf = vec![0u8; 65_536];
         loop {
             match socket.recv_from(&mut buf).await {
+                Err(e) if crate::net::udp_transient(&e) => continue,
                 Ok((n, from)) => {
                     let (messages, error) = match decode_packet(&buf[..n]) {
                         Ok(m) => (m, None),
@@ -125,12 +132,13 @@ pub async fn start_monitor(
                             from: from.to_string(),
                             bytes: n,
                             messages,
-                            error,
+                            error: error.map(|e| EngineError::new("osc.packet_malformed").with("bytes", n).because(e)),
                         },
                     );
                 }
                 Err(e) => {
-                    emit_ended(&host_cl, id, "osc-monitor", Some(e.to_string()));
+                    let error = EngineError::new("wait.receive_failed").with("target", &local_cl).because(e);
+                    emit_ended(&host_cl, id, "osc-monitor", Some(error));
                     break;
                 }
             }
@@ -189,28 +197,23 @@ pub async fn start_generator(
     host: Host,
     jobs: JobRegistry,
     cfg: GenConfig,
-) -> Result<JobInfo, String> {
-    let target: SocketAddr = cfg
-        .target
-        .parse()
-        .map_err(|e| format!("invalid target '{}': {e}", cfg.target))?;
-    let socket = UdpSocket::bind("0.0.0.0:0")
+) -> EngineResult<JobInfo> {
+    let target = parse_target(&cfg.target)?;
+    let local = if target.is_ipv6() { "[::]:0" } else { "0.0.0.0:0" };
+    let socket = UdpSocket::bind(local)
         .await
-        .map_err(|e| format!("socket create failed: {e}"))?;
+        .map_err(|e| net::bind_error(local, e))?;
     socket
         .connect(target)
         .await
-        .map_err(|e| format!("connect {target} failed: {e}"))?;
+        .map_err(|e| transport::of_io(&e).error(&cfg.target).because(e))?;
     let socket = Arc::new(socket);
 
     let rate = cfg.rate.clamp(0.1, 5_000.0);
     let id = jobs.next_id();
-    let info = JobInfo {
-        id,
-        kind: "osc-gen".into(),
-        label: format!("OSC gen → {} {}", cfg.target, cfg.address),
-        started_ms: now_ms(),
-    };
+    let info = JobInfo::new(id, "osc-gen", format!("OSC gen → {} {}", cfg.target, cfg.address))
+        .with("target", &cfg.target)
+        .with("address", &cfg.address);
 
     let host_cl = host.clone();
     let jobs_cl = jobs.clone();
@@ -274,7 +277,7 @@ pub async fn start_generator(
             };
             let packet = encode_message(&cfg.address, std::slice::from_ref(&arg));
             if let Err(e) = socket.send(&packet).await {
-                emit_ended(&host_cl, id, "osc-gen", Some(e.to_string()));
+                emit_ended(&host_cl, id, "osc-gen", Some(transport::of_io(&e).error(&cfg.target).because(e)));
                 break;
             }
             sent += 1;
@@ -318,11 +321,9 @@ pub async fn send_once(
     target: String,
     address: String,
     args: Vec<OscArg>,
-) -> Result<usize, String> {
-    let addr: SocketAddr = target
-        .parse()
-        .map_err(|e| format!("invalid target '{target}': {e}"))?;
-    send_to(&host, addr, address, &args).await.map_err(|e| format!("send to {addr} failed: {e}"))
+) -> EngineResult<usize> {
+    let addr = parse_target(&target)?;
+    send_to(&host, addr, address, &args).await.map_err(|e| transport::of_io(&e).error(&target).because(e))
 }
 
 /// The send itself, with the socket error intact so a caller can tell
@@ -358,4 +359,41 @@ pub async fn send_to(
         );
     }
     Ok(sent)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::host::Recorder;
+    use crate::inspect::Capture;
+    use std::time::Duration;
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_malformed_packet_is_reported_with_a_code_and_the_decoder_s_text() {
+        let recorder = Recorder::new();
+        let host = Host::new(recorder.clone(), Capture::new());
+        let jobs = JobRegistry::new();
+        let job = start_monitor(host, jobs.clone(), "127.0.0.1:0".into()).await.unwrap();
+        assert_eq!((job.kind.as_str(), job.params["bind"].starts_with("127.0.0.1:")), ("osc-monitor", true));
+        let sender = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        sender.send_to(b"/x\0\0,i\0\0", job.params["bind"].as_str()).await.unwrap();
+        let message = tokio::task::spawn_blocking(move || recorder.wait_for("osc://message", Duration::from_secs(2), |_| true)).await.unwrap().expect("the packet arrived");
+        assert_eq!(message["error"]["code"], "osc.packet_malformed", "{message}");
+        assert_eq!(message["error"]["params"]["bytes"], "8");
+        assert!(message["error"]["detail"].as_str().is_some_and(|detail| !detail.is_empty()));
+        jobs.stop(job.id);
+    }
+
+    #[tokio::test]
+    async fn addresses_are_checked_before_anything_is_sent() {
+        let host = Host::new(Recorder::new(), Capture::new());
+        let jobs = JobRegistry::new();
+        let bad = start_monitor(host.clone(), jobs.clone(), "9000".into()).await.unwrap_err();
+        assert_eq!((bad.code.as_str(), bad.params["value"].as_str()), ("node.bind_invalid", "9000"));
+        let target = send_once(host.clone(), "localhost:9000".into(), "/x".into(), vec![]).await.unwrap_err();
+        assert_eq!((target.code.as_str(), target.params["target"].as_str()), ("transport.target_invalid", "localhost:9000"));
+        let cfg = GenConfig { target: "nowhere".into(), address: "/x".into(), rate: 1.0, waveform: Waveform::Sine, freq: 1.0, min: 0.0, max: 1.0, as_int: false, duration_s: 0.0 };
+        assert!(start_generator(host, jobs.clone(), cfg).await.unwrap_err().is("transport.target_invalid"));
+        assert!(jobs.list().is_empty());
+    }
 }

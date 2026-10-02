@@ -1,8 +1,9 @@
-# Every check of `npm run check` (scripts/check.mjs), on Windows and on Linux,
-# and the server image built and smoke-tested for x64 and arm64
-# (`npm run check:image`), for every push to main and every pull request. The
-# release workflow runs this first, on the tag it is about to build. See
-# docs/delivery.md.
+# Every check of `npm run check` (scripts/check.mjs), on Windows and on Linux;
+# the end-to-end tour of every screen (scripts/e2e.mjs) in the desktop app and
+# in the server, on both; and the server image built, smoke-tested and toured
+# for x64 and arm64 (`npm run check:image`), for every push to main and every
+# pull request. The release workflow runs this first, on the tag it is about to
+# build. See docs/delivery.md.
 name: CI
 
 on:
@@ -73,6 +74,25 @@ jobs:
           sudo apt-get install -y --no-install-recommends webkit2gtk-driver xvfb
           xvfb-run -a node scripts/webkit.mjs --native
 
+      # Every screen in the real app, against loopback fixtures: the desktop app
+      # (WebView2 / WebKitGTK) and the server in a browser (Edge / WebKitGTK).
+      - name: End-to-end tour (Windows)
+        if: runner.os == 'Windows'
+        run: node scripts/e2e.mjs
+
+      - name: End-to-end tour (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a node scripts/e2e.mjs --native
+
+      # A screenshot of every step and what each check said, when something broke.
+      - name: Keep the tour's screenshots
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-${{ matrix.name }}
+          path: artifacts/e2e/
+          retention-days: 7
+
   # The image the image workflow publishes when a release is published, built
   # the same way and run through the same smoke test, so a release never finds
   # out at publication that it does not build.
@@ -116,3 +136,22 @@ jobs:
 
       - name: Smoke test
         run: node scripts/image.mjs smoke signallab:ci
+
+      # The interface the image serves, every screen, in WebKitGTK; the
+      # container shares the host's loopback with the tour's fixtures.
+      - name: End-to-end tour of the image
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends webkit2gtk-driver xvfb
+          npm ci --no-audit --no-fund
+          docker run -d --name signallab-tour --network host -e SIGNALLAB_LISTEN=127.0.0.1:1430 signallab:ci
+          xvfb-run -a node scripts/e2e.mjs --native --target server --server-url http://127.0.0.1:1430/ --data-dir /data
+          if docker logs signallab-tour 2>&1 | grep -q panicked; then docker logs signallab-tour; echo "::error::the server panicked"; exit 1; fi
+
+      - name: Keep the tour's screenshots
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-image-${{ matrix.name }}
+          path: artifacts/e2e/
+          retention-days: 7

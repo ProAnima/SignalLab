@@ -21,7 +21,6 @@ use super::error::{EngineError, EngineResult};
 use super::inspect::{self, Frame};
 use super::matching::{Datagram, Matcher};
 use super::osc_codec::{decode_packet, summarize_messages};
-use super::transport::{self, Cause};
 
 /// Datagrams kept per socket; older ones are dropped and counted.
 pub const QUEUE: usize = 1024;
@@ -164,17 +163,6 @@ impl Drop for Listener {
     }
 }
 
-/// Opening the socket failed: a taken port and a foreign address are causes
-/// a person can fix, anything else carries the system's wording.
-fn bind_error(bind: SocketAddr, error: io::Error) -> EngineError {
-    let target = bind.to_string();
-    match transport::of_io(&error) {
-        cause @ (Cause::AddressInUse | Cause::AddressUnavailable | Cause::Denied) => cause.error(&target),
-        _ => EngineError::new("wait.bind_failed").with("target", target),
-    }
-    .because(error)
-}
-
 /// A socket of a run that just ended closes a moment after the run: its task
 /// is cancelled asynchronously. Running again right away retries briefly
 /// instead of reporting the port as taken.
@@ -196,7 +184,8 @@ async fn bind_socket(bind: SocketAddr) -> io::Result<UdpSocket> {
 
 impl Listener {
     pub async fn arm(bind: SocketAddr, sink: Arc<dyn FrameSink>) -> EngineResult<Listener> {
-        let socket = Arc::new(bind_socket(bind).await.map_err(|error| bind_error(bind, error))?);
+        // A taken port and a foreign address are causes a person can fix.
+        let socket = Arc::new(bind_socket(bind).await.map_err(|error| crate::net::bind_error(&bind.to_string(), error))?);
         let local = socket.local_addr().unwrap_or(bind);
         let receiving = socket.clone();
         let queue = Arc::new(Inbox::default());
@@ -210,9 +199,8 @@ impl Listener {
                         datagram.frame = sink.received(local, &datagram);
                         filled.push(datagram);
                     }
-                    // Windows reports an ICMP "port unreachable" for an earlier
-                    // send as a receive error; the socket itself is fine.
-                    Err(error) if error.kind() == io::ErrorKind::ConnectionReset => continue,
+                    // An ICMP "port unreachable" for an earlier send; the socket itself is fine.
+                    Err(error) if crate::net::udp_transient(&error) => continue,
                     Err(error) => {
                         filled.fail(EngineError::new("wait.receive_failed").with("target", local).because(error));
                         break;

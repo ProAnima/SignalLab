@@ -1,9 +1,11 @@
 # Checks and builds Signal Lab for Linux on any machine with Docker — the same
 # base system and packages as the Linux job in CI (ubuntu-22.04), so a package
 # built here is the package CI would build. Used by `npm run check:linux` and
-# `npm run build:linux` (scripts/linux.mjs); the source is mounted, not copied.
+# `npm run build:linux` (scripts/linux.mjs, stage `builder`) and by
+# `npm run e2e:linux` (scripts/e2e.mjs, stage `e2e`); the source is mounted,
+# not copied.
 
-FROM ubuntu:22.04
+FROM ubuntu:22.04 AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 # Tauri's Linux prerequisites (WebKitGTK 4.1, librsvg, patchelf for AppImage),
@@ -35,3 +37,12 @@ RUN curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-to
 ENV APPIMAGE_EXTRACT_AND_RUN=1
 
 WORKDIR /work
+
+# ---- e2e: the builder, plus a browser engine to drive -------------------------
+# WebKitWebDriver drives WebKitGTK — the Linux desktop app's own webview, and
+# MiniBrowser for the server — on a virtual display.
+FROM builder AS e2e
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends webkit2gtk-driver xvfb xauth fonts-dejavu-core \
+ && rm -rf /var/lib/apt/lists/*
+

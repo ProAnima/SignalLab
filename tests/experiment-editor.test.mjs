@@ -1,9 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { historyReducer, newHistory, HISTORY_LIMIT } from "../src/lib/editHistory.ts";
-import { addAfter, addBranch, anchorAfter, arrangeNodes, connect, createNode, disconnect, duplicateNode, insertOnEdge, isWired, missingOutputs, placeAfter, removeNode, requiredPortsFor, unreachableNodes, validPortsFor, waitForMqttMessage, waitForOscMessage, NODE_WIDTH, NODE_HEIGHT } from "../src/lib/experimentGraph.ts";
+import { addAfter, addBranch, anchorAfter, arrangeNodes, connect, createNode, disconnect, duplicateNode, insertOnEdge, isBackEdge, isWired, loopBody, missingOutputs, placeAfter, removeNode, requiredPortsFor, unreachableNodes, validPortsFor, waitForMqttMessage, waitForOscMessage, NODE_WIDTH, NODE_HEIGHT } from "../src/lib/experimentGraph.ts";
 import { ADDABLE_NODES, NODE_CATALOG } from "../src/lib/experimentCatalog.ts";
-import { jsonPath, suggestVariableName, templateAt, variablesBefore, isIdent, effectiveParams, renameParam, removeParam, setParamValue, addProfile, renameProfile, removeProfile, secretNames, replyFields, writtenVariable, canRetry, defaultReply, DEFAULT_RETRY } from "../src/lib/experimentData.ts";
+import { jsonPath, suggestVariableName, templateAt, variablesBefore, isIdent, effectiveParams, renameParam, removeParam, setParamValue, addProfile, renameProfile, removeProfile, secretNames, replyFields, writtenVariable, canRepeat, canRetry, defaultReply, DEFAULT_REPEAT, DEFAULT_RETRY } from "../src/lib/experimentData.ts";
 import { describeError, failureNode, fieldLabel, isEngineError, messageParams, responseFailure } from "../src/lib/errors.ts";
 import { en } from "../src/lib/locales/en.ts";
 import { ru } from "../src/lib/locales/ru.ts";
@@ -454,5 +454,75 @@ test("Wait for this: a received OSC message or MQTT topic becomes a wait that re
   assert.equal(many.args.length, 16, "no more rules than the engine accepts");
   const topic = waitForMqttMessage("192.168.1.20", 1883, "lights/hall/state");
   assert.deepEqual([topic.type, topic.host, topic.port, topic.topic, topic.mode], ["wait_mqtt", "192.168.1.20", 1883, "lights/hall/state", "any"]);
+});
+
+test("a loop's body may wire back to it, and nothing else may go back; the editor reads the flow forward", () => {
+  const start = { id: "start", type: "start", x: 40, y: 40 };
+  const end = { id: "end", type: "end", x: 900, y: 40 };
+  const loop = { ...createNode("loop", 240, 40), id: "loop" };
+  const ask = { ...createNode("osc", 470, 40), id: "ask" };
+  const pause = { ...createNode("delay", 700, 40), id: "pause" };
+  let doc = { version: 5, name: "Loop", params: [], profiles: [], profile: null, seed: null, nodes: [start, loop, ask, pause, end], edges: [] };
+  assert.deepEqual(validPortsFor("loop"), ["body", "done", "limit"]);
+  assert.deepEqual(requiredPortsFor("loop"), ["body", "done"], "Limit is optional, like a wait's Timeout");
+  doc = connect(doc, "start", "next", "loop");
+  doc = connect(doc, "loop", "body", "ask");
+  doc = connect(doc, "ask", "next", "pause");
+  const closed = connect(doc, "pause", "next", "loop");
+  assert.notEqual(closed, doc, "the body's last step wires back to its loop");
+  assert.deepEqual([...loopBody(closed, "loop")].sort(), ["ask", "pause"]);
+  assert.ok(isBackEdge(closed, closed.edges.at(-1)) && !isBackEdge(closed, closed.edges[0]));
+  doc = connect(closed, "loop", "done", "end");
+  assert.equal(connect(doc, "pause", "next", "start"), doc, "Start has no input");
+  const after = { ...createNode("log", 470, 200), id: "after" };
+  const withAfter = connect({ ...doc, nodes: [...doc.nodes, after] }, "loop", "limit", "after");
+  assert.equal(connect(withAfter, "after", "next", "loop"), withAfter, "what follows the loop cannot go back into it");
+  assert.equal(connect(doc, "pause", "next", "ask"), doc, "a cycle inside the body is refused");
+  assert.equal(missingOutputs(doc).size, 0);
+  assert.equal(unreachableNodes(doc).size, 0);
+
+  // The layout puts the body after the loop, in spite of the wire back.
+  const arranged = arrangeNodes({ ...doc, nodes: doc.nodes.map((node) => ({ ...node, x: 40, y: 40 })) });
+  const x = (id) => arranged.nodes.find((node) => node.id === id).x;
+  assert.ok(x("start") < x("loop") && x("loop") < x("ask") && x("ask") < x("pause"), "left to right along the flow");
+  const y = (id) => arranged.nodes.find((node) => node.id === id).y;
+  assert.equal(y("ask"), y("loop"), "the body stays in the loop's row");
+  const withDone = arrangeNodes({ ...doc, nodes: [...doc.nodes.map((node) => ({ ...node, x: 40, y: 40 })), { ...createNode("log", 0, 0), id: "next" }],
+    edges: [...doc.edges.filter((edge) => edge.port !== "done"), { from: "loop", to: "next", port: "done" }, { from: "next", to: "end", port: "next" }] });
+  const at = (id) => withDone.nodes.find((node) => node.id === id);
+  assert.ok(at("next").y > at("ask").y, "what follows Done goes below the body");
+  // A node spliced into the body stays in the body; one on the wire back moves nothing.
+  const spliced = insertOnEdge(doc, doc.edges.find((edge) => edge.from === "ask"), { ...createNode("log", 0, 0), id: "mark" });
+  assert.ok(loopBody(spliced, "loop").has("mark"));
+  const onBack = insertOnEdge(doc, doc.edges.find((edge) => edge.from === "pause"), { ...createNode("log", 0, 0), id: "tail" });
+  assert.equal(onBack.nodes.find((node) => node.id === "loop").x, doc.nodes.find((node) => node.id === "loop").x);
+  assert.ok(loopBody(onBack, "loop").has("tail"));
+  // Removing the only step of a body leaves Body unwired rather than wiring the loop to itself.
+  const single = connect(connect(connect({ ...doc, edges: [] }, "start", "next", "loop"), "loop", "body", "ask"), "ask", "next", "loop");
+  const emptied = removeNode(single, "ask");
+  assert.ok(emptied.edges.every((edge) => edge.from !== edge.to));
+  assert.ok(missingOutputs(emptied).has("loop:body"));
+  // A Loop put on a wire continues the flow through Done, not through its Body.
+  const straight = { ...doc, nodes: [start, ask, end], edges: [{ from: "start", to: "ask", port: "next" }, { from: "ask", to: "end", port: "next" }] };
+  const looped = insertOnEdge(straight, straight.edges[1], { ...createNode("loop", 0, 0), id: "around" });
+  assert.ok(isWired(looped, "around", "done", "end") && !looped.edges.some((edge) => edge.from === "around" && edge.port === "body"));
+  // The first step on an empty Body is wired back at once; a branch, with two outputs, is left to the user.
+  const fresh = { ...doc, nodes: [start, loop, end], edges: [{ from: "start", to: "loop", port: "next" }] };
+  const first = addAfter(fresh, { from: "loop", port: "body" }, { ...createNode("osc", 470, 40), id: "first" });
+  assert.ok(isWired(first, "first", "next", "loop") && loopBody(first, "loop").has("first"), "the body is whole at once");
+  const second = addAfter(first, { from: "first", port: "next" }, { ...createNode("delay", 0, 0), id: "second" });
+  assert.ok(isWired(second, "second", "next", "loop") && !isWired(second, "first", "next", "loop"), "a step after it splices into the way back");
+  const branchy = addBranch(fresh, { from: "loop", port: "body" }, { ...createNode("branch_value", 470, 40), id: "fork" });
+  assert.ok(!branchy.edges.some((edge) => edge.to === "loop" && edge.from === "fork"));
+  // Suggestions for the exit condition include what the body sets.
+  const asking = { ...ask, reply: { ...defaultReply("osc"), variable: "status" } };
+  const polling = { ...doc, nodes: doc.nodes.map((node) => node.id === "ask" ? asking : node) };
+  assert.deepEqual(variablesBefore(polling, "loop").map((item) => item.name), ["status"]);
+});
+
+test("repeat is for the steps that send", () => {
+  assert.deepEqual(ADDABLE_NODES.filter((type) => canRepeat(createNode(type, 0, 0))).sort(), ["http", "mqtt", "osc", "tcp", "udp"]);
+  assert.equal(DEFAULT_REPEAT.until, "count");
+  assert.ok(DEFAULT_REPEAT.interval_ms >= 10 && DEFAULT_REPEAT.count >= 2, "the default is one the engine accepts");
 });
 

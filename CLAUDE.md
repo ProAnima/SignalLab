@@ -22,6 +22,8 @@ npm run tauri build        # Windows installers -> target/release/bundle/
 npm run build:linux        # .deb/.rpm/.AppImage in Docker -> artifacts/linux/
 npm run check:image        # server image built + smoke-tested in Docker
 npm run check:webkit       # tooltips in WebKitGTK (the Linux webview), in Docker; CI runs it natively
+npm run e2e                # every screen end to end: desktop app (WebView2) + server (Edge) -> artifacts/e2e/
+npm run e2e:linux          # the same on Linux in Docker (WebKitGTK); -- --image signallab:dev tours the image
 npm run release -- X.Y.Z --dry-run   # then --push; see docs/delivery.md
 cargo test --workspace     # engine, desktop shell and server tests
 cargo run -p signal-lab-server   # server on 127.0.0.1:1430 serving dist/ (npm run build first)
@@ -38,7 +40,8 @@ Releases are tags pushed by `npm run release`; `.github/workflows/release.yml`
 builds a draft release, a person publishes it, and publishing starts
 `.github/workflows/image.yml` (the GHCR image, amd64 + arm64). Never upload
 installers or push images by hand. CI also builds and smoke-tests the image
-(`scripts/image.mjs smoke`) on both architectures.
+(`scripts/image.mjs smoke`) on both architectures, and runs the end-to-end tour
+(`scripts/e2e.mjs`) of the desktop app, the server and the image.
 
 `npm run dev` alone serves the UI at http://localhost:1420, but **every engine
 call fails there** — no Tauri runtime and no server behind it. Use it only to
@@ -57,13 +60,19 @@ src/                      React UI
   lib/platform.ts         fullscreen, downloads, sign-out — per platform
   lib/api.ts              typed command wrappers + event channels — mirrors the Rust types
   lib/store.tsx           shared jobs + console state, app_info, connection state
-  lib/i18n.tsx            locale provider, t() with {placeholder} interpolation
+  lib/i18n.tsx            language provider, detection, t()
+  lib/translate.ts        {placeholder} and ICU {n, plural, …} filling, numbers per language (pure)
+  lib/locales/index.ts    LOCALES: the languages; adding one = a dictionary + a line (docs/localization.md)
   lib/locales/en.ts       source of truth for every string; ru.ts is typed against it
   components/Scope.tsx    canvas oscilloscope (no chart library)
   components/OscArgs.tsx  typed OSC argument editor (OSC + Broadcast + Signals share it)
   components/Palette.tsx  Ctrl+K signal palette, mounted once in the shell
   components/TooltipLayer.tsx  the one tooltip: any `data-tip`, hover + keyboard focus (placement: lib/tooltip.ts)
+  components/Splitter.tsx the pane handle (console, properties, timeline): drag or arrow keys, sizes kept
   lib/signals.ts          firing, describing and capturing signals
+  lib/library.ts          library folders as "/" paths, canonical bodies, the starter set's texts (pure)
+  components/SaveSignal.tsx  Save… / Save / Save as… on HTTP, OSC, MQTT; Ctrl+S
+  components/SignalTree.tsx  folders that open and close, drag & drop, F2 / Delete
   lib/experimentGraph.ts  pure graph edits for the experiment editor (add, splice, layout)
   lib/experimentData.ts   template suggestions, upstream variables, JSON paths
   lib/errors.ts           describeError: one renderer for engine errors and legacy text
@@ -98,7 +107,10 @@ engine/src/               signal-lab-engine — no Tauri, no window
   mqtt.rs                 one broker connection as a job; MqttHub routes commands
   signals.rs              signal library: file + starter set (storage only)
   jobs.rs                 job registry: start / list / stop
-engine/tests/ping_reply.rs  an experiment run end to end over loopback
+engine/tests/ping_reply.rs  an experiment run end to end over loopback (repeat_loop.rs: Repeat and Loop)
+tests/e2e/tour.ts         the end-to-end tour, run inside the page: every screen, by its visible labels
+scripts/e2e.mjs           its runner: builds, starts the app / server + a browser, steps, screenshots
+scripts/e2e/fixtures.mjs  loopback stand-ins the tour talks to: HTTP API, UDP/TCP sinks, OSC device, MQTT broker
 src-tauri/src/lib.rs      the desktop shell: one `engine` command + Tauri events
 server/src/               signal-lab-server (axum)
   config.rs               options + env vars, checked once (no token => loopback only)
@@ -134,13 +146,21 @@ Dockerfile, deploy/compose.yaml, scripts/image.mjs   the server image and its sm
   path is a single atomic load. High-rate sources go through the rate gate and
   report what wasn't drawn as *"N not shown"*.
 - **`en.ts` defines the `Dict` type.** A key missing from `ru.ts` is a compile
-  error, so `npm run build` is the translation check. Console lines store
+  error, so `npm run build` is the translation check; `tests/i18n.test.mjs`
+  adds that every language asks for the same values, has every plural form its
+  rules need, and that every literal key in the code exists. Console lines store
   key + params, never finished text — that's what makes live language switching
-  re-render the backlog.
+  re-render the backlog. A count is a plural (`{n, plural, one {# x} other {# xs}}`)
+  and gets the number itself, not `fmtNum(n)`; numbers and sizes go through
+  `fmtNum`/`fmtBytes`, which follow the language. See docs/localization.md.
 - **Every clickable thing is a real `<button>`**, sidebar nav and filter chips
   included; they need focus rings and Space/Enter. Never put a click target
   inside a `<label>`. `--text-faint` carries the 9.5px labels and is tuned to
   clear WCAG AA on all three surfaces — don't darken it.
+- **Every field has a name.** A `.field` label is tied to its control
+  (`htmlFor` / `id` from `useFieldIds()`, unique per mounted screen) or wraps
+  it; a control without a visible label, and an icon-only button, gets an
+  `aria-label`. The e2e tour fails a screen that has a nameless control.
 - **No explanatory captions on screen.** Labels, values, states and errors only;
   any help, shortcut or "0 = …" goes in a localized `data-tip` on the control or
   its label, shown by the one `TooltipLayer` (hover + keyboard focus, top layer,
@@ -165,6 +185,17 @@ Dockerfile, deploy/compose.yaml, scripts/image.mjs   the server image and its sm
   `Documents/SignalLab/signals.json`, is written whole on a debounce, and a
   parse error is reported with the path rather than silently overwritten with
   the starter set. Shipped seed targets stay on loopback; a test enforces it.
+  A folder is a "/" path in `group`; `folders` (version 2) keeps empty ones.
+  The starter set is renamed into the interface language once, when it is
+  written (`seeded`, `localizeSeed`); `SEED_IDS` must equal `seed()` (a test).
+- **A sender stays tied to its signal.** HTTP, OSC and MQTT keep the id of the
+  signal they were saved as or opened from; *Save* overwrites that one,
+  "changed" compares `canonicalBody` (sorted keys, OSC floats as f32 — what the
+  engine stores), never the raw JSON.
+- **The Inspector lives in the bottom panel**, a tab next to the console, so it
+  is there on every screen; it mounts on first show and then only hides, like a
+  screen. Anything that shows a frame (`showFrame`) opens that tab. It is not a
+  sidebar screen again.
 
 - **Templates are resolved only by the engine.** `template.rs` is the language;
   the editor's preview calls `experiment_resolve` and *Send now* calls
@@ -180,14 +211,20 @@ Dockerfile, deploy/compose.yaml, scripts/image.mjs   the server image and its sm
   `secrets::mask`, and Inspector frames are redacted. Tests use `MemoryStore`,
   never the real credential store.
 
-- **The experiment engine never builds sentences.** It fails with an
+- **The engine never builds sentences.** Every command fails with an
   `EngineError` whose `code` is the translation key `err.<code>`, with values
   in `params`, the `node` and `field` it is about, and the OS/library text in
   `detail`. Write codes as literals (`EngineError::new("wait.timeout")`,
   `Field::new("bind")`): a test scans the engine and fails if `en.ts` has no
   `err.<code>` / `field.<key>` text, or keeps one nobody uses. The UI shows any
   failure through `describeError`/`ErrorMessage` and stores the failure, not its
-  text. Other modules still return strings; converting one is local.
+  text. That holds for the tool screens too (OSC, Broadcast, MQTT, …) and for
+  event payloads (`job://ended`, `osc://message`, `mqtt://state`); a job's
+  label is `job.<kind>` filled from `JobInfo::params` (a test in `jobs.rs`
+  checks every kind has one), `label` stays English for server logs. Network
+  causes reuse `transport.*` (`transport::of_io`, `net::bind_error`). What
+  the Inspector decodes (summaries, verdicts) is protocol notation, not a
+  sentence.
 - **Screens stay mounted.** `App.tsx` mounts a view on first visit and only
   hides it afterwards, so nothing typed or received is lost on a tab switch. A
   view must therefore not assume it is visible (a canvas measures 0 wide while
@@ -205,6 +242,23 @@ Dockerfile, deploy/compose.yaml, scripts/image.mjs   the server image and its sm
   branch. An OSC/UDP node with `reply` sends from the listener on `reply.bind`
   (`Listener::send_to`, port 0 allowed) and waits there in the same step; its
   variable is written on Next. Both are document version 4.
+- **Repeat is a node setting; Loop is the one cycle.** `Node::repeat` applies
+  to actions: the runner sends again (`experiment_run::repeated`), rendering
+  templates per send, retrying each, reporting progress at most once a second;
+  jitter comes from the seed. A Loop's body (`LoopShape`: reached from Body,
+  leading back) may wire back to it — validation, ordering and the editor
+  (`isBackEdge`, `loopBody`) see the graph without those wires, so any other
+  cycle is still an error. A body runs as one branch: no fan-out, Fork, Join,
+  End or nested Loop, entered only through Body. The exit condition is read
+  after each iteration and is not rendered on entry. Both are document version 5.
+- **UDP receive loops survive ICMP news.** Windows reports "port unreachable"
+  for an earlier send as `ConnectionReset` on the next receive (a connected
+  socket elsewhere as `ConnectionRefused`); `net::udp_transient` says so, and
+  every receive loop (monitor, discovery, relay, listeners) carries on. A loop
+  that really cannot receive ends its job with the reason, never silently.
+- **Inspector frames are numbered under the ring's lock**, so the ring is in
+  number order and `drain` ships each frame once; the view also drops a frame
+  it already holds (snapshot and first batch overlap).
 - **Waits read an `Inbox`.** A UDP `Listener` and an MQTT `Subscription`
   (`subscribe.rs`) each fill one; matching and consumption are the same.
   Subscriptions open before the first step, so their broker and topic take
@@ -218,6 +272,10 @@ Dockerfile, deploy/compose.yaml, scripts/image.mjs   the server image and its sm
 - **Keep `cargo test --workspace` green**: it covers the OSC codec, the
   CIDR/target resolver, socket-option paths, the capture ring, the signal
   library, an experiment run end to end, and the server's security rules.
+- **Keep the e2e tour green on all four targets** (Windows/Linux × desktop/
+  server). A new screen or control the tour cannot find by its label is a
+  step to add in `tests/e2e/tour.ts`; `npm run build` type-checks the tour
+  against `en.ts`, so a renamed text breaks the build, not the run.
 - **The image runs unprivileged.** uid 10001, read-only root, no capabilities;
   it writes only to `/data`. Its Rust and Node versions equal
   `rust-toolchain.toml` and the Linux builder (a test checks). Broadcast,

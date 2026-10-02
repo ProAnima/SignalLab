@@ -1,21 +1,23 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { api, EV, type JobInfo, type ProxyStat } from "../lib/api";
 import { useStore } from "../lib/store";
 import { useT } from "../lib/i18n";
-import { useJobStream } from "../lib/hooks";
+import { useFieldIds, useJobStream } from "../lib/hooks";
 import { fmtBytes, fmtNum } from "../lib/format";
 
-function Slider({ label, value, onChange, min, max, step, unit }: {
-  label: string; value: number; onChange: (v: number) => void;
+function Slider({ label, tip, value, onChange, min, max, step, unit }: {
+  label: string; tip: string; value: number; onChange: (v: number) => void;
   min: number; max: number; step: number; unit: string;
 }) {
+  const id = useId();
   return (
     <div className="field">
-      <label style={{ display: "flex", justifyContent: "space-between" }}>
+      <label htmlFor={id} data-tip={tip} style={{ display: "flex", justifyContent: "space-between" }}>
         <span>{label}</span>
         <span style={{ fontFamily: "var(--mono)", color: "var(--accent)" }}>{value}{unit}</span>
       </label>
-      <input type="range" min={min} max={max} step={step} value={value} onChange={(e) => onChange(+e.target.value)} />
+      {/* aria-valuetext: a screen reader says the value with its unit, as the label shows it. */}
+      <input id={id} type="range" min={min} max={max} step={step} value={value} aria-valuetext={`${value}${unit}`} onChange={(e) => onChange(+e.target.value)} />
     </div>
   );
 }
@@ -23,6 +25,7 @@ function Slider({ label, value, onChange, min, max, step, unit }: {
 export function NetsimView() {
   const { pushLog, pushError, refreshJobs, stopJob, jobGone } = useStore();
   const t = useT();
+  const fid = useFieldIds();
 
   const [listen, setListen] = useState("0.0.0.0:9010");
   const [target, setTarget] = useState("127.0.0.1:9000");
@@ -69,20 +72,20 @@ export function NetsimView() {
         <div className="panel">
           <p className="section-label">{t("ns.relay")}</p>
           <div className="field">
-            <label data-tip={t("ns.howToBody", { listen: listen.replace("0.0.0.0", "127.0.0.1"), target })}>{t("ns.listen")}</label>
-            <input value={listen} onChange={(e) => setListen(e.target.value)} disabled={!!job} />
+            <label htmlFor={fid("listen")} data-tip={t("ns.howToBody", { listen: listen.replace("0.0.0.0", "127.0.0.1"), target })}>{t("ns.listen")}</label>
+            <input id={fid("listen")} value={listen} onChange={(e) => setListen(e.target.value)} disabled={!!job} />
           </div>
           <div className="field">
-            <label data-tip={t("ns.targetHint")}>{t("ns.target")}</label>
-            <input value={target} onChange={(e) => setTarget(e.target.value)} disabled={!!job} />
+            <label htmlFor={fid("target")} data-tip={t("ns.targetHint")}>{t("ns.target")}</label>
+            <input id={fid("target")} value={target} onChange={(e) => setTarget(e.target.value)} disabled={!!job} />
           </div>
 
           <p className="section-label" style={{ marginTop: 20 }}>{t("ns.profile")}</p>
-          <Slider label={t("ns.latency")} value={latency} onChange={setLatency} min={0} max={1000} step={5} unit="ms" />
-          <Slider label={t("ns.jitter")} value={jitter} onChange={setJitter} min={0} max={500} step={5} unit="ms" />
-          <Slider label={t("ns.loss")} value={loss} onChange={setLoss} min={0} max={100} step={1} unit="%" />
-          <Slider label={t("ns.duplicate")} value={duplicate} onChange={setDuplicate} min={0} max={100} step={1} unit="%" />
-          <Slider label={t("ns.corrupt")} value={corrupt} onChange={setCorrupt} min={0} max={100} step={1} unit="%" />
+          <Slider label={t("ns.latency")} tip={t("ns.latencyHint")} value={latency} onChange={setLatency} min={0} max={1000} step={5} unit={` ${t("unit.ms")}`} />
+          <Slider label={t("ns.jitter")} tip={t("ns.jitterHint")} value={jitter} onChange={setJitter} min={0} max={500} step={5} unit={` ${t("unit.ms")}`} />
+          <Slider label={t("ns.loss")} tip={t("ns.lossHint")} value={loss} onChange={setLoss} min={0} max={100} step={1} unit="%" />
+          <Slider label={t("ns.duplicate")} tip={t("ns.duplicateHint")} value={duplicate} onChange={setDuplicate} min={0} max={100} step={1} unit="%" />
+          <Slider label={t("ns.corrupt")} tip={t("ns.corruptHint")} value={corrupt} onChange={setCorrupt} min={0} max={100} step={1} unit="%" />
 
           <div className="btn-row">
             <button className={job ? "danger" : "primary"} onClick={toggle}>

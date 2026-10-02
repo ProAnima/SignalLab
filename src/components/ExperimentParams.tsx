@@ -63,7 +63,7 @@ export function ExperimentParams({ doc, issues, disabled, anchor, describe, onEd
       style={{ left: Math.max(8, Math.min(anchor.left, window.innerWidth - 448)), top: anchor.top }}
       onPointerDown={(event) => event.stopPropagation()}
       onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); onClose(); } }}>
-      <header><strong data-tip={`${t("exp.paramsHint")}\n${t("exp.profilesHint")}`}>{t("exp.params")}</strong><button className="ghost sm" aria-label={t("exp.close")} onClick={onClose}>×</button></header>
+      <header><strong data-tip={`${t("exp.paramsHint")}\n${t("exp.profilesHint")}`}>{t("exp.params")}</strong><button className="ghost sm" aria-label={t("exp.close")} data-tip={t("common.closeHint")} onClick={onClose}>×</button></header>
       <div className="experiment-profile-tabs" role="tablist" aria-label={t("exp.profile")}>
         {[null, ...doc.profiles.map((item) => item.name)].map((name) => {
           const issue = issueOf(name);

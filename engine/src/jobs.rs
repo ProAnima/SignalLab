@@ -1,7 +1,7 @@
 //! Job registry: tracks every long-running task (OSC monitor/generator, network
 //! impairment proxy, storm generator, port scan) so the UI can list and stop them.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -16,15 +16,32 @@ pub fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct JobInfo {
     pub id: u64,
-    /// Machine-readable kind: "osc-monitor", "osc-gen", "http-burst", "netsim",
-    /// "storm", "scan".
+    /// Machine-readable kind: "experiment", "osc-monitor", "osc-gen", "mqtt",
+    /// "beacon", "discovery", "http-burst", "netsim", "storm", "scan".
     pub kind: String,
-    /// Human-readable label shown in the Jobs panel.
+    /// One English line for logs (the server writes it); the interface shows
+    /// `job.<kind>` filled in with `params` instead.
     pub label: String,
+    /// The values the label is made of (target, bind, host, …), by name.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub params: BTreeMap<String, String>,
     pub started_ms: u64,
+}
+
+impl JobInfo {
+    /// A job of `kind`, started now.
+    pub fn new(id: u64, kind: &str, label: impl Into<String>) -> Self {
+        JobInfo { id, kind: kind.into(), label: label.into(), params: BTreeMap::new(), started_ms: now_ms() }
+    }
+
+    /// One value of the label, for `job.<kind>`.
+    pub fn with(mut self, name: &str, value: impl ToString) -> Self {
+        self.params.insert(name.into(), value.to_string());
+        self
+    }
 }
 
 struct JobEntry {
@@ -121,6 +138,55 @@ impl JobRegistry {
         let mut guard = self.inner.lock().unwrap();
         for (_, entry) in guard.drain() {
             entry.handle.abort();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_job_carries_the_values_of_its_label() {
+        let info = JobInfo::new(3, "scan", "Scan 10.0.0.1 :1-80").with("host", "10.0.0.1").with("from", 1).with("to", 80);
+        let value = serde_json::to_value(&info).unwrap();
+        assert_eq!(value["params"], serde_json::json!({ "host": "10.0.0.1", "from": "1", "to": "80" }));
+        assert_eq!((value["kind"].as_str(), value["label"].as_str()), (Some("scan"), Some("Scan 10.0.0.1 :1-80")));
+        let bare = serde_json::to_value(JobInfo::new(4, "storm", "x")).unwrap();
+        assert!(bare.get("params").is_none(), "no params, no field");
+    }
+
+    /// The interface shows `job.<kind>` with the job's params; a kind without
+    /// a text, or a text asking for a value the job does not give, would show
+    /// the raw kind or a bare `{placeholder}`.
+    #[test]
+    fn every_job_kind_has_a_text_that_its_params_fill_in() {
+        use std::collections::{BTreeMap, BTreeSet};
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let en = std::fs::read_to_string(root.join("../src/lib/locales/en.ts")).unwrap();
+        // `JobInfo::new(id, "kind", label)` and the `.with("name", …)` calls that follow it.
+        let job = regex::Regex::new(r#"JobInfo::new\([^,]+,\s*"([a-z-]+)"((?:[^;]|;[^\n])*?);\n"#).unwrap();
+        let with = regex::Regex::new(r#"\.with\("([a-z_]+)""#).unwrap();
+        let mut kinds: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        for entry in std::fs::read_dir(root.join("src")).unwrap() {
+            let path = entry.unwrap().path();
+            if path.file_name().is_some_and(|name| name == "jobs.rs") || path.extension().is_none_or(|extension| extension != "rs") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).unwrap();
+            for found in job.captures_iter(&text) {
+                kinds.entry(found[1].to_string()).or_default().extend(with.captures_iter(&found[2]).map(|name| name[1].to_string()));
+            }
+        }
+        assert!(kinds.len() >= 10, "the scan found the job kinds: {kinds:?}");
+        let placeholder = regex::Regex::new(r"\{(\w+)").unwrap();
+        for (kind, params) in &kinds {
+            let key = format!("\"job.{kind}\": \"");
+            let start = en.find(&key).unwrap_or_else(|| panic!("no text in en.ts for job.{kind}")) + key.len();
+            let text = &en[start..start + en[start..].find("\",\n").unwrap()];
+            for name in placeholder.captures_iter(text).map(|found| found[1].to_string()) {
+                assert!(params.contains(&name), "job.{kind} asks for {{{name}}}, which the job does not give ({params:?})");
+            }
         }
     }
 }

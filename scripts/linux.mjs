@@ -65,7 +65,7 @@ function main() {
   const rust = toolchain();
   console.log(`▶ builder image ${IMAGE} with Rust ${rust.channel} (cached after the first build)`);
   const buildArgs = ["--build-arg", `RUST_TOOLCHAIN=${rust.channel}`, "--build-arg", `RUST_COMPONENTS=${rust.components.join(" ")}`];
-  if (!run("docker", ["build", "-t", IMAGE, ...buildArgs, join(root, "docker", "linux-builder")]).ok) fail("could not build the Linux builder image");
+  if (!run("docker", ["build", "--target", "builder", "-t", IMAGE, ...buildArgs, join(root, "docker", "linux-builder")]).ok) fail("could not build the Linux builder image");
 
   if (mode === "build") mkdirSync(join(root, "artifacts", "linux"), { recursive: true });
   const mounts = [`${root}:/work`, ...Object.entries(VOLUMES).map(([volume, path]) => `${volume}:${path}`)].flatMap((mount) => ["-v", mount]);

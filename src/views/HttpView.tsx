@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import { api, EV, type HttpResponse, type JobInfo, type BurstProgress, type SignalBody } from "../lib/api";
+import { api, EV, type HttpResponse, type JobInfo, type BurstProgress, type Signal, type SignalBody } from "../lib/api";
+import { SaveSignal, saveShortcut } from "../components/SaveSignal";
 import { useStore } from "../lib/store";
 import { describeError, responseFailure } from "../lib/errors";
 import { ErrorMessage } from "../components/ErrorMessage";
 import { useT } from "../lib/i18n";
-import { useJobStream, usePersistentState, useSeries } from "../lib/hooks";
+import { useFieldIds, useJobStream, usePersistentState, useSeries } from "../lib/hooks";
 import { fmtBytes, fmtNum, fmtTime, prettyJson, statusClass } from "../lib/format";
 import { Scope } from "../components/Scope";
 
@@ -13,16 +14,41 @@ const METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
 const isHeaders = (value: unknown) => Array.isArray(value)
   && value.every((pair) => Array.isArray(pair) && pair.length === 2 && pair.every((part) => typeof part === "string"));
 
-export function HttpView({ onToExperiment }: { onToExperiment?: (body: SignalBody) => void }) {
+/** "GET /api/login" for a new signal's name. */
+function requestName(method: string, url: string): string {
+  try { const parsed = new URL(url); return `${method} ${parsed.pathname}${parsed.search}`; } catch { return `${method} ${url}`; }
+}
+
+/**
+ * `load`: a stored HTTP signal to edit and send here (from Signals); `at`
+ * makes the same one opened twice a new request. `onShowSignal` opens the
+ * one this request is saved as.
+ */
+export function HttpView({ onToExperiment, load, onShowSignal }: {
+  onToExperiment?: (body: SignalBody) => void;
+  load?: { signal: Signal; at: number } | null;
+  onShowSignal?: (id: string) => void;
+}) {
   const { pushLog, pushError, refreshJobs, stopJob, jobGone } = useStore();
   const t = useT();
+  const fid = useFieldIds();
 
   // The request is kept across screens and restarts; the response is not.
   const [method, setMethod] = usePersistentState("signal-lab.http.method", "GET", (value) => METHODS.includes(value as string));
-  const [url, setUrl] = usePersistentState("signal-lab.http.url", "https://httpbin.org/get");
+  // Loopback, like every default target: a host we do not own is never the default.
+  const [url, setUrl] = usePersistentState("signal-lab.http.url", "http://127.0.0.1:8080/");
   const [headers, setHeaders] = usePersistentState<[string, string][]>("signal-lab.http.headers", [["Accept", "application/json"]], isHeaders);
   const [body, setBody] = usePersistentState("signal-lab.http.body", "");
   const [timeout, setTimeoutMs] = usePersistentState("signal-lab.http.timeout", 10000);
+  // The library signal this request is saved as, if any.
+  const [signalId, setSignalId] = usePersistentState<string | null>("signal-lab.http.signal", null, (value) => value === null || typeof value === "string");
+
+  useEffect(() => {
+    if (load?.signal.body.transport !== "http") return;
+    const request = load.signal.body.request;
+    setMethod(request.method); setUrl(request.url); setHeaders(request.headers.map(([name, value]) => [name, value]));
+    setBody(request.body ?? ""); setTimeoutMs(request.timeout_ms); setSignalId(load.signal.id);
+  }, [load]); // eslint-disable-line react-hooks/exhaustive-deps
   const [busy, setBusy] = useState(false);
   const [resp, setResp] = useState<HttpResponse | null>(null);
   const [sentAt, setSentAt] = useState(0);
@@ -65,8 +91,9 @@ export function HttpView({ onToExperiment }: { onToExperiment?: (body: SignalBod
   };
 
   // Ctrl+Enter sends from any field of the request, the body included.
-  const onRequestKey = (e: React.KeyboardEvent) => {
+  const onRequestKey = (e: React.KeyboardEvent<HTMLElement>) => {
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); void send(); }
+    saveShortcut(e);
   };
   const onEnterSend = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.ctrlKey && !e.metaKey) { e.preventDefault(); void send(); }
@@ -113,7 +140,7 @@ export function HttpView({ onToExperiment }: { onToExperiment?: (body: SignalBod
         <div className="panel" onKeyDown={onRequestKey}>
           <p className="section-label">{t("http.request")}</p>
           <div className="row" style={{ marginBottom: 12 }}>
-            <select style={{ flex: "0 0 110px" }} value={method} onChange={(e) => setMethod(e.target.value)}>
+            <select style={{ flex: "0 0 110px" }} aria-label={t("exp.method")} value={method} onChange={(e) => setMethod(e.target.value)}>
               {METHODS.map((m) => <option key={m}>{m}</option>)}
             </select>
             <input
@@ -142,7 +169,7 @@ export function HttpView({ onToExperiment }: { onToExperiment?: (body: SignalBod
                   value={h[1]}
                   onChange={(e) => setHeaders(headers.map((x, j) => j === i ? [x[0], e.target.value] : x))}
                 />
-                <button className="ghost sm" style={{ flex: "0 0 auto" }} aria-label={t("exp.removeHeader")} onClick={() => setHeaders(headers.filter((_, j) => j !== i))}>✕</button>
+                <button className="ghost sm" style={{ flex: "0 0 auto" }} aria-label={t("exp.removeHeader")} data-tip={t("exp.removeHeader")} onClick={() => setHeaders(headers.filter((_, j) => j !== i))}>✕</button>
               </div>
             ))}
             <button className="ghost sm" onClick={() => setHeaders([...headers, ["", ""]])}>
@@ -151,13 +178,13 @@ export function HttpView({ onToExperiment }: { onToExperiment?: (body: SignalBod
           </div>
           {method !== "GET" && method !== "HEAD" && (
             <div className="field">
-              <label>{t("http.body")}</label>
-              <textarea value={body} onChange={(e) => setBody(e.target.value)} placeholder='{ "key": "value" }' />
+              <label htmlFor={fid("body")} data-tip={t("http.bodyHint")}>{t("http.body")}</label>
+              <textarea id={fid("body")} value={body} onChange={(e) => setBody(e.target.value)} placeholder='{ "key": "value" }' />
             </div>
           )}
           <div className="field">
-            <label>{t("common.timeoutMs")}</label>
-            <input type="number" value={timeout} onChange={(e) => setTimeoutMs(+e.target.value)} onKeyDown={onEnterSend} />
+            <label htmlFor={fid("timeout")} data-tip={t("common.timeoutHint")}>{t("common.timeoutMs")}</label>
+            <input id={fid("timeout")} type="number" value={timeout} onChange={(e) => setTimeoutMs(+e.target.value)} onKeyDown={onEnterSend} />
           </div>
           <div className="btn-row">
             <button className="primary" onClick={send} disabled={busy} data-tip={`${t("common.send")} · Enter / Ctrl+Enter`}>
@@ -170,10 +197,12 @@ export function HttpView({ onToExperiment }: { onToExperiment?: (body: SignalBod
               </button>
             )}
           </div>
+          <SaveSignal body={{ transport: "http", request: buildReq() }} signalId={signalId} onSignalId={setSignalId}
+            suggestName={requestName(method, url)} onShow={onShowSignal} />
           {/* The response panel can sit below the fold on a small window; the verdict never does. */}
           {resp && !busy && (
             <p className={"send-result " + (resp.error ? "err" : resp.ok ? "ok" : "warn")} role="status">
-              <span>{resp.error ? `✕ ${describeError(responseFailure(resp, sentUrl), t).text}` : `${resp.status} ${resp.status_text} · ${resp.latency_ms.toFixed(0)} ms · ${fmtBytes(resp.body_bytes)}`}</span>
+              <span>{resp.error ? `✕ ${describeError(responseFailure(resp, sentUrl), t).text}` : `${resp.status} ${resp.status_text} · ${fmtNum(resp.latency_ms)} ${t("unit.ms")} · ${fmtBytes(resp.body_bytes)}`}</span>
               <time>{fmtTime(sentAt).slice(0, 8)}</time>
             </p>
           )}
@@ -193,7 +222,7 @@ export function HttpView({ onToExperiment }: { onToExperiment?: (body: SignalBod
                 </div>
                 <div className="metric">
                   <div className="k">{t("http.latency")}</div>
-                  <div className="v accent">{resp.latency_ms.toFixed(0)}<small>ms</small></div>
+                  <div className="v accent">{fmtNum(resp.latency_ms)}<small>{t("unit.ms")}</small></div>
                 </div>
                 <div className="metric">
                   <div className="k">{t("http.size")}</div>
@@ -235,16 +264,16 @@ export function HttpView({ onToExperiment }: { onToExperiment?: (body: SignalBod
           <div>
             <div className="row">
               <div className="field">
-                <label>{t("common.concurrency")}</label>
-                <input type="number" value={concurrency} onChange={(e) => setConcurrency(+e.target.value)} />
+                <label htmlFor={fid("burst-concurrency")} data-tip={t("common.concurrencyHint")}>{t("common.concurrency")}</label>
+                <input id={fid("burst-concurrency")} type="number" value={concurrency} onChange={(e) => setConcurrency(+e.target.value)} />
               </div>
               <div className="field">
-                <label data-tip={t("http.totalHint")}>{t("http.total")}</label>
-                <input type="number" value={total} onChange={(e) => setTotal(+e.target.value)} />
+                <label htmlFor={fid("burst-total")} data-tip={t("http.totalHint")}>{t("http.total")}</label>
+                <input id={fid("burst-total")} type="number" value={total} onChange={(e) => setTotal(+e.target.value)} />
               </div>
               <div className="field">
-                <label data-tip={t("http.durationHint")}>{t("http.duration")}</label>
-                <input type="number" value={duration} onChange={(e) => setDuration(+e.target.value)} />
+                <label htmlFor={fid("burst-duration")} data-tip={t("http.durationHint")}>{t("http.duration")}</label>
+                <input id={fid("burst-duration")} type="number" value={duration} onChange={(e) => setDuration(+e.target.value)} />
               </div>
             </div>
             <div className="metrics">
@@ -252,11 +281,11 @@ export function HttpView({ onToExperiment }: { onToExperiment?: (body: SignalBod
               <div className="metric"><div className="k">{t("http.ok")}</div><div className="v accent">{fmtNum(prog?.ok ?? 0)}</div></div>
               <div className="metric"><div className="k">{t("http.failed")}</div><div className="v red">{fmtNum(prog?.failed ?? 0)}</div></div>
               <div className="metric" data-tip={t("http.rpsCaption")}><div className="k">{t("http.rps")}</div><div className="v accent">{fmtNum(prog?.rps ?? 0)}</div></div>
-              <div className="metric"><div className="k">{t("http.avg")}</div><div className="v">{(prog?.avg_latency_ms ?? 0).toFixed(0)}<small>ms</small></div></div>
+              <div className="metric"><div className="k">{t("http.avg")}</div><div className="v">{fmtNum(prog?.avg_latency_ms ?? 0)}<small>{t("unit.ms")}</small></div></div>
               <div className="metric">
                 <div className="k">{t("http.minMax")}</div>
                 <div className="v" style={{ fontSize: 15 }}>
-                  {(prog?.min_latency_ms ?? 0).toFixed(0)} / {(prog?.max_latency_ms ?? 0).toFixed(0)}<small>ms</small>
+                  {fmtNum(prog?.min_latency_ms ?? 0)} / {fmtNum(prog?.max_latency_ms ?? 0)}<small>{t("unit.ms")}</small>
                 </div>
               </div>
             </div>

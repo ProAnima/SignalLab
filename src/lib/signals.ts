@@ -11,7 +11,8 @@ import {
   api,
   type ExperimentNode, type Frame, type MqttConfig, type RawPayload, type Signal, type SignalBody,
 } from "./api";
-import type { TKey } from "./i18n";
+import type { TKey, Translate } from "./i18n";
+import { responseFailure } from "./errors";
 
 export const TRANSPORTS = ["osc", "udp", "http", "mqtt"] as const;
 export type Transport = (typeof TRANSPORTS)[number];
@@ -63,12 +64,15 @@ export function splitBroker(broker: string): { host: string; port: number } {
  * credentials and client id — which is also why the library file stores no
  * password of its own.
  */
-export async function fireSignal(s: Signal, liveMqttJobId?: number | null): Promise<string> {
+/** What a fired signal did, as a console line: its text key and values (the signal's name is added). */
+export interface Fired { key: TKey; params: Record<string, string | number> }
+
+export async function fireSignal(s: Signal, liveMqttJobId?: number | null): Promise<Fired> {
   const b = s.body;
   switch (b.transport) {
     case "osc": {
       const bytes = await api.oscSend(b.target, b.address, b.args);
-      return `${b.address} → ${b.target} · ${bytes} B`;
+      return { key: "log.firedOsc", params: { address: b.address, target: b.target, bytes } };
     }
     case "udp": {
       // Fan-out to a one-host list is exactly "send this payload there once".
@@ -84,21 +88,20 @@ export async function fireSignal(s: Signal, liveMqttJobId?: number | null): Prom
         count: 1,
         duration_s: 0,
       });
-      if (r.errors > 0) throw new Error(r.summary);
-      return `${b.target} · ${r.bytes} B`;
+      if (r.errors > 0) throw r.error ?? { code: "transport.failed", params: { target: b.target } };
+      return { key: "log.firedUdp", params: { target: b.target, bytes: r.bytes } };
     }
     case "http": {
       const r = await api.httpRequest(b.request);
       // A refused connection is a successful command with a failed request; the
       // library should treat it as a failure, the way a person would.
-      if (r.error) throw new Error(r.error);
-      return `${b.request.method} ${b.request.url} → ${r.status} · ${r.latency_ms.toFixed(1)} ms`;
+      if (r.error) throw responseFailure(r, b.request.url);
+      return { key: "log.firedHttp", params: { method: b.request.method, url: b.request.url, status: r.status, ms: Math.round(r.latency_ms) } };
     }
     case "mqtt": {
-      const tail = `qos${b.qos}${b.retain ? " retained" : ""}`;
       if (liveMqttJobId != null) {
         await api.mqttPublish(liveMqttJobId, b.topic, b.payload, b.qos, b.retain);
-        return `${b.topic} → connection #${liveMqttJobId} · ${tail}`;
+        return { key: "log.firedMqtt", params: { topic: b.topic, id: liveMqttJobId, qos: b.qos, retain: String(b.retain) } };
       }
       const { host, port } = splitBroker(b.broker);
       const config: MqttConfig = {
@@ -113,7 +116,8 @@ export async function fireSignal(s: Signal, liveMqttJobId?: number | null): Prom
         will: null,
         subscribe: [],
       };
-      return await api.mqttPublishOnce(config, b.topic, b.payload, b.qos, b.retain);
+      const summary = await api.mqttPublishOnce(config, b.topic, b.payload, b.qos, b.retain);
+      return { key: "log.firedMqttOnce", params: { summary } };
     }
   }
 }
@@ -164,14 +168,13 @@ export function signalFromMqttTopic(
   qos: number,
   retain: boolean,
   taken: Signal[],
+  t: Translate,
 ): Signal {
   return {
     id: makeId(topic, taken),
     name: topic,
-    group: "Captured",
-    note: retain
-      ? `Seen on ${broker} as a retained value — publishing an empty payload here removes it.`
-      : `Seen on ${broker}.`,
+    group: t("sig.capturedFolder"),
+    note: t(retain ? "sig.capturedRetainedNote" : "sig.capturedNote", { broker }),
     body: { transport: "mqtt", broker, topic, payload, qos, retain },
   };
 }
@@ -184,7 +187,7 @@ export function signalFromMqttTopic(
  * A received frame is replayed **to** the socket that received it: the point of
  * saving a reader's packet is to stand in for the reader later.
  */
-export function signalFromFrame(frame: Frame, taken: Signal[], name: string): Signal | null {
+export function signalFromFrame(frame: Frame, taken: Signal[], name: string, t: Translate): Signal | null {
   if (!frame.hex) return null;
   // The dump stops at 1 KB and says so. Half a packet replayed is a different
   // packet, so refuse rather than quietly ship a truncated one.
@@ -204,7 +207,7 @@ export function signalFromFrame(frame: Frame, taken: Signal[], name: string): Si
   return {
     id: makeId(name, taken),
     name,
-    group: "Captured",
+    group: t("sig.capturedFolder"),
     note: `#${frame.seq} ${frame.proto} ${frame.dir === "rx" ? "←" : "→"} ${frame.remote} · ${frame.summary}`,
     body: { transport: "udp", target, payload },
   };

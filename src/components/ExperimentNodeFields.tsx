@@ -40,7 +40,7 @@ export function ExperimentNodeFields({ node, patch }: { node: ExperimentNode; pa
       <div className="experiment-header-fields"><p>{t("exp.headers")}</p>{node.request.headers.map(([name, value], index) => <div key={index}>
         <TemplateField label={t("exp.headerName")} placeholder={t("exp.headerName")} value={name} onChange={text => patch({ request: { ...node.request, headers: node.request.headers.map((pair, i) => i === index ? [text, pair[1]] : pair) } })} />
         <TemplateField label={t("exp.headerValue")} placeholder={t("exp.headerValue")} value={value} onChange={text => patch({ request: { ...node.request, headers: node.request.headers.map((pair, i) => i === index ? [pair[0], text] : pair) } })} />
-        <button className="ghost sm" aria-label={t("exp.removeHeader")} onClick={() => patch({ request: { ...node.request, headers: node.request.headers.filter((_, i) => i !== index) } })}>×</button>
+        <button className="ghost sm" aria-label={t("exp.removeHeader")} data-tip={t("exp.removeHeader")} onClick={() => patch({ request: { ...node.request, headers: node.request.headers.filter((_, i) => i !== index) } })}>×</button>
       </div>)}<button className="ghost sm" onClick={() => patch({ request: { ...node.request, headers: [...node.request.headers, ["", ""]] } })}>＋ {t("exp.addHeader")}</button></div>
       <label>{t("exp.body")}<TemplateField multiline value={node.request.body ?? ""} onChange={body => patch({ request: { ...node.request, body: body || null } })} /></label>
     </>}
@@ -60,6 +60,17 @@ export function ExperimentNodeFields({ node, patch }: { node: ExperimentNode; pa
       <label>{t("exp.value")}<TemplateField primary value={node.value} onChange={value => patch({ value })} /></label>
       <label data-tip={t("exp.valueHint")}>{t("exp.operator")}<select value={node.op} onChange={event => patch({ op: event.target.value as CompareOp })}>{OPERATORS.map(op => <option key={op} value={op}>{t(`exp.op.${op}` as TKey)}</option>)}</select></label>
       {node.op !== "empty" && node.op !== "not_empty" && <label>{t("exp.expected")}<TemplateField value={node.expected} onChange={expected => patch({ expected })} /></label>}
+    </>}
+    {node.type === "loop" && <>
+      <label>{t("exp.loopMax")}<input data-primary type="number" min="1" max="1000" value={node.max} onChange={event => patch({ max: Number(event.target.value) })} /></label>
+      <label className="checkbox experiment-check" data-tip={t("exp.loopUntilHint")}>
+        <input type="checkbox" checked={!!node.until} onChange={event => patch({ until: event.target.checked ? { value: "", op: "eq", expected: "" } : null })} />{t("exp.loopUntilOn")}
+      </label>
+      {node.until && <div className="experiment-option-fields">
+        <label>{t("exp.value")}<TemplateField value={node.until.value} placeholder="{{reply.args[0]}}" onChange={value => patch({ until: { ...node.until!, value } })} /></label>
+        <label data-tip={t("exp.valueHint")}>{t("exp.operator")}<select value={node.until.op} onChange={event => patch({ until: { ...node.until!, op: event.target.value as CompareOp } })}>{OPERATORS.map(op => <option key={op} value={op}>{t(`exp.op.${op}` as TKey)}</option>)}</select></label>
+        {!unary(node.until.op) && <label>{t("exp.expected")}<TemplateField value={node.until.expected} onChange={expected => patch({ until: { ...node.until!, expected } })} /></label>}
+      </div>}
     </>}
     {(node.type === "wait_osc" || node.type === "wait_udp") && <label data-tip={t("exp.waitHint", { name: node.variable || "reply" })}>{t("exp.listenOn")}
       <input value={node.bind} spellCheck={false} placeholder="0.0.0.0:9001" onChange={event => patch({ bind: event.target.value.trim() })} /></label>}
