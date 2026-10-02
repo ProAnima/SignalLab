@@ -163,7 +163,9 @@ mod tests {
     fn every_job_kind_has_a_text_that_its_params_fill_in() {
         use std::collections::{BTreeMap, BTreeSet};
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let en = std::fs::read_to_string(root.join("../src/lib/locales/en.ts")).unwrap();
+        // A Windows checkout may have CRLF line ends; the patterns below are written for LF.
+        let read = |path: std::path::PathBuf| std::fs::read_to_string(path).unwrap().replace("\r\n", "\n");
+        let en = read(root.join("../src/lib/locales/en.ts"));
         // `JobInfo::new(id, "kind", label)` and the `.with("name", …)` calls that follow it.
         let job = regex::Regex::new(r#"JobInfo::new\([^,]+,\s*"([a-z-]+)"((?:[^;]|;[^\n])*?);\n"#).unwrap();
         let with = regex::Regex::new(r#"\.with\("([a-z_]+)""#).unwrap();
@@ -173,7 +175,7 @@ mod tests {
             if path.file_name().is_some_and(|name| name == "jobs.rs") || path.extension().is_none_or(|extension| extension != "rs") {
                 continue;
             }
-            let text = std::fs::read_to_string(&path).unwrap();
+            let text = read(path);
             for found in job.captures_iter(&text) {
                 kinds.entry(found[1].to_string()).or_default().extend(with.captures_iter(&found[2]).map(|name| name[1].to_string()));
             }
