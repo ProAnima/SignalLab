@@ -76,6 +76,22 @@ jobs:
 
       # Every screen in the real app, against loopback fixtures: the desktop app
       # (WebView2 / WebKitGTK) and the server in a browser (Edge / WebKitGTK).
+      # The desktop tour needs the WebView2 runtime: Windows 11 ships it, a
+      # server image may not. The version goes in the log either way.
+      - name: WebView2 runtime
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $key = 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
+          $version = (Get-ItemProperty -Path $key -ErrorAction SilentlyContinue).pv
+          if (-not $version) {
+            Invoke-WebRequest 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile "$env:RUNNER_TEMP\webview2-setup.exe"
+            Start-Process "$env:RUNNER_TEMP\webview2-setup.exe" -ArgumentList '/silent', '/install' -Wait
+            $version = (Get-ItemProperty -Path $key -ErrorAction SilentlyContinue).pv
+          }
+          if (-not $version) { throw 'no WebView2 runtime' }
+          "WebView2 runtime $version"
+
       - name: End-to-end tour (Windows)
         if: runner.os == 'Windows'
         run: node scripts/e2e.mjs

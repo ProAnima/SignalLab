@@ -115,6 +115,13 @@ runs:
           --user "$(id -u):$(id -g)" \
           -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" -w "$PWD" \
           --entrypoint signallab "$INPUT_IMAGE:$INPUT_VERSION" "${args[@]}"
-        code=$?
-        echo "exit-code=$code" >> "$GITHUB_OUTPUT"
-        exit $code
+        # The code is an output either way; the next step fails the job with it (a step
+        # that fails here would not hand its outputs to the workflow).
+        echo "exit-code=$?" >> "$GITHUB_OUTPUT"
+
+    - name: Fail when signallab did
+      if: steps.run.outputs.exit-code != '0'
+      shell: bash
+      env:
+        CODE: ${{ steps.run.outputs.exit-code }}
+      run: exit "${CODE:-1}"

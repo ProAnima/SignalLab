@@ -17,7 +17,7 @@
 //
 // Screenshots of every step and report.md land in artifacts/e2e/<platform>-<target>/.
 
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { freePort, startFixtures } from "./e2e/fixtures.mjs";
@@ -103,10 +103,18 @@ async function waitFor(what, probe, timeout = 60_000) {
 // ---- Chrome DevTools Protocol (Edge, Chrome, the WebView2 of the desktop app) -------
 
 async function devtools(port, pick) {
+  // What the port said last, for a timeout to report: nothing listening, or the pages it had.
+  let seen = "nothing answered on the port";
   const targets = await waitFor("the webview's DevTools", async () => {
-    const list = await (await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(5000) })).json();
-    return list.find((target) => target.type === "page" && pick(target.url));
-  });
+    try {
+      const list = await (await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(5000) })).json();
+      seen = `pages: ${list.map((target) => `${target.type} ${target.url}`).join(", ") || "none"}`;
+      return list.find((target) => target.type === "page" && pick(target.url));
+    } catch (error) {
+      seen = `nothing answered on the port (${error.cause?.code ?? error.message})`;
+      throw error;
+    }
+  }).catch((error) => { throw new Error(`${error.message} — ${seen}`); });
   const socket = new WebSocket(targets.webSocketDebuggerUrl);
   await new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error("DevTools did not open its connection within 10 s")), 10_000);
@@ -244,7 +252,13 @@ async function openServer(opts, work) {
   return { page: browser.page, engine: browser.name, dataDir: server.dataDir, stop: async () => { await browser.stop(); server.stop(); }, output: server.output };
 }
 
-async function openDesktop(_opts, work) {
+/** The whole screen, as a person at the machine would see it — a dialog in the way, say. Windows only. */
+function screenshot(file) {
+  const script = `Add-Type -AssemblyName System.Windows.Forms,System.Drawing; $b=[System.Windows.Forms.SystemInformation]::VirtualScreen; $i=New-Object System.Drawing.Bitmap $b.Width,$b.Height; $g=[System.Drawing.Graphics]::FromImage($i); $g.CopyFromScreen($b.Left,$b.Top,0,0,$i.Size); $i.Save('${file.replaceAll("'", "''")}')`;
+  spawnSync("powershell", ["-NoProfile", "-NonInteractive", "-Command", script], { stdio: "ignore", timeout: 20_000 });
+}
+
+async function openDesktop(opts, work) {
   const dataDir = join(work, "data");
   const app = join(root, "target", "debug", `signal-lab${EXE}`);
   if (!existsSync(app)) throw new Error(`${app} is not built`);
@@ -257,7 +271,13 @@ async function openDesktop(_opts, work) {
   const profile = join(work, "webview2");
   rmSync(profile, { recursive: true, force: true });
   const desktop = start(app, [], { WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${port}`, WEBVIEW2_USER_DATA_FOLDER: profile, SIGNALLAB_DATA_DIR: dataDir });
-  const page = await devtools(port, (address) => /tauri\.localhost|^tauri:/.test(address)).catch((error) => { desktop.stop(); throw new Error(`${error.message}\n${desktop.output()}`); });
+  const page = await devtools(port, (address) => /tauri\.localhost|^tauri:/.test(address)).catch((error) => {
+    const state = desktop.child.exitCode === null ? "the app is still running" : `the app exited with ${desktop.child.exitCode}`;
+    // A window that is there but not answering: the screen shows why (a dialog, an error page).
+    if (opts.out) screenshot(join(opts.out, "screen.png"));
+    desktop.stop();
+    throw new Error(`${error.message}; ${state}\n${desktop.output()}`);
+  });
   return { page, engine: "WebView2 (Tauri)", dataDir, stop: () => { page.close(); desktop.stop(); }, output: desktop.output };
 }
 
@@ -338,7 +358,7 @@ async function tour(target, opts, source) {
     if (!check.ok) console.log(`  ${line}`);
   };
   try {
-    app = target === "server" ? await openServer(opts, work) : await openDesktop(opts, work);
+    app = target === "server" ? await openServer(opts, work) : await openDesktop({ ...opts, out }, work);
     console.log(`  ${app.engine}`);
     await waitFor("the interface", () => app.page.evaluate("!!document.querySelector('.sidebar .nav-item')"), 30_000);
     if (app.page.inject) await app.page.inject(source);

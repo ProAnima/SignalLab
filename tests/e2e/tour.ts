@@ -208,17 +208,28 @@ function untipped(root: ParentNode): string[] {
 
 // ---- doing things -------------------------------------------------------------------
 
-/** A click a person could make: the control is on screen, enabled and not under something else. */
+/**
+ * A click a person could make: the control is on screen, enabled and not under
+ * something else. A view may still be moving something into view (a reveal
+ * after a screen opened); a person waits for that, so the check is made again
+ * for a moment before it counts as covered.
+ */
 async function click(element: HTMLElement, what = describe(element)) {
-  element.scrollIntoView({ block: "center", inline: "nearest" });
-  await sleep(0);
   if ((element as HTMLButtonElement).disabled) throw new Error(`${what} is disabled`);
-  const rect = element.getBoundingClientRect();
-  if (rect.width === 0 || rect.height === 0) throw new Error(`${what} has no size`);
-  const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
-  if (hit && hit !== element && !element.contains(hit) && !hit.contains(element)) throw new Error(`${what} is covered by ${describe(hit)}`);
-  element.click();
-  await sleep(30);
+  let hit: Element | null = null;
+  for (let attempt = 0; attempt < 8; attempt++) {
+    element.scrollIntoView({ block: "center", inline: "nearest" });
+    await sleep(attempt === 0 ? 0 : 120);
+    const rect = element.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) throw new Error(`${what} has no size`);
+    hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+    if (!hit || hit === element || element.contains(hit) || hit.contains(element)) {
+      element.click();
+      await sleep(30);
+      return;
+    }
+  }
+  throw new Error(`${what} is covered by ${describe(hit!)}`);
 }
 
 /** Type a value the way React sees typing: the native setter, then input and change. */
