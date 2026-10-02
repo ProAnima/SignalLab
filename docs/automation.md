@@ -122,7 +122,7 @@ run with `MSYS_NO_PATHCONV=1`; PowerShell and `cmd` are not affected.
 ### `emulate` and `emulators`
 
 `signallab emulate <FILE|NAME>…` plays the other side — an HTTP API, an OSC, UDP or
-TCP device — until Ctrl+C or `--for SECONDS`. A file holds one emulator (as a node's
+TCP device, an MQTT broker — until Ctrl+C or `--for SECONDS`. A file holds one emulator (as a node's
 `emulator` field and `signallab nodes` describe it), a list of them, or a library as
 the app writes it; a name is the id or the name of one in the app's library
 (`Documents/SignalLab/emulators.json`, or `--library PATH`).
@@ -138,10 +138,10 @@ the app writes it; a name is the id or the name of one in the app's library
 
 Every request is printed as it is answered — `+   1.204 s Orders API  #2  GET
 /orders/42 → 503 Service Unavailable · 0 B  0 ms  ← 127.0.0.1:53114` — and each
-emulator ends with its counts: requests, how many no rule took, how many failed, and
-the hits per rule. `--json` prints `started`, every `exchange` (with what arrived:
-method, path, headers, body, JSON; address and arguments; text) and a `summary` per
-emulator. A port that is taken is exit code 3, an emulator that would not start 2.
+emulator ends with its counts: requests, how many no rule took, how many failed, how
+many met an outage (`down`, when it has one), and the hits per rule. `--json` prints
+`started`, every `exchange` (with what arrived: method, path, headers, body, JSON;
+address and arguments; text; topic, levels and payload) and a `summary` per emulator. A port that is taken is exit code 3, an emulator that would not start 2.
 
 In a pipeline, the dependency runs in the background while the system under test is
 tested against it:

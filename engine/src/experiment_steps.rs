@@ -10,7 +10,8 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 use crate::host::Host;
 
-use super::emulator::{HttpListener, HttpListeners, RequestMatcher};
+use super::emulator_match::RequestMatcher;
+use super::emulator_run::{HttpListener, HttpListeners};
 use super::error::{EngineError, EngineResult, Field};
 use super::experiment::{NodeKind, Until};
 use super::experiment_actions as actions;

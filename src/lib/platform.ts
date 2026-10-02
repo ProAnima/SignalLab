@@ -57,6 +57,37 @@ export function saveDownload(url: string): void {
   link.remove();
 }
 
+/**
+ * Put `text` on the clipboard; whether it worked. A server reached over plain
+ * HTTP on a LAN address is not a secure context and has no clipboard API, so
+ * a selected, hidden text area is copied the old way instead.
+ */
+export async function copyText(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // Refused: try the old way.
+  }
+  const area = document.createElement("textarea");
+  area.value = text;
+  area.setAttribute("readonly", "");
+  area.style.position = "fixed";
+  area.style.opacity = "0";
+  document.body.append(area);
+  area.select();
+  let copied = false;
+  try {
+    copied = document.execCommand("copy");
+  } catch {
+    copied = false;
+  }
+  area.remove();
+  return copied;
+}
+
 /** Whether the server serving this page asks for a token. */
 export async function serverNeedsSignIn(): Promise<boolean> {
   if (isDesktop) return false;

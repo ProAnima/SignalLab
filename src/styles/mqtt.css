@@ -1,0 +1,72 @@
+/* ---------- mqtt topic tree ---------- */
+
+.mq-stats {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--text-faint);
+}
+.mq-stats .spacer { flex: 1; }
+.mq-stats .ok { color: var(--accent); }
+.mq-stats .warn { color: var(--amber); }
+
+.topic-tree { flex: 1; min-height: 0; margin: 0 -6px; padding: 0 6px; }
+/* A row is a button: the tree is walked with the keyboard, and a topic is picked
+   and expanded from the same place. */
+.topic-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 4px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.topic-row:active { transform: none; }
+.topic-row:hover { background: rgba(255, 255, 255, 0.035); color: var(--text); }
+.topic-row.active {
+  background: var(--accent-soft);
+  border-color: rgba(62, 230, 176, 0.2);
+  color: var(--text);
+}
+.topic-twist {
+  flex: 0 0 10px;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-faint);
+}
+.topic-name {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+/* The value takes what is left and gets cut, never the topic: which topic it is
+   matters more than the tail of a long payload. */
+.topic-value {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--accent);
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.topic-count {
+  flex: 0 0 auto;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  font-family: var(--mono);
+  font-size: 9.5px;
+  color: var(--text-faint);
+}

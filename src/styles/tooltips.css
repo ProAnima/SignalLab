@@ -1,0 +1,35 @@
+/* ---------- tooltips (components/TooltipLayer.tsx) ---------- */
+
+/* Help lives here, not as captions on the screen. */
+.tooltip {
+  position: fixed;
+  /* Above every panel even where the popover top layer is missing. */
+  z-index: 1000;
+  /* Shown as a popover (the top layer); undo the browser's popover placement. */
+  inset: auto;
+  margin: 0;
+  overflow: visible;
+  max-width: min(340px, calc(100vw - 16px));
+  padding: 7px 10px;
+  background: var(--surface-3);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-xs);
+  box-shadow: var(--shadow-md);
+  font: 400 11.5px/1.5 var(--sans);
+  letter-spacing: 0;
+  text-align: left;
+  text-transform: none;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.12s ease, transform 0.12s ease;
+}
+.tooltip.above { transform: translateY(2px); }
+.tooltip.below { transform: translateY(-2px); }
+.tooltip.shown { opacity: 1; transform: none; }
+@media (prefers-reduced-motion: reduce) { .tooltip { transition: none; } }
+/* Text that carries help says so, and only its own words react to the pointer. */
+:is(h1, h2, h3, strong, code, .section-label, .metric, .field > label, .label-row > label)[data-tip] { cursor: help; }
+:is(h1, h2, h3, .field > label, .section-label)[data-tip] { width: fit-content; max-width: 100%; }

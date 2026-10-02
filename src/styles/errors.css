@@ -1,0 +1,27 @@
+/* Hidden screens, the one way to show a failure, and a Wait for OSC's argument rules. */
+
+/* Screens stay mounted while hidden (App.tsx); a hidden one takes no space. */
+.view-host { min-width: 0; }
+
+/* One way to show a failure: where, what and why, then the system's wording (components/ErrorMessage.tsx). */
+.error-message { color: var(--red); font: 11px/1.5 var(--mono); overflow-wrap: anywhere; }
+.error-message p { margin: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px var(--space-2); }
+.error-where { color: var(--text); font-weight: 600; }
+.error-where::after { content: " —"; color: var(--text-faint); font-weight: 400; }
+.error-show { margin-left: auto; }
+.error-detail { margin-top: 2px; color: var(--text-dim); }
+.error-detail summary { width: fit-content; cursor: pointer; color: var(--text-faint); }
+.error-detail summary:focus-visible { outline: none; box-shadow: var(--ring); border-radius: var(--radius-xs); }
+.error-detail code { display: block; margin-top: 2px; white-space: pre-wrap; color: var(--text-dim); }
+.experiment-problem.error-message { font-family: var(--sans); }
+.experiment-node-problem { margin: 0 0 var(--space-3); padding: var(--space-2); border: 1px solid rgba(255, 107, 122, .3); border-radius: var(--radius-xs); }
+.experiment-test-result > .error-message { flex: 1; min-width: 0; }
+.experiment-preview .error-message { margin: 0; }
+
+/* Argument rules of a Wait for OSC: index, operator, value, remove. */
+.experiment-rule-fields { margin-bottom: var(--space-4); }
+.experiment-rule-fields > p { font-size: 11px; color: var(--text-dim); }
+/* Index, operator and remove on one line; the value gets the full width under them. */
+.experiment-rule { display: grid; grid-template-columns: 56px minmax(0, 1fr) 24px; gap: var(--space-1); align-items: start; margin-bottom: var(--space-2); padding-bottom: var(--space-2); border-bottom: 1px solid var(--border); }
+.experiment-rule > button { grid-column: 3; grid-row: 1; }
+.experiment-rule > :nth-child(3):not(button) { grid-column: 1 / -1; grid-row: 2; }

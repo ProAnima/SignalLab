@@ -78,9 +78,16 @@ src/                      React UI
   components/SignalTree.tsx  folders that open and close, drag & drop, F2 / Delete
   lib/experimentGraph.ts  pure graph edits for the experiment editor (add, splice, layout)
   lib/experimentData.ts   template suggestions, upstream variables, JSON paths
+  lib/experimentText.ts   what the editor writes about a node: summaries, previews, glyphs (pure)
+  lib/experimentWires.ts  wire geometry: paths, ports, the node nearest a point (pure)
+  lib/useExperiment*.ts   the editor's hooks: Run (run, stop, timeline), NodeTests (Send now,
+                          preview), Canvas (drag, pan, wires), Shortcuts, Fullscreen
+  components/Experiment*.tsx  the editor's parts: Toolbar, Canvas(+Node, Tools), Properties,
+                          NodeTest, Timeline, AddMenu; NodeFields and EmulatorFields the forms
   lib/errors.ts           describeError: one renderer for engine errors and legacy text
   components/ErrorMessage.tsx  where · what — why, technical detail folded
-  views/*.tsx             one screen per module; ExperimentView is the node editor
+  views/*.tsx             one screen per module; ExperimentView composes the node editor
+  styles.css              the stylesheet: styles/*.css by area, @imported in cascade order
   lib/emulators.ts        new emulators, presets, Mock this, the starter set's texts (pure)
   lib/emulatorStore.tsx   the emulator library, which ones run, what they received
   components/EmulatorEditor.tsx  an emulator's rules: the Emulators screen and the node's dialog
@@ -90,7 +97,8 @@ engine/src/               signal-lab-engine — no Tauri, no window
   paths.rs                the data folder (Documents/SignalLab, or the server's)
   osc_codec.rs            hand-written OSC 1.0 encode/decode (no external OSC crate)
   osc.rs                  monitor + waveform generator
-  broadcast.rs            broadcast / multicast / CIDR sweep emitter + discovery listener
+  broadcast.rs            broadcast / multicast / CIDR sweep emitter
+  discovery.rs            the discovery listener: peers, multicast joins, auto-reply
   inspect.rs              the capture bus: bounded ring + batch pump to the UI
   http.rs                 request runner + concurrent burst
   netsim.rs               UDP impairment relay (latency/jitter/loss/dup/corrupt)
@@ -98,11 +106,14 @@ engine/src/               signal-lab-engine — no Tauri, no window
   error.rs                EngineError {code, params, node, field, detail}
   transport.rs            network failure causes (refused, timeout, dns, …)
   experiment.rs           the document model: nodes, edges, outputs, versions
-  experiment_validate.rs  structural and run-time validation
+  experiment_validate.rs  structural and run-time validation: the document, the graph, loops
+  experiment_fields.rs    one node's fields, its Retry and Repeat: present, in range, well formed
   experiment_data.rs      parameters, templated fields, extraction, value checks
   experiment_actions.rs   one network action, failure classified
   experiment_steps.rs     what one step does (send, check, extract, branch, wait)
-  experiment_run.rs       the runner: branches, joins, listeners, reports, Send now
+  experiment_run.rs       a run started and followed (RunHandle, RunResult), Send now
+  experiment_flow.rs      how a run moves: listeners armed, branches, joins, retry, repeat
+  experiment_report.rs    the run report file
   matching.rs             OSC address patterns, argument rules, UDP payloads, comparisons
   listen.rs               wait listeners: one socket per bind, bounded queue
   template.rs             the {{template}} language and seeded generators (pure)
@@ -111,16 +122,24 @@ engine/src/               signal-lab-engine — no Tauri, no window
   scan.rs                 TCP connect scanner
   mqtt_codec.rs           hand-written MQTT 3.1.1 codec (no external crate)
   mqtt.rs                 one broker connection as a job; MqttHub routes commands
+  mqtt_dial.rs            CONNECT/CONNACK, failures as causes, the one-shot publish
   signals.rs              signal library: file + starter set (storage only)
   jobs.rs                 job registry: start / list / stop
-  emulator.rs             emulators: the document, its checks, the shared runtime, a job, a run's emulators
-  emulator_http.rs        the HTTP emulator (hyper): routes, sequences, faults; a run's HTTP listeners
+  emulator.rs             emulators: the document (protocols, rules, responses, faults, Outage)
+  emulator_match.rs       which HTTP requests a route or wait takes: method, path pattern, conditions
+  emulator_rules.rs       a document checked and compiled; which response a request gets
+  emulator_state.rs       what serving shares: counters, kept exchanges, the reply Context
+  emulator_http.rs        the HTTP emulator (hyper): routes, sequences, faults, outages
   emulator_net.rs         OSC/UDP responders (also a run listener's Tap) and the TCP device
+  emulator_mqtt.rs        the MQTT broker: routing, QoS 0/1/2, retained, wills, device rules
+  emulator_job.rs         an emulator as a job of its own; EmulatorHub answers what arrived
+  emulator_run.rs         a run's emulators and HTTP listeners, opened before the first step
   emulator_files.rs       the emulator library (emulators.json) and its starter set
   firewall.rs             Windows Firewall per program: status (COM, any language), allow (UAC)
 engine/tests/ping_reply.rs  an experiment run end to end over loopback (repeat_loop.rs: Repeat and Loop;
                           emulators.rs: Emulator nodes, Wait for HTTP request, the flaky-API template)
 tests/e2e/tour.ts         the end-to-end tour, run inside the page: every screen, by its visible labels
+  dsl.ts, steps/*.ts      finding by label, clicking, waiting; the steps by screen (STEPS in tour.ts)
 scripts/e2e.mjs           its runner: builds, starts the app / server + a browser, steps, screenshots
 scripts/e2e/fixtures.mjs  loopback stand-ins the tour talks to: HTTP API, UDP/TCP sinks, OSC device, MQTT broker
 src-tauri/src/lib.rs      the desktop shell: one `engine` command + Tauri events
@@ -138,6 +157,7 @@ cli/                      `signallab`, the command line for scripts and CI (docs
   src/i18n.rs             the interface's dictionaries (build.rs embeds them) and translate.ts in Rust
   src/junit.rs            the JUnit report; src/fail.rs the exit codes 0/1/2/3
   src/mcp.rs              `signallab mcp`: the Model Context Protocol on stdio, for an LLM
+  src/mcp_tools.rs        its tools' schemas and the experiment tools; mcp_send.rs, mcp_library.rs the rest
   src/emulate.rs          `emulate` / `emulators`: emulators from files or the library, followed until Ctrl+C
   src/catalog.rs          every kind of node with fields, outputs, an example (describe_nodes, `nodes`)
   src/doctor.rs           `doctor` and `firewall allow`
@@ -197,17 +217,22 @@ src/components/FirewallBanner.tsx  the desktop app's firewall notice, with Allow
   rules goes through the firewall's COM interface, never netsh's localized text.
 - **An emulator is one document everywhere.** The Emulators screen, the
   *Emulator* node (`NodeKind::Emulator { emulator }`), `signallab emulate`, MCP
-  and the API all hand an `emulator::Emulator` to `emulator::compile`, which
-  checks it (problems carry `rule`/`response` params, shown by `describeError`
-  as *Rule n · Response n*) and the protocol modules serve it. Its matching
-  patterns take parameters only (`emulator.params_only`); replies are templates
+  and the API all hand an `emulator::Emulator` to `emulator_rules::compile`
+  (`emulator::check` outside the engine), which checks it (problems carry
+  `rule`/`retained`/`response` params, shown by `describeError` as *Rule n ·
+  Response n*) and the protocol modules serve it. Its matching patterns take
+  parameters only (`emulator.params_only`); replies are templates
   read with `request` and parameters, never secrets. A run opens its emulators
-  in `emulator::arm_run` before the first step, like waits: an HTTP emulator's
+  in `emulator_run::arm_run` before the first step, like waits: an HTTP emulator's
   server is also what *Wait for HTTP request* reads (`HttpListener` inbox; a bind
   with only waits answers 204), and an OSC/UDP emulator answers through the run's
   `Listener` on its port (`listen::Tap`), so waits there see the same datagrams.
-  Two emulators of one transport cannot share a port (`check_run_binds`). Starter
-  emulators stay on loopback; `EMULATOR_SEED_IDS` must equal `seed()` (a test).
+  Two emulators of one transport cannot share a port (`check_run_binds`). An
+  `Outage` is a schedule from the start, read by `Context::down_for`; what met
+  it is counted as `down`, never as *no rule*. The MQTT broker keeps the
+  client's rules — 3.1.1, plain TCP, clean sessions, QoS 0/1/2 — and an MQTT
+  wait subscribes to it like to any broker. Starter emulators stay on
+  loopback; `EMULATOR_SEED_IDS` must equal `seed()` (a test).
 - **Long-running work is a job.** Register it with `JobRegistry` so the console
   strip can list and stop it, and call `finish(id)` when it ends on its own.
 - **Modules never call the Inspector directly** — publish a normalized `Frame`
@@ -243,7 +268,10 @@ src/components/FirewallBanner.tsx  the desktop app's firewall notice, with Allow
 - **MQTT is 3.1.1, plain TCP, clean session, QoS 0/1/2.** Show and installation
   gear routinely uses QoS 2 for subscribe, publish *and* its last-will, so none
   of that is optional; clean sessions are why there is no offline queue to
-  persist. No MQTT 5, no TLS — adding either is a decision, not a detail.
+  persist. No MQTT 5, no TLS — adding either is a decision, not a detail. The
+  broker emulator (`emulator_mqtt.rs`) is the other side of the same rules,
+  on the same codec (`mqtt_codec`'s broker side): a client asking to keep its
+  session gets a fresh one.
 
 - **A signal is not a second send path.** `engine/signals.rs` only stores; the
   UI fires through `osc_send` / `broadcast_send` / `http_request`, so a library
@@ -300,7 +328,7 @@ src/components/FirewallBanner.tsx  the desktop app's firewall notice, with Allow
   hidden — see `Scope`) and must not grab global keys.
 - **An output may have several wires.** Each wire past the first runs as a
   parallel branch with a copy of the variables (as Fork does); a Join waits for
-  every incoming wire; End passes once, in `experiment_run::run` after the last
+  every incoming wire; End passes once, in `experiment_flow::run` after the last
   branch, and not at all if one failed. `connect()` adds, never replaces;
   `disconnect()` and an `Anchor` name one wire with `to`. A dragged wire always
   adds (`addBranch` on empty canvas); *A* / *Add next* / ＋ splice (`addAfter`).
@@ -312,7 +340,7 @@ src/components/FirewallBanner.tsx  the desktop app's firewall notice, with Allow
   (`Listener::send_to`, port 0 allowed) and waits there in the same step; its
   variable is written on Next. Both are document version 4.
 - **Repeat is a node setting; Loop is the one cycle.** `Node::repeat` applies
-  to actions: the runner sends again (`experiment_run::repeated`), rendering
+  to actions: the runner sends again (`experiment_flow::repeated`), rendering
   templates per send, retrying each, reporting progress at most once a second;
   jitter comes from the seed. A Loop's body (`LoopShape`: reached from Body,
   leading back) may wire back to it — validation, ordering and the editor
@@ -343,7 +371,8 @@ src/components/FirewallBanner.tsx  the desktop app's firewall notice, with Allow
   library, an experiment run end to end, and the server's security rules.
 - **Keep the e2e tour green on all four targets** (Windows/Linux × desktop/
   server). A new screen or control the tour cannot find by its label is a
-  step to add in `tests/e2e/tour.ts`; `npm run build` type-checks the tour
+  step to add in `tests/e2e/steps/` (and `STEPS` in `tour.ts`, the plan in
+  `scripts/e2e.mjs`); `npm run build` type-checks the tour
   against `en.ts`, so a renamed text breaks the build, not the run.
 - **The image runs unprivileged.** uid 10001, read-only root, no capabilities;
   it writes only to `/data`. Its Rust and Node versions equal

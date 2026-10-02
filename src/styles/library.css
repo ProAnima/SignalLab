@@ -1,0 +1,128 @@
+/* ---------- signal library ---------- */
+
+.sig-list { flex: 1; min-height: 0; margin: 0 -6px; padding: 0 6px; }
+.sig-group + .sig-group { margin-top: 13px; }
+.sig-group-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 6px;
+  padding: 0 4px;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 1.3px;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+.sig-group-head span {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 0;
+  background: var(--surface-3);
+  border-radius: 999px;
+  padding: 1px 7px;
+}
+/* Real buttons, like the sidebar: the explorer is walked with the keyboard as
+   often as with the mouse. */
+.sig-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  width: 100%;
+  margin-bottom: 3px;
+  padding: 7px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s var(--ease), color 0.15s var(--ease);
+}
+.sig-item:active { transform: none; }
+.sig-item:hover { background: rgba(255, 255, 255, 0.035); color: var(--text); }
+.sig-item.active {
+  background: linear-gradient(90deg, var(--accent-soft), rgba(139, 124, 255, 0.05));
+  border-color: rgba(62, 230, 176, 0.18);
+  color: var(--text);
+}
+.sig-item-name { font-size: 12.5px; font-weight: 550; }
+.sig-item-meta {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 100%;
+  overflow: hidden;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--text-faint);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sig-badge {
+  flex-shrink: 0;
+  padding: 1px 5px;
+  border-radius: var(--radius-xs);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+}
+.sig-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--text-faint);
+}
+.sig-foot .spacer, .btn-row .spacer { flex: 1; }
+
+/* Folders: a row that opens and closes, its count, and tools shown on hover or focus. */
+.sig-tree-tools { display: flex; align-items: center; gap: 4px; margin: 0 0 6px; min-height: 22px; }
+.sig-current-folder { margin-left: auto; max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: 10.5px; }
+.sig-list.drop { box-shadow: inset 0 0 0 1px var(--accent); border-radius: var(--radius-sm); }
+.sig-folder-row { display: flex; align-items: center; gap: 2px; margin-bottom: 2px; border-radius: var(--radius-sm); }
+.sig-folder-row.current { background: rgba(255, 255, 255, 0.03); }
+.sig-folder-row.drop { background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); }
+.sig-folder { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; padding: 5px 6px; border: 0; background: transparent; color: var(--text-dim); font: inherit; font-size: 12px; font-weight: 600; text-align: left; cursor: pointer; }
+.sig-folder:hover { color: var(--text); background: transparent; }
+.sig-folder:active { transform: none; }
+.sig-folder-twist { width: 10px; color: var(--text-faint); font-family: var(--mono); }
+.sig-folder-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sig-folder-count { margin-left: auto; padding: 1px 7px; border-radius: 999px; background: var(--surface-3); color: var(--text-faint); font: 9.5px var(--mono); }
+.sig-folder-tools { display: flex; gap: 2px; opacity: 0; transition: opacity 0.12s var(--ease); }
+.sig-folder-row:hover .sig-folder-tools, .sig-folder-row:focus-within .sig-folder-tools, .sig-folder-row.current .sig-folder-tools { opacity: 1; }
+.sig-folder-rename { flex: 1; min-width: 0; padding: 3px 6px; font-size: 12px; }
+.sig-item[draggable="true"] { cursor: grab; }
+
+/* Save to the library, next to a sender's Send. */
+/* Its own line under a sender's buttons: Save / Saved, Save as…, and where it lives. */
+.save-signal { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; margin-top: 8px; }
+.save-signal-chip { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: 10.5px; color: var(--text-dim); }
+.save-signal-chip em { color: var(--amber); font-style: normal; }
+.save-signal-dialog { width: min(420px, calc(100vw - 32px)); padding: 0; border: 1px solid var(--border-strong); border-radius: var(--radius); color: var(--text); background: var(--surface-1); box-shadow: var(--shadow-md); }
+.save-signal-dialog::backdrop { background: rgba(0, 0, 0, .65); backdrop-filter: blur(4px); }
+.save-signal-dialog form { padding: 20px; }
+.save-signal-dialog h2 { margin: 0 0 14px; font-size: 16px; }
+.save-signal-dialog footer { justify-content: flex-end; margin-top: 6px; }
+.sig-foot .ok { color: var(--accent); }
+
+kbd {
+  padding: 0 5px;
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 2px;
+  border-radius: var(--radius-xs);
+  background: var(--bg-input);
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 10.5px;
+}

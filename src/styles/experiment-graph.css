@@ -1,0 +1,200 @@
+/* Graph workspace */
+.app.sidebar-compact { grid-template-columns: 66px 1fr; }
+.app.sidebar-compact .sidebar { padding-inline: 8px; }
+.app.sidebar-compact .brand { justify-content: center; padding: 4px 0 22px; }
+.app.sidebar-compact .brand-text, .app.sidebar-compact .nav-item .label, .app.sidebar-compact .foot { display: none; }
+.app.sidebar-compact .nav-item { justify-content: center; padding-inline: 0; }
+.app.sidebar-compact .nav-item .glyph { margin: 0; }
+.app.sidebar-compact .nav-item .badge { position: absolute; right: 3px; top: 3px; min-width: 12px; height: 12px; padding: 0 2px; font-size: 8px; }
+.nav-toggle { flex: 0 0 auto; font-size: 16px; }
+.app.experiment-active .main { overflow: hidden; padding: 0; }
+.app.experiment-focus { display: block; height: 100vh; }
+.app.experiment-focus .sidebar, .app.experiment-focus .header, .app.experiment-focus .console { display: none; }
+.app.experiment-focus .main { height: 100vh; padding: 0; }
+.experiment-toolbar { gap: 8px; padding: 9px 14px; min-height: 58px; }
+.experiment-toolbar > button { white-space: nowrap; }
+.experiment-heading input { font-size: 16px; }
+.experiment-workspace { min-height: 0; }
+.experiment-view.properties-closed .experiment-workspace { grid-template-columns: minmax(0, 1fr); }
+.experiment-canvas-tools { display: flex; align-items: center; gap: 4px; min-height: 38px; padding: 4px 10px; border-bottom: 1px solid var(--border); background: var(--surface-1); }
+.experiment-canvas-tools > span:first-child { color: var(--text-faint); font-size: 10px; }
+.experiment-canvas-tools .fill { flex: 1; }
+.experiment-canvas-tools button { min-width: 26px; }
+.experiment-canvas-tools > button { flex-shrink: 0; white-space: nowrap; }
+.experiment-tool-group { display: flex; flex-shrink: 0; gap: 2px; padding-right: 6px; margin-right: 2px; border-right: 1px solid var(--border); }
+.experiment-tool-group button { font-size: 17px; line-height: 1; }
+.experiment-canvas-hint { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-left: 8px; color: var(--text-faint); font-size: 10px; }
+.experiment-node-count { margin-left: 4px; color: var(--text-faint); font: 10px var(--mono); }
+.experiment-node-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 12px; }
+.experiment-node-actions .experiment-delete { margin-top: 0; color: var(--red); }
+.experiment-finder { max-width: calc(100vw - 32px); }
+.experiment-finder .palette-row { min-width: 0; }
+.experiment-finder-index { width: 24px; flex-shrink: 0; color: var(--text-faint); font: 11px var(--mono); }
+.experiment-finder .palette-name { flex: 0 0 145px; }
+.experiment-finder .palette-target { min-width: 0; }
+.experiment-zoom { width: 42px; text-align: center; font: 10px var(--mono); color: var(--text-dim); }
+.experiment-canvas-scroll { cursor: grab; }
+.experiment-canvas-scroll { background-color: var(--canvas-bg); background-image: radial-gradient(circle, var(--canvas-grid) 1px, transparent 1px); background-size: 20px 20px; }
+.experiment-canvas-scroll:active { cursor: grabbing; }
+.experiment-canvas-space { position: relative; }
+.experiment-canvas { transform-origin: top left; touch-action: none; }
+.experiment-canvas { background: transparent; }
+.experiment-validation { max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--amber); font-size: 10px; }
+.experiment-wires path.yes { stroke: var(--accent-deep); }
+.experiment-wires path.no { stroke: var(--amber); }
+.experiment-wires path.branch1 { stroke: var(--cyan); }
+.experiment-wires path.branch2 { stroke: var(--violet); }
+.experiment-wires path.body, .experiment-wires path.back { stroke: var(--cyan); }
+.experiment-wires path.back { stroke-dasharray: 5 4; }
+.experiment-wires path.limit { stroke: var(--amber); }
+
+@keyframes wireDash {
+  to { stroke-dashoffset: -20; }
+}
+.experiment-wires path.active-flow {
+  stroke-dasharray: 6 4;
+  animation: wireDash 0.75s linear infinite;
+  stroke: var(--cyan);
+  stroke-width: 2.5;
+  filter: drop-shadow(0 0 3px rgba(56, 201, 236, 0.6));
+}
+.experiment-wires path.passed-flow {
+  stroke-width: 2;
+  stroke: var(--accent);
+}
+
+@keyframes nodePulseRunning {
+  0%, 100% {
+    box-shadow: 0 0 0 2px var(--cyan), 0 0 12px rgba(56, 201, 236, 0.35);
+  }
+  50% {
+    box-shadow: 0 0 0 3px var(--cyan), 0 0 20px rgba(56, 201, 236, 0.65);
+  }
+}
+.experiment-node { cursor: default; }
+.experiment-node.running {
+  border-color: var(--cyan);
+  animation: nodePulseRunning 1.2s ease-in-out infinite;
+}
+.experiment-node-body { cursor: grab; touch-action: none; }
+.experiment-node-body:active { cursor: grabbing; }
+.experiment-port { z-index: 3; display: block; padding: 0; min-width: 12px; min-height: 12px; top: calc(50% - 6px); width: 12px; height: 12px; border-radius: 50%; cursor: crosshair; }
+/* The dot stays small; the area that takes the pointer does not. It reaches
+   mostly away from the node (so grabbing the node still works), grows when the
+   canvas is zoomed out, and stays short enough vertically that two outputs of
+   one node never overlap (they are 28 px apart). */
+.experiment-port::before { content: ""; position: absolute; top: -8px; bottom: -8px; border-radius: 10px; }
+.experiment-port.output::before { left: -8px; right: calc(-18px / var(--zoom, 1)); }
+.experiment-port.input::before { left: calc(-18px / var(--zoom, 1)); right: -8px; }
+.experiment-port:hover, .experiment-port.awaiting { border-color: var(--accent); background: var(--accent-soft); box-shadow: 0 0 0 5px rgba(62,230,176,.12); }
+.experiment-port.output.yes { top: 22px; border-color: var(--accent-deep); }
+.experiment-port.output.no { top: 50px; border-color: var(--amber); }
+.experiment-port.output.branch1 { top: 22px; border-color: var(--cyan); }
+.experiment-port.output.branch2 { top: 50px; border-color: var(--violet); }
+.experiment-port.output.matched { top: 22px; border-color: var(--accent-deep); }
+/* Optional: an unwired Timeout makes a timeout fail the step. */
+.experiment-port.output.timeout { top: 50px; border-color: var(--amber); border-style: dashed; }
+/* A Loop: Body runs the iterations, Done follows them, an optional Limit when they ran out. */
+.experiment-port.output.body { top: 9px; border-color: var(--cyan); }
+.experiment-port.output.done { top: 33px; border-color: var(--accent-deep); }
+.experiment-port.output.limit { top: 57px; border-color: var(--amber); border-style: dashed; }
+
+.experiment-node-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+}
+/* The type takes the room; the badges (×10, ↻3, the state) sit at the right. */
+.experiment-node-header > .experiment-node-type { margin-right: auto; }
+.node-status-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+}
+.node-status-badge.running {
+  color: var(--cyan);
+  background: rgba(56, 201, 236, 0.15);
+  animation: pulseDot 0.8s ease-in-out infinite alternate;
+}
+.node-status-badge.passed {
+  color: var(--accent);
+  background: rgba(62, 230, 176, 0.15);
+}
+.node-status-badge.failed {
+  color: var(--red);
+  background: rgba(255, 107, 122, 0.15);
+}
+.node-status-badge.retry {
+  color: var(--amber);
+  background: rgba(255, 192, 105, 0.15);
+}
+.node-status-badge.repeating {
+  color: var(--cyan);
+  background: rgba(56, 201, 236, 0.15);
+}
+.experiment-node.retry { border-color: var(--amber); }
+.experiment-node.repeating { border-color: var(--cyan); }
+.experiment-events button.retry { color: var(--amber); }
+.experiment-events button.repeating { color: var(--cyan); }
+/* Frames the run's waits matched, each opening the Inspector on it. */
+.experiment-frame-links { display: flex; flex-wrap: wrap; gap: var(--space-1); padding: var(--space-1) var(--space-2) var(--space-2); }
+/* How many attempts a step may make: ↻3 next to its type; how often it sends: ×10 or 5s. */
+.experiment-node-retry { padding: 0 5px; border-radius: 4px; font: 600 10px var(--mono); color: var(--amber); background: rgba(255, 192, 105, 0.1); }
+.experiment-node-repeat { padding: 0 5px; border-radius: 4px; font: 600 10px var(--mono); color: var(--cyan); background: rgba(56, 201, 236, 0.1); }
+@keyframes pulseDot {
+  0% { transform: scale(0.85); opacity: 0.6; }
+  100% { transform: scale(1.15); opacity: 1; }
+}
+.experiment-edge-add { position: absolute; z-index: 2; display: grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 1px solid var(--border-strong); border-radius: 50%; color: var(--text-dim); background: var(--surface-2); font-size: 14px; opacity: .72; }
+.experiment-edge-add:hover { opacity: 1; border-color: var(--accent); color: var(--accent); }
+.experiment-properties fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+.experiment-connection { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 5px 0; border-top: 1px solid var(--border); color: var(--text-dim); font-size: 11px; }
+.experiment-timeline-title { justify-content: flex-start; gap: 12px; }
+.experiment-timeline-title strong { margin-left: auto; }
+.experiment-view.timeline-closed .experiment-timeline { height: 36px; min-height: 36px; }
+.experiment-view.timeline-closed .experiment-timeline-title { flex: 1; }
+.experiment-menu-backdrop { position: fixed; inset: 0; z-index: 100; }
+.experiment-add-menu { position: fixed; width: min(312px, calc(100vw - 16px)); max-height: calc(100vh - 16px); padding: 8px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface-2); box-shadow: var(--shadow-md); }
+.experiment-add-menu input { width: 100%; margin-bottom: 7px; }
+.experiment-add-menu > div { display: flex; flex-direction: column; max-height: min(370px, calc(100vh - 80px)); overflow: auto; }
+.experiment-add-menu button { display: flex; align-items: center; gap: 9px; width: 100%; padding: 7px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--text); text-align: left; font-size: 11px; }
+.experiment-add-menu button:hover, .experiment-add-menu button:focus-visible { background: var(--accent-soft); }
+@media (max-width: 900px) { .experiment-toolbar { flex-wrap: wrap; } .experiment-heading { min-width: 160px; } .experiment-save { display: none; } }
+
+/* Node catalogue and property fields use the same category and shape tokens. */
+[data-group="action"] { --node-color: var(--node-action); }
+[data-group="check"] { --node-color: var(--node-check); }
+[data-group="flow"] { --node-color: var(--node-flow); }
+[data-group="data"] { --node-color: var(--node-data); }
+[data-group="observe"] { --node-color: var(--node-observe); }
+[data-group="emulate"] { --node-color: var(--node-emulate); }
+.experiment-node-type { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.experiment-node-type::before { content: ""; display: inline-block; width: 5px; height: 12px; margin-right: var(--space-2); border-radius: var(--radius-xs); background: var(--node-color); vertical-align: -1px; }
+.experiment-add-menu .experiment-kind { flex: 0 0 26px; height: 26px; border-radius: var(--radius-xs); color: var(--node-color); background: var(--surface-3); font-size: 14px; }
+.experiment-catalog-results h3 { padding: var(--space-2); margin: var(--space-1) 0 0; font-size: 10px; font-weight: 600; color: var(--text-dim); }
+.experiment-catalog-results button { white-space: normal; border-radius: var(--radius-xs); padding: var(--space-2); }
+.experiment-catalog-results button > span:last-child { min-width: 0; }
+.experiment-catalog-results b { display: block; font-size: 12px; font-weight: 600; }
+.experiment-header-fields, .experiment-osc-args { margin-bottom: var(--space-4); }
+.experiment-header-fields p, .experiment-osc-args p { font-size: 11px; color: var(--text-dim); }
+.experiment-header-fields > div { display: grid; grid-template-columns: minmax(0, 1fr) 24px; gap: var(--space-1); margin-bottom: var(--space-2); padding-bottom: var(--space-2); border-bottom: 1px solid var(--border); }
+.experiment-header-fields > div input { grid-column: 1; }
+.experiment-header-fields > div button { grid-column: 2; grid-row: 1 / 3; align-self: start; }
+.experiment-osc-args .row { flex-wrap: wrap; }
+.experiment-osc-args .row > input, .experiment-osc-args .row > select:nth-child(2) { flex: 1 1 60px; }
+.experiment-osc-args .row > select:first-child { flex-basis: 80px !important; }
+.experiment-properties input, .experiment-properties select, .experiment-properties textarea { border-radius: var(--radius-xs); }
+
+.experiment-catalog-results button.highlighted { background: var(--surface-3); outline: 1px solid var(--border-strong); outline-offset: -1px; }
+
+/* Compact rail: a short name under each glyph, so OSC and HTTP are findable without hovering. */
+.nav-item .short { display: none; }
+.app.sidebar-compact .nav-item { flex-direction: column; gap: 3px; padding-block: 7px 6px; }
+.app.sidebar-compact .nav-item .short { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 9px; font-weight: 500; line-height: 1.15; }

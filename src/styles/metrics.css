@@ -1,0 +1,32 @@
+/* ---------- metrics ---------- */
+
+.metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(112px, 1fr)); gap: 10px; }
+.metric {
+  background: linear-gradient(180deg, var(--surface-2), var(--bg-input));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 11px 13px;
+  transition: border-color 0.15s var(--ease);
+}
+.metric:hover { border-color: var(--border-strong); }
+.metric .k {
+  font-size: 9.5px;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.9px;
+  font-weight: 600;
+  /* Long single-word labels (common in Russian) must break rather than spill. */
+  overflow-wrap: anywhere;
+  hyphens: auto;
+}
+.metric .v {
+  font-family: var(--mono);
+  font-size: 21px;
+  font-weight: 600;
+  margin-top: 4px;
+  letter-spacing: -0.5px;
+}
+.metric .v.accent { color: var(--accent); }
+.metric .v.amber { color: var(--amber); }
+.metric .v.red { color: var(--red); }
+.metric .v small { font-size: 11px; color: var(--text-faint); font-weight: 400; margin-left: 2px; }

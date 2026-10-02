@@ -254,3 +254,34 @@ async fn an_emulator_job_is_started_followed_and_stopped_through_the_commands() 
     let gone = service.invoke("emulator_exchanges", json!({ "jobId": id })).await.unwrap_err();
     assert_eq!(serde_json::to_value(&gone).unwrap()["code"], "emulator.not_running");
 }
+
+/// MQTT gear tested against a broker of the run's own: the experiment tells a
+/// lamp to switch on, the emulated device reports its new state, and a wait
+/// subscribed before the first step reads it — no broker to install.
+#[tokio::test]
+async fn an_mqtt_device_of_the_run_answers_a_command_and_the_wait_reads_it() {
+    let service = service();
+    let port = tcp_port();
+    let doc = document(
+        "MQTT device",
+        vec![
+            node("start", 0.0, json!({ "type": "start" })),
+            node("broker", 200.0, json!({ "type": "emulator", "emulator": {
+                "name": "Lamp", "bind": format!("127.0.0.1:{port}"), "protocol": "mqtt",
+                "rules": [{ "topic": "lab/+/set", "mode": "regex", "pattern": "^(ON|OFF)$",
+                            "reply": { "topic": "lab/{{request.levels[1]}}/state", "payload": "{{request.match}} by {{request.client}}", "delay_ms": 50 } }]
+            } })),
+            node("set", 400.0, json!({ "type": "mqtt", "host": "127.0.0.1", "port": port, "topic": "lab/lamp/set", "payload": "ON", "qos": 1, "retain": false })),
+            node("state", 600.0, json!({ "type": "wait_mqtt", "host": "127.0.0.1", "port": port, "topic": "lab/lamp/state", "mode": "contains", "pattern": "ON", "timeout_ms": 3000 })),
+            node("end", 800.0, json!({ "type": "end" })),
+        ],
+        vec![("start", "next", "broker"), ("broker", "next", "set"), ("set", "next", "state"), ("state", "matched", "end")],
+    );
+    let result = run(&service, doc).await;
+    assert_eq!(result.outcome, Outcome::Passed, "{}", failure(&result));
+    let state = result.steps.iter().find(|step| step.node_id == "state" && step.state == "passed").expect("the wait passed");
+    let reply = &state.vars.as_ref().unwrap_or_else(|| panic!("{state:?}"))["reply"];
+    assert!(reply["text"].as_str().is_some_and(|text| text.starts_with("ON by lab-")), "the run's own client id: {reply}");
+    let counts = serde_json::to_value(&result.emulators[0].counts).unwrap();
+    assert_eq!((counts["total"].clone(), counts["hits"].clone(), counts["down"].clone()), (json!(1), json!([1]), json!(0)));
+}

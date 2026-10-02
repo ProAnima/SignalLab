@@ -1,0 +1,24 @@
+/* Wiring: a live wire follows the pointer; every node is a drop target while it does. */
+.experiment-canvas-scroll.linking, .experiment-canvas-scroll.linking .experiment-node-body { cursor: crosshair; }
+.experiment-wires path.preview { stroke: var(--accent); stroke-width: 2; stroke-dasharray: 6 5; }
+.experiment-node.link-target:hover { border-color: var(--accent); }
+.experiment-port.output.active { border-color: var(--accent); background: var(--accent); }
+.experiment-canvas-hint.linking { color: var(--accent); }
+
+/* Validation on the canvas: what still needs a wire, what the run cannot reach, what the engine rejected. */
+@keyframes portMissing {
+  0%, 100% { box-shadow: 0 0 0 2px rgba(255, 192, 105, 0.18); }
+  50% { box-shadow: 0 0 0 5px rgba(255, 192, 105, 0.3); }
+}
+.experiment-port.output.missing { border-color: var(--amber); animation: portMissing 1.6s ease-in-out infinite; }
+.experiment-node.detached { border-style: dashed; }
+.experiment-node.detached .experiment-node-body { opacity: .78; }
+.experiment-node.invalid { border-color: var(--amber); }
+.experiment-node.invalid.selected { box-shadow: 0 0 0 2px rgba(255, 192, 105, .45), var(--shadow-md); }
+button.experiment-validation { max-width: 190px; color: var(--amber); border-color: rgba(255, 192, 105, .3); }
+button.experiment-validation:hover { color: var(--amber); border-color: var(--amber); }
+@media (prefers-reduced-motion: reduce) { .experiment-port.output.missing { animation: none; box-shadow: 0 0 0 3px rgba(255, 192, 105, 0.3); } }
+
+/* Add menu context: where the new node will be attached, and how to drive the list. */
+.experiment-menu-context { margin: 0 0 var(--space-2); padding: 0 var(--space-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--accent); font-size: 11px; }
+.experiment-add-menu > div { max-height: min(340px, calc(100vh - 150px)); }

@@ -248,7 +248,7 @@ function Shell() {
       <FirewallBanner />
       <main className="main" ref={mainRef}>
         <div className="experiment-host" hidden={view !== "experiment"}>
-          <ExperimentView ref={experiment} active={view === "experiment"} focusMode={focusMode} setFocusMode={setFocusMode} onShowFrame={showFrame} />
+          <ExperimentView ref={experiment} active={view === "experiment"} focusMode={focusMode} setFocusMode={setFocusMode} onShowFrame={showFrame} onShowEmulator={showEmulator} />
         </div>
         {page("signals", <SignalsView onOpen={openSignal} reveal={revealSignal} />)}
         {page("emulators", <EmulatorsView reveal={revealEmulator} onShowFrame={showFrame} />)}

@@ -124,7 +124,7 @@ export type ExperimentNode = {
 
 /** `<on> <name> <op> <value>` about an HTTP request; the value may use parameters. */
 export interface Condition { on: "header" | "query" | "body" | "json"; name: string; op: CompareOp; value: string }
-export type Fault = "none" | "timeout" | "reset";
+export type Fault = "none" | "timeout" | "reset" | "malformed";
 export type ResponseOrder = "sequence" | "cycle" | "random";
 export interface EmulatorResponse {
   status: number;
@@ -146,17 +146,27 @@ export interface OscRule { address: string; args: ArgRule[]; reply: OscOut | nul
 export interface UdpRule { mode: UdpMode; pattern: string; reply: RawPayload | null; to: string; delay_ms: number; jitter_ms: number }
 export interface TcpRule { mode: UdpMode; pattern: string; reply: RawPayload | null; close: boolean; delay_ms: number; jitter_ms: number }
 export type Delimiter = "lf" | "crlf" | "cr" | "none";
-export type EmulatorProtocol = "http" | "osc" | "udp" | "tcp";
-export type Emulator = { name: string; bind: string } & (
+export interface MqttOut { topic: string; payload: string; qos: number; retain: boolean }
+/** On a message to a topic the filter matches, with a matching payload, publish `reply`. */
+export interface MqttRule { topic: string; mode: UdpMode; pattern: string; reply: MqttOut | null; delay_ms: number; jitter_ms: number }
+export interface MqttRetained { topic: string; payload: string; qos: number }
+export type DownFault = "unavailable" | "reset" | "timeout";
+/** Up for `up_ms`, then down for `down_ms`, from the start on. */
+export interface Outage { up_ms: number; down_ms: number; fault: DownFault }
+export type EmulatorProtocol = "http" | "osc" | "udp" | "tcp" | "mqtt";
+export type Emulator = { name: string; bind: string; outage?: Outage | null } & (
   | { protocol: "http"; routes: Route[]; fallback: EmulatorResponse | null }
   | { protocol: "osc"; rules: OscRule[] }
   | { protocol: "udp"; rules: UdpRule[] }
   | { protocol: "tcp"; delimiter: Delimiter; greeting: string; rules: TcpRule[] }
+  | { protocol: "mqtt"; username: string; password: string; retained: MqttRetained[]; rules: MqttRule[] }
 );
 export interface StoredEmulator { id: string; note: string; emulator: Emulator }
 export interface EmulatorLibrary { version: number; emulators: StoredEmulator[] }
 export interface EmulatorLibraryFile { path: string; library: EmulatorLibrary; seeded: boolean }
-export interface EmulatorCounts { total: number; unmatched: number; failed: number; hits: number[] }
+export interface EmulatorCounts { total: number; unmatched: number; failed: number; down: number; hits: number[];
+  /** Messages a broker could not hand to a client too far behind; absent while none were. */
+  missed?: number }
 /** One request (message, line) an emulator received, and what became of it. */
 export interface Exchange {
   seq: number;
@@ -171,6 +181,8 @@ export interface Exchange {
   ms: number;
   error?: EngineError;
   frame?: number;
+  /** It arrived while the emulator was down: no rule was asked. */
+  down?: boolean;
   /** What arrived, as templates read it (`emulator_exchanges` only). */
   data?: unknown;
 }

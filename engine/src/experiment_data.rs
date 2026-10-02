@@ -356,7 +356,8 @@ fn check_literals(node: &Node, params: &BTreeMap<String, String>) -> EngineResul
         NodeKind::Udp { reply: Some(reply), .. } => check_udp_pattern(reply.mode, &reply.pattern, Field::new("reply_pattern"), params),
         // What is literal already is checked as the wait will read it.
         NodeKind::WaitHttp { method, path, when, .. } => {
-            use crate::emulator::{Check, Condition, RequestMatcher};
+            use crate::emulator::Condition;
+            use crate::emulator_match::{Check, RequestMatcher};
             RequestMatcher::new(method, &static_text(path, params).unwrap_or_else(|| "/".into()), &[])?;
             for (index, condition) in when.iter().enumerate() {
                 if let (Some(name), Some(value)) = (static_text(&condition.name, params), static_text(&condition.value, params)) {

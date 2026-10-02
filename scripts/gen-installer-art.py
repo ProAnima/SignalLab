@@ -4,7 +4,7 @@ the MSI dialog background and banner.
     python scripts/gen-installer-art.py      # -> src-tauri/installer/*.bmp
 
 The mark comes from src-tauri/icons/icon-1024.png (scripts/gen-icon.py draws
-it), the colours from src/styles.css. Images carry no words but the product
+it), the colours from src/styles/tokens.css. Images carry no words but the product
 name, because one installer speaks English and Russian.
 
 Sizes are the ones the installers draw them at (96 DPI): NSIS's Welcome/Finish
@@ -26,7 +26,7 @@ OUT = os.path.join(ROOT, "src-tauri", "installer")
 MARK = os.path.join(ROOT, "src-tauri", "icons", "icon-1024.png")
 SS = 4  # supersampling
 
-# --- src/styles.css ---
+# --- src/styles/tokens.css ---
 BG_TOP = (13, 19, 28)  # --surface-1
 BG_BOTTOM = (7, 10, 15)  # --bg
 TEXT = (227, 233, 242)  # --text

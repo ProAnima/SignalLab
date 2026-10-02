@@ -102,6 +102,18 @@ pub fn seed() -> EmulatorLibrary {
                     ]
                 }),
             ),
+            stored(
+                "mqtt-broker",
+                "A broker to point gear and a controller at: a lamp that reports its state when told ON or OFF, and a status that is retained.",
+                json!({
+                    "name": "Demo MQTT broker", "bind": "127.0.0.1:1883", "protocol": "mqtt",
+                    "retained": [{ "topic": "lab/status", "payload": "online" }],
+                    "rules": [
+                        { "topic": "lab/+/set", "mode": "regex", "pattern": "^(ON|OFF)$",
+                          "reply": { "topic": "lab/{{request.levels[1]}}/state", "payload": "{{request.match}}", "retain": true } }
+                    ]
+                }),
+            ),
         ],
     }
 }
@@ -183,10 +195,10 @@ mod tests {
         let library = seed();
         let text = serde_json::to_string(&library).unwrap();
         let back: EmulatorLibrary = serde_json::from_str(&text).unwrap();
-        assert_eq!(back.emulators.len(), 4);
+        assert_eq!(back.emulators.len(), 5);
         let mut protocols: Vec<&str> = back.emulators.iter().map(|stored| stored.emulator.kind.protocol()).collect();
         protocols.sort_unstable();
-        assert_eq!(protocols, ["http", "osc", "tcp", "udp"], "one of each");
+        assert_eq!(protocols, ["http", "mqtt", "osc", "tcp", "udp"], "one of each");
         for stored in &back.emulators {
             emulator::check(&stored.emulator, &BTreeMap::new()).unwrap_or_else(|error| panic!("{}: {error}", stored.id));
             assert!(stored.emulator.bind.starts_with("127.0.0.1:"), "{} listens on {}", stored.id, stored.emulator.bind);
@@ -200,7 +212,7 @@ mod tests {
         let mut ids: Vec<&str> = back.emulators.iter().map(|stored| stored.id.as_str()).collect();
         ids.sort_unstable();
         ids.dedup();
-        assert_eq!(ids.len(), 4);
+        assert_eq!(ids.len(), 5);
     }
 
     #[test]
@@ -210,7 +222,7 @@ mod tests {
         assert_eq!(parse_file(one, path).unwrap().len(), 1);
         assert_eq!(parse_file(&format!("[{one}, {one}]"), path).unwrap().len(), 2);
         let library = serde_json::to_string(&seed()).unwrap();
-        assert_eq!(parse_file(&library, path).unwrap().len(), 4);
+        assert_eq!(parse_file(&library, path).unwrap().len(), 5);
         let broken = parse_file("{\n  \"name\": \"x\",\n  oops", path).unwrap_err();
         assert_eq!((broken.code.as_str(), broken.params["line"].as_str(), broken.params["path"].as_str()), ("emulators.json_invalid", "3", "mock.json"));
         assert!(parse_file(r#"{ "name": "x", "bind": "1", "protocol": "smtp" }"#, path).unwrap_err().is("emulators.json_invalid"));

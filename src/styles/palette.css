@@ -1,0 +1,54 @@
+/* ---------- command palette ---------- */
+
+.palette-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 12vh 20px 20px;
+  background: rgba(4, 7, 11, 0.62);
+  backdrop-filter: blur(2px);
+}
+.palette {
+  width: min(560px, 100%);
+  padding: 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface-1);
+  box-shadow: var(--shadow-md);
+}
+.palette > input { padding: 10px 12px; font-size: 13px; }
+.palette-list { max-height: 46vh; margin-top: 10px; overflow-y: auto; }
+.palette-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.palette-row:active { transform: none; }
+.palette-row.active {
+  background: var(--accent-soft);
+  border-color: rgba(62, 230, 176, 0.22);
+  color: var(--text);
+}
+.palette-name { flex-shrink: 0; font-size: 12.5px; }
+.palette-target {
+  flex: 1;
+  overflow: hidden;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--text-faint);
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

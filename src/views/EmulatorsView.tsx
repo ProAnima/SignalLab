@@ -8,7 +8,7 @@ import { describeError, type Failure } from "../lib/errors";
 import { fmtNum, fmtTime } from "../lib/format";
 import { EmulatorEditor } from "../components/EmulatorEditor";
 import { ErrorMessage } from "../components/ErrorMessage";
-import { isDesktop } from "../lib/platform";
+import { copyText, isDesktop } from "../lib/platform";
 import { blankEmulator, emulatorUrl, freeBind, makeEmulatorId, PROTOCOLS, protocolLabel } from "../lib/emulators";
 
 /** How long after the last keystroke an emulator is checked again. */
@@ -29,7 +29,7 @@ export function EmulatorsView({ reveal, onShowFrame }: { reveal?: { id: string; 
   const [problem, setProblem] = useState<Failure | null>(null);
   const [startError, setStartError] = useState<Failure | null>(null);
   const [starting, setStarting] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState<boolean | null>(null);
 
   const selected = emulators.find((stored) => stored.id === selectedId) ?? null;
   const job = selected ? running.get(selected.id) ?? null : null;
@@ -42,7 +42,7 @@ export function EmulatorsView({ reveal, onShowFrame }: { reveal?: { id: string; 
   useEffect(() => {
     if (reveal && emulators.some((stored) => stored.id === reveal.id)) setSelectedId(reveal.id);
   }, [reveal]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { setConfirmDelete(false); setStartError(null); setCopied(false); }, [selectedId]);
+  useEffect(() => { setConfirmDelete(false); setStartError(null); setCopied(null); }, [selectedId]);
 
   // What Start would be refused for, while it is being written.
   const edited = selected?.emulator;
@@ -105,7 +105,7 @@ export function EmulatorsView({ reveal, onShowFrame }: { reveal?: { id: string; 
   const url = selected ? emulatorUrl(selected.emulator, job?.params?.local, isDesktop ? undefined : window.location.hostname) : null;
   const copyUrl = () => {
     if (!url) return;
-    navigator.clipboard?.writeText(url).then(() => setCopied(true), () => {});
+    void copyText(url).then(setCopied);
   };
 
   const exchanges = activity ? activity.exchanges.slice().reverse() : [];
@@ -161,7 +161,7 @@ export function EmulatorsView({ reveal, onShowFrame }: { reveal?: { id: string; 
                   {job ? t("emu.stop") : t("emu.start")}
                 </button>
                 {job && changed && <button className="ghost" disabled={starting} data-tip={t("emu.restartHint")} onClick={() => void run()}>{t("emu.restart")}</button>}
-                {url && <button className="ghost" data-tip={copied ? t("emu.copied") : t("emu.copyUrlHint", { url })} onClick={copyUrl}>{t("emu.copyUrl")}</button>}
+                {url && <button className="ghost" data-tip={copied === true ? t("emu.copied") : copied === false ? t("emu.copyFailed", { url }) : t("emu.copyUrlHint", { url })} onClick={copyUrl}>{t("emu.copyUrl")}</button>}
                 <button className="ghost" onClick={duplicate}>{t("emu.duplicate")}</button>
                 {/* Two steps, because the file is written the moment you click. */}
                 <button className="danger" onClick={() => (confirmDelete ? remove() : setConfirmDelete(true))}>
@@ -189,6 +189,12 @@ export function EmulatorsView({ reveal, onShowFrame }: { reveal?: { id: string; 
               <div className="metric"><div className="k">{t("emu.total")}</div><div className="v accent">{fmtNum(activity?.counts.total ?? 0)}</div></div>
               <div className="metric"><div className="k">{t("emu.unmatched")}</div><div className="v amber">{fmtNum(activity?.counts.unmatched ?? 0)}</div></div>
               <div className="metric"><div className="k">{t("emu.failed")}</div><div className="v red">{fmtNum(activity?.counts.failed ?? 0)}</div></div>
+              {(selected.emulator.outage || !!activity?.counts.down) && <div className="metric">
+                <div className="k">{t("emu.down")}</div><div className="v">{fmtNum(activity?.counts.down ?? 0)}</div>
+              </div>}
+              {!!activity?.counts.missed && <div className="metric" data-tip={t("emu.missedHint")}>
+                <div className="k">{t("emu.missed")}</div><div className="v amber">{fmtNum(activity.counts.missed)}</div>
+              </div>}
             </div>
             <p className="section-label" style={{ marginTop: 16 }}>{t("emu.received")}</p>
             <div className="scroll-y emu-exchanges">
@@ -205,13 +211,13 @@ export function EmulatorsView({ reveal, onShowFrame }: { reveal?: { id: string; 
                   </tr>
                 </thead>
                 <tbody>
-                  {exchanges.map((exchange) => <tr key={exchange.seq} className={exchange.error ? "emu-failed" : exchange.rule === undefined ? "emu-unmatched" : ""}>
+                  {exchanges.map((exchange) => <tr key={exchange.seq} className={exchange.error ? "emu-failed" : exchange.down ? "emu-down" : exchange.rule === undefined ? "emu-unmatched" : ""}>
                     <td style={{ color: "var(--text-faint)" }}>{fmtTime(exchange.ts)}</td>
                     <td>{exchange.from}</td>
                     <td className="emu-request">{exchange.request}</td>
                     <td>{exchange.rule !== undefined ? `#${exchange.rule}` : "—"}</td>
-                    <td>{exchange.error ? describeError(exchange.error, t).text
-                      : exchange.fault === "timeout" ? t("emu.held") : exchange.fault === "reset" ? t("emu.closed") : exchange.reply || "—"}</td>
+                    <td>{exchange.down && <span className="emu-was-down">{t("emu.wasDown")}</span>}{exchange.error ? describeError(exchange.error, t).text
+                      : exchange.fault === "timeout" ? t("emu.held") : exchange.fault === "reset" ? t("emu.closed") : exchange.reply || (exchange.down ? "" : "—")}</td>
                     <td>{fmtNum(exchange.ms)}</td>
                     {onShowFrame && <td>{exchange.frame !== undefined && <button className="ghost xs" aria-label={t("emu.inspectFrame")} data-tip={t("emu.inspectFrame")}
                       onClick={() => onShowFrame(exchange.frame!)}>⌕</button>}</td>}

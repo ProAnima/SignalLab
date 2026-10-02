@@ -60,7 +60,7 @@ fn assert_counted(output: &Output, port: u16) {
     assert_eq!(exchanges.len(), 2, "{}", out(output));
     assert_eq!((exchanges[0]["exchange"]["request"].as_str(), exchanges[0]["exchange"]["status"].as_u64()), (Some("GET /items/5"), Some(200)));
     let summary = lines.iter().find(|line| line["type"] == "summary").unwrap();
-    assert_eq!(summary["counts"], json!({ "total": 2, "unmatched": 1, "failed": 0, "hits": [1] }));
+    assert_eq!(summary["counts"], json!({ "total": 2, "unmatched": 1, "failed": 0, "down": 0, "hits": [1] }));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

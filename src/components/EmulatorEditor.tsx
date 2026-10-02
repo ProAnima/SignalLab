@@ -1,19 +1,24 @@
 import { useState } from "react";
 import type {
-  ArgOut, ArgType, CompareOp, Condition, Delimiter, Emulator, EmulatorResponse, Fault, OscRule, RawPayload, ResponseOrder, Route, TcpRule, UdpMode, UdpRule,
+  ArgOut, ArgType, CompareOp, Condition, Delimiter, DownFault, Emulator, EmulatorResponse, Fault, MqttRetained, MqttRule, OscRule, RawPayload, ResponseOrder,
+  Route, TcpRule, UdpMode, UdpRule,
 } from "../lib/api";
 import { ArgRules } from "./ExperimentNodeFields";
 import { useFieldIds } from "../lib/hooks";
 import { useT, type TKey } from "../lib/i18n";
+import { copyText, isDesktop } from "../lib/platform";
 import {
-  blankCondition, blankOscRule, blankRoute, blankTcpRule, blankUdpRule, PRESETS, presetLabel, presetResponse, protocolLabel, type Preset,
+  blankCondition, blankMqttRule, blankOscRule, blankOutage, blankRetained, blankRoute, blankTcpRule, blankUdpRule, emulatorUrl, PRESETS, presetLabel, presetResponse,
+  protocolLabel, type Preset,
 } from "../lib/emulators";
 
 const METHODS = ["ANY", "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
 const OPERATORS: CompareOp[] = ["eq", "ne", "lt", "le", "gt", "ge", "contains", "matches", "empty", "not_empty"];
 const MODES: UdpMode[] = ["any", "contains", "regex", "hex"];
 const ARG_TYPES: ArgType[] = ["int", "float", "str", "long", "double", "bool", "blob", "nil"];
-const FAULTS: Fault[] = ["none", "timeout", "reset"];
+const FAULTS: Fault[] = ["none", "timeout", "reset", "malformed"];
+const DOWN_FAULTS: DownFault[] = ["unavailable", "reset", "timeout"];
+const QOS = [0, 1, 2];
 const ORDERS: ResponseOrder[] = ["sequence", "cycle", "random"];
 const DELIMITERS: Delimiter[] = ["lf", "crlf", "cr", "none"];
 const ON: Condition["on"][] = ["header", "query", "body", "json"];
@@ -76,7 +81,7 @@ function ResponseEditor({ response, onChange, onRemove, n, random, idPrefix }: {
   const fid = useFieldIds();
   const id = (name: string) => fid(`${idPrefix}${name}`);
   const set = (change: Partial<EmulatorResponse>) => onChange({ ...response, ...change });
-  const answers = response.fault === "none";
+  const answers = response.fault === "none" || response.fault === "malformed";
   return <div className="emu-response">
     {n !== undefined && <div className="emu-response-head">
       <span className="emu-response-n">{t("emu.response", { n })}</span>
@@ -115,12 +120,25 @@ function ResponseEditor({ response, onChange, onRemove, n, random, idPrefix }: {
   </div>;
 }
 
-function RouteBody({ route, onChange, idPrefix }: { route: Route; onChange: (next: Route) => void; idPrefix: string }) {
+/** Copy `url` to the clipboard, saying in the button's tip whether it worked. */
+function CopyUrl({ url }: { url: string }) {
+  const t = useT();
+  const [copied, setCopied] = useState<boolean | null>(null);
+  const tip = copied === true ? t("emu.copied") : copied === false ? t("emu.copyFailed", { url }) : t("emu.copyRouteUrlHint", { url });
+  return <button className="ghost sm emu-copy" data-tip={tip}
+    onClick={() => void copyText(url).then(setCopied)} onBlur={() => setCopied(null)}>
+    {t("emu.copyRouteUrl")}
+  </button>;
+}
+
+function RouteBody({ route, onChange, idPrefix, base }: { route: Route; onChange: (next: Route) => void; idPrefix: string; base: string | null }) {
   const t = useT();
   const fid = useFieldIds();
   const id = (name: string) => fid(`${idPrefix}${name}`);
   const set = (change: Partial<Route>) => onChange({ ...route, ...change });
   const random = route.order === "random";
+  // A path with :name or * segments is a pattern; copied as it stands, it is one request it takes.
+  const url = base && route.path.startsWith("/") && !route.path.includes("{{") ? `${base}${route.path}` : null;
   return <>
     <div className="row">
       <div className="field" style={{ flex: "0 0 112px" }}>
@@ -133,6 +151,7 @@ function RouteBody({ route, onChange, idPrefix }: { route: Route; onChange: (nex
         <label htmlFor={id("path")} data-tip={t("emu.pathHint")}>{t("emu.path")}</label>
         <input id={id("path")} data-primary spellCheck={false} value={route.path} onChange={(event) => set({ path: event.target.value })} />
       </div>
+      {url && <CopyUrl url={url} />}
     </div>
     <ConditionsEditor conditions={route.when} onChange={(when) => set({ when })} idPrefix={idPrefix} />
     <p className="emu-subhead">{t("emu.responses")}</p>
@@ -282,6 +301,109 @@ function TcpRuleBody({ rule, onChange, idPrefix }: { rule: TcpRule; onChange: (n
   </>;
 }
 
+function MqttRuleBody({ rule, onChange, idPrefix }: { rule: MqttRule; onChange: (next: MqttRule) => void; idPrefix: string }) {
+  const t = useT();
+  const fid = useFieldIds();
+  const id = (name: string) => fid(`${idPrefix}${name}`);
+  const set = (change: Partial<MqttRule>) => onChange({ ...rule, ...change });
+  const reply = rule.reply;
+  const setReply = (change: Partial<NonNullable<MqttRule["reply"]>>) => reply && set({ reply: { ...reply, ...change } });
+  return <>
+    <div className="field">
+      <label htmlFor={id("topic")} data-tip={t("emu.topicFilterHint")}>{t("emu.topicFilter")}</label>
+      <input id={id("topic")} data-primary spellCheck={false} value={rule.topic} onChange={(event) => set({ topic: event.target.value })} />
+    </div>
+    <MatchFields mode={rule.mode} pattern={rule.pattern} onChange={set} id={id} />
+    <label className="checkbox emu-check">
+      <input type="checkbox" checked={!!reply} onChange={(event) => set({ reply: event.target.checked ? { topic: "", payload: "", qos: 0, retain: false } : null })} />
+      {t("emu.replyOn")}
+    </label>
+    {reply && <>
+      <div className="row">
+        <div className="field">
+          <label htmlFor={id("reply-topic")} data-tip={t("emu.mqttReplyHint")}>{t("emu.replyTopic")}</label>
+          <input id={id("reply-topic")} spellCheck={false} value={reply.topic} onChange={(event) => setReply({ topic: event.target.value })} />
+        </div>
+        <div className="field" style={{ flex: "0 0 72px" }}>
+          <label htmlFor={id("reply-qos")}>{t("emu.qos")}</label>
+          <select id={id("reply-qos")} value={reply.qos} onChange={(event) => setReply({ qos: Number(event.target.value) })}>
+            {QOS.map((qos) => <option key={qos} value={qos}>{qos}</option>)}
+          </select>
+        </div>
+      </div>
+      <div className="field">
+        <label htmlFor={id("reply-payload")} data-tip={t("emu.mqttReplyHint")}>{t("emu.replyPayload")}</label>
+        <textarea id={id("reply-payload")} className="emu-body" spellCheck={false} value={reply.payload} onChange={(event) => setReply({ payload: event.target.value })} />
+      </div>
+      <label className="checkbox emu-check">
+        <input type="checkbox" checked={reply.retain} onChange={(event) => setReply({ retain: event.target.checked })} />
+        {t("emu.retain")}
+      </label>
+      <Timing delay={rule.delay_ms} jitter={rule.jitter_ms} onChange={set} id={id} />
+    </>}
+  </>;
+}
+
+/** A broker's login and the messages it retains from the start. */
+function BrokerFields({ emulator, onChange }: { emulator: Extract<Emulator, { protocol: "mqtt" }>; onChange: (next: Emulator) => void }) {
+  const t = useT();
+  const fid = useFieldIds();
+  const setRetained = (retained: MqttRetained[]) => onChange({ ...emulator, retained });
+  return <>
+    <div className="row">
+      <div className="field">
+        <label htmlFor={fid("username")} data-tip={t("emu.usernameHint")}>{t("emu.username")}</label>
+        <input id={fid("username")} spellCheck={false} autoComplete="off" value={emulator.username} onChange={(event) => onChange({ ...emulator, username: event.target.value })} />
+      </div>
+      <div className="field">
+        <label htmlFor={fid("password")}>{t("emu.password")}</label>
+        <input id={fid("password")} spellCheck={false} autoComplete="off" value={emulator.password} onChange={(event) => onChange({ ...emulator, password: event.target.value })} />
+      </div>
+    </div>
+    <div className="emu-retained">
+      <p className="emu-subhead" data-tip={t("emu.retainedHint")}>{t("emu.retained")}</p>
+      {emulator.retained.map((message, index) => {
+        const n = index + 1;
+        const set = (change: Partial<MqttRetained>) => setRetained(replaced(emulator.retained, index, { ...message, ...change }));
+        return <div className="row tight" key={index}>
+          <input aria-label={`${t("emu.topic")} ${n}`} placeholder={t("emu.topic")} spellCheck={false} value={message.topic} onChange={(event) => set({ topic: event.target.value })} />
+          <input aria-label={`${t("emu.payload")} ${n}`} placeholder={t("emu.payload")} spellCheck={false} value={message.payload} onChange={(event) => set({ payload: event.target.value })} />
+          <select style={{ flex: "0 0 64px" }} aria-label={`${t("emu.qos")} ${n}`} value={message.qos} onChange={(event) => set({ qos: Number(event.target.value) })}>
+            {QOS.map((qos) => <option key={qos} value={qos}>{qos}</option>)}
+          </select>
+          <button className="ghost sm" style={{ flex: "0 0 auto" }} aria-label={`${t("emu.removeRetained")} · ${n}`} data-tip={t("emu.removeRetained")}
+            onClick={() => setRetained(removed(emulator.retained, index))}>×</button>
+        </div>;
+      })}
+      <button className="ghost sm" disabled={emulator.retained.length >= 64} onClick={() => setRetained([...emulator.retained, blankRetained()])}>＋ {t("emu.addRetained")}</button>
+    </div>
+  </>;
+}
+
+/** Down now and then: how long up, how long down, and what HTTP meets meanwhile. */
+function OutageFields({ emulator, onChange }: { emulator: Emulator; onChange: (next: Emulator) => void }) {
+  const t = useT();
+  const fid = useFieldIds();
+  const outage = emulator.outage ?? null;
+  const set = (change: Partial<NonNullable<Emulator["outage"]>>) => outage && onChange({ ...emulator, outage: { ...outage, ...change } });
+  return <div className="emu-outage">
+    <label className="checkbox emu-check" data-tip={t("emu.outageHint")}>
+      <input type="checkbox" checked={!!outage} onChange={(event) => onChange({ ...emulator, outage: event.target.checked ? blankOutage() : null })} />
+      {t("emu.outage")}
+    </label>
+    {outage && <div className="row">
+      <NumberField id={fid("outage-up")} label={t("emu.outageUp")} value={outage.up_ms} min={10} max={3600000} onChange={(up_ms) => set({ up_ms })} />
+      <NumberField id={fid("outage-down")} label={t("emu.outageDown")} value={outage.down_ms} min={10} max={3600000} onChange={(down_ms) => set({ down_ms })} />
+      {emulator.protocol === "http" && <div className="field">
+        <label htmlFor={fid("outage-fault")}>{t("emu.outageFault")}</label>
+        <select id={fid("outage-fault")} value={outage.fault} onChange={(event) => set({ fault: event.target.value as DownFault })}>
+          {DOWN_FAULTS.map((fault) => <option key={fault} value={fault}>{t(`emu.outageFault.${fault}` as TKey)}</option>)}
+        </select>
+      </div>}
+    </div>}
+  </div>;
+}
+
 /** One line about a rule for its collapsed card. */
 function ruleSummary(emulator: Emulator, index: number, t: ReturnType<typeof useT>): string {
   switch (emulator.protocol) {
@@ -298,6 +420,11 @@ function ruleSummary(emulator: Emulator, index: number, t: ReturnType<typeof use
       const rule = emulator.rules[index];
       const reply = rule.reply ? (rule.reply.kind === "text" ? rule.reply.text : rule.reply.hex) : "—";
       return `${rule.mode === "any" ? "*" : rule.pattern} → ${reply}`;
+    }
+    case "mqtt": {
+      const rule = emulator.rules[index];
+      const payload = rule.mode === "any" ? "" : ` ${rule.pattern}`;
+      return `${rule.topic}${payload} → ${rule.reply ? rule.reply.topic : "—"}`;
     }
   }
 }
@@ -322,10 +449,14 @@ export function EmulatorEditor({ emulator, onChange, hits }: { emulator: Emulato
       case "osc": return { ...emulator, rules: rules as OscRule[] };
       case "udp": return { ...emulator, rules: rules as UdpRule[] };
       case "tcp": return { ...emulator, rules: rules as TcpRule[] };
+      case "mqtt": return { ...emulator, rules: rules as MqttRule[] };
     }
   };
+  const blank: Record<Emulator["protocol"], () => unknown> = { http: blankRoute, osc: blankOscRule, udp: blankUdpRule, tcp: blankTcpRule, mqtt: blankMqttRule };
+  // Where a person reaches it: the server's name in a browser, this computer's loopback in the app.
+  const base = emulatorUrl(emulator, undefined, isDesktop ? undefined : window.location.hostname);
   const add = () => {
-    const rule = emulator.protocol === "http" ? blankRoute() : emulator.protocol === "osc" ? blankOscRule() : emulator.protocol === "udp" ? blankUdpRule() : blankTcpRule();
+    const rule = blank[emulator.protocol]();
     onChange(withRules([...rulesOf(), rule]));
     setOpen(new Set([count]));
   };
@@ -364,8 +495,10 @@ export function EmulatorEditor({ emulator, onChange, hits }: { emulator: Emulato
       </div>
     </div>}
 
+    {emulator.protocol === "mqtt" && <BrokerFields emulator={emulator} onChange={onChange} />}
+
     <div className="emu-rules-head">
-      <p className="section-label" data-tip={t(http ? "emu.routesHint" : "emu.rulesHint")}>{t(http ? "emu.routes" : "emu.rules")}</p>
+      <p className="section-label" data-tip={t(http ? "emu.routesHint" : emulator.protocol === "mqtt" ? "emu.mqttRulesHint" : "emu.rulesHint")}>{t(http ? "emu.routes" : "emu.rules")}</p>
       <button className="ghost sm" disabled={count >= 64} onClick={add}>＋ {t(http ? "emu.addRoute" : "emu.addRule")}</button>
     </div>
     {count === 0 && <div className="empty-state">{t("emu.noRules")}</div>}
@@ -386,10 +519,11 @@ export function EmulatorEditor({ emulator, onChange, hits }: { emulator: Emulato
           <button className="ghost xs" aria-label={`${t("emu.removeRule")} · ${n}`} data-tip={t("emu.removeRule")} onClick={() => remove(index)}>×</button>
         </div>
         {expanded && <div className="emu-rule-body">
-          {emulator.protocol === "http" && <RouteBody route={emulator.routes[index]} onChange={(route) => setRule(index, route)} idPrefix={prefix} />}
+          {emulator.protocol === "http" && <RouteBody route={emulator.routes[index]} onChange={(route) => setRule(index, route)} idPrefix={prefix} base={base} />}
           {emulator.protocol === "osc" && <OscRuleBody rule={emulator.rules[index]} onChange={(rule) => setRule(index, rule)} idPrefix={prefix} />}
           {emulator.protocol === "udp" && <UdpRuleBody rule={emulator.rules[index]} onChange={(rule) => setRule(index, rule)} idPrefix={prefix} />}
           {emulator.protocol === "tcp" && <TcpRuleBody rule={emulator.rules[index]} onChange={(rule) => setRule(index, rule)} idPrefix={prefix} />}
+          {emulator.protocol === "mqtt" && <MqttRuleBody rule={emulator.rules[index]} onChange={(rule) => setRule(index, rule)} idPrefix={prefix} />}
         </div>}
       </section>;
     })}
@@ -405,5 +539,6 @@ export function EmulatorEditor({ emulator, onChange, hits }: { emulator: Emulato
       </div>
       {emulator.fallback && <ResponseEditor response={emulator.fallback} random={false} idPrefix="fallback-" onChange={(fallback) => onChange({ ...emulator, fallback })} />}
     </div>}
+    <OutageFields emulator={emulator} onChange={onChange} />
   </div>;
 }

@@ -1,0 +1,60 @@
+/* Experiments: the canvas carries structure; the side panel carries detail. */
+.experiment-host { height: 100%; min-height: 0; }
+.experiment-view { display: flex; flex-direction: column; height: 100%; min-height: 0; gap: 0; }
+.experiment-loading { padding: 24px; color: var(--text-dim); }
+.experiment-loading > button { display: block; margin-top: 16px; }
+.experiment-document-button { flex-shrink: 0; }
+.experiment-documents { width: min(610px, calc(100vw - 32px)); max-height: calc(100vh - 40px); padding: 0; border: 1px solid var(--border-strong); border-radius: var(--radius); color: var(--text); background: var(--surface-1); box-shadow: var(--shadow-md); }
+.experiment-documents::backdrop { background: rgba(0, 0, 0, .65); backdrop-filter: blur(4px); }
+.experiment-documents-content { padding: 22px; }
+.experiment-documents header { display: flex; align-items: flex-start; gap: 16px; justify-content: space-between; margin-bottom: 18px; }
+.experiment-documents h2 { margin: 0 0 6px; font-size: 19px; }
+.experiment-template-list { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; }
+.experiment-template { display: flex; flex-direction: column; gap: 10px; min-width: 0; padding: 14px; text-align: left; white-space: normal; overflow-wrap: anywhere; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); }
+.experiment-template strong { font-size: 12px; }
+.experiment-template-number { font: 11px var(--mono); color: var(--text-faint); }
+.experiment-template.selected { border-color: var(--accent-deep); background: var(--accent-soft); }
+.experiment-template.selected .experiment-template-number { color: var(--accent); }
+.experiment-file-import { display: flex; align-items: center; gap: 14px; padding: 16px 0; }
+.experiment-file-import > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--text-faint); }
+.experiment-file-import > button { flex-shrink: 0; }
+.experiment-document-preview { display: flex; align-items: baseline; gap: 12px; justify-content: space-between; border-top: 1px solid var(--border); padding: 14px 0; font-size: 12px; }
+.experiment-document-preview strong { overflow-wrap: anywhere; }
+.experiment-document-preview > span { flex-shrink: 0; color: var(--text-faint); font-size: 11px; }
+.experiment-documents footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.experiment-file-error { color: var(--red); font: 11px/1.5 var(--mono); overflow-wrap: anywhere; }
+.experiment-export-path { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; color: var(--accent); font-size: 11px; }
+.experiment-export-path input { width: 100%; font: 10px var(--mono); }
+@media (max-width: 520px) { .experiment-template-list { grid-template-columns: 1fr; } }
+.experiment-toolbar { display: flex; align-items: center; gap: 16px; padding: 12px 16px; border-bottom: 1px solid var(--border); min-height: 66px; }
+.experiment-heading { display: flex; flex: 1; min-width: 120px; flex-direction: column; gap: 1px; }
+.experiment-heading input { background: transparent; border: 1px solid transparent; padding: 1px 5px; margin-left: -5px; color: var(--text); font-size: 18px; font-weight: 650; letter-spacing: -0.4px; width: min(100%, 360px); }
+.experiment-heading input:hover, .experiment-heading input:focus { border-color: var(--border-strong); }
+.experiment-save { color: var(--text-faint); font-size: 11px; }
+.experiment-save { white-space: nowrap; }
+/* The properties pane's width comes from its handle, kept within reach on a small window. */
+.experiment-view { --properties-col: clamp(220px, var(--properties-w, 254px), 60%); }
+.experiment-workspace { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) var(--properties-col); min-height: 160px; flex: 1; }
+.experiment-left { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.experiment-palette { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; padding: 9px 12px; border-bottom: 1px solid var(--border); background: var(--surface-1); }
+.experiment-palette .section-label { margin-right: 8px; white-space: nowrap; }
+.experiment-palette button { display: flex; align-items: center; gap: 6px; padding: 5px 8px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-2); color: var(--text-dim); font-size: 11px; }
+.experiment-palette button:hover:not(:disabled) { border-color: var(--accent); color: var(--text); }
+.experiment-palette button:disabled { opacity: 0.45; }
+.experiment-kind { display: grid; place-items: center; width: 16px; height: 16px; border-radius: 4px; background: var(--accent-soft); color: var(--accent); font-family: var(--mono); font-weight: 700; font-size: 10px; }
+.experiment-kind.delay { color: var(--amber); background: rgba(255,192,105,.12); }
+.experiment-kind.assert_status { color: var(--violet); background: rgba(177,146,255,.13); }
+.experiment-plus { opacity: .55; margin-left: 2px; }
+.experiment-canvas-scroll { overflow: auto; flex: 1; min-height: 0; }
+.experiment-canvas { position: relative; background-color: var(--canvas-bg); background-image: radial-gradient(circle, var(--canvas-grid) 1px, transparent 1px); background-size: 20px 20px; }
+.experiment-wires { position: absolute; inset: 0; overflow: visible; pointer-events: none; }
+.experiment-wires path { fill: none; stroke: var(--wire); stroke-width: 2; }
+/* What takes the pointer for a wire: wide and invisible, the same width at any zoom. */
+.experiment-wires path.experiment-wire-hit { stroke: transparent; stroke-width: 14; vector-effect: non-scaling-stroke; pointer-events: stroke; cursor: pointer; outline: none; }
+.experiment-wires path.wire.hovered { stroke: var(--text-dim); stroke-width: 2.5; }
+.experiment-wires path.experiment-wire-hit:focus-visible { stroke: var(--accent-soft); }
+.experiment-wires path.wire.selected { stroke: var(--accent); stroke-width: 3; filter: drop-shadow(0 0 4px rgba(62, 230, 176, 0.45)); }
+/* Over the ports (z-index 3): a hovered wire's × can sit where a port's wide hit area reaches. */
+.experiment-edge-remove { position: absolute; z-index: 4; display: grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 1px solid var(--red); border-radius: 50%; color: var(--red); background: var(--surface-2); font-size: 14px; line-height: 1; }
+.experiment-edge-remove:hover:not(:disabled) { background: rgba(255, 107, 122, 0.15); }
+.experiment-wire-name { margin: 0 0 var(--space-3); color: var(--text-dim); font-family: var(--mono); font-size: 11px; }

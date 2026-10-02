@@ -326,6 +326,7 @@ function plan(ports, fixtures, mode, dataDir) {
       expect("…and keeps the folder that is now empty", (saved.folders ?? []).includes("API/Old"), JSON.stringify(saved.folders));
     } },
     { name: "emulators", args: { port: ports.emulator } },
+    { name: "emulatorMqtt", args: { port: ports.broker } },
     { name: "experimentHttp", args: { port: ports.http } },
     { name: "experimentOsc", args: { device: ports.device, pong: ports.pong }, before: mark, after: (expect) => expect("the device was pinged", counts.pings - at.pings >= 1) },
     { name: "experimentRepeat", args: { device: ports.device, pong: ports.pong }, before: mark, after: (expect) => expect("the device got three pings", counts.pings - at.pings === 3, `${counts.pings - at.pings} pings`) },
@@ -356,7 +357,7 @@ async function tour(target, opts, source) {
   const ports = {
     ...fixtures.ports, osc: await freePort("udp"), discovery: await freePort("udp"), relay: await freePort("udp"),
     // The emulators the tour makes listen on TCP ports of their own.
-    emulator: await freePort(), emulatorRun: await freePort(),
+    emulator: await freePort(), emulatorRun: await freePort(), broker: await freePort(),
   };
   const started = Date.now();
   console.log(`\n▶ ${label}`);

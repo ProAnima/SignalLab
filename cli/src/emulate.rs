@@ -97,6 +97,10 @@ fn print_exchange(ctx: &Ctx, started: &Started, exchange: &Value, since: Instant
         (None, None) if !reply.is_empty() => line.push_str(&format!(" → {reply}")),
         _ => {}
     }
+    // What met an outage, in the notation of the Inspector's verdicts.
+    if exchange["down"].as_bool() == Some(true) {
+        line.push_str(" · down");
+    }
     line.push_str(&format!("  {} ms  ← {}", exchange["ms"].as_u64().unwrap_or(0), exchange["from"].as_str().unwrap_or_default()));
     println!("{line}");
 }
@@ -105,7 +109,13 @@ fn print_exchange(ctx: &Ctx, started: &Started, exchange: &Value, since: Instant
 /// `emulate`, and for the emulators of a run.
 pub(crate) fn counts_line(texts: &crate::i18n::Texts, name: &str, counts: &Value) -> String {
     let hits: Vec<String> = counts["hits"].as_array().into_iter().flatten().enumerate().map(|(index, hits)| format!("#{} {}", index + 1, hits)).collect();
-    let line = texts.t("cli.emulatorSummary", &params! { "name" => name, "total" => &counts["total"], "unmatched" => &counts["unmatched"], "failed" => &counts["failed"] });
+    let mut line = texts.t("cli.emulatorSummary", &params! { "name" => name, "total" => &counts["total"], "unmatched" => &counts["unmatched"], "failed" => &counts["failed"] });
+    if counts["down"].as_u64().unwrap_or_default() > 0 {
+        line = format!("{line}, {}", texts.t("cli.emulatorDown", &params! { "n" => &counts["down"] }));
+    }
+    if counts["missed"].as_u64().unwrap_or_default() > 0 {
+        line = format!("{line}, {}", texts.t("cli.emulatorMissed", &params! { "n" => &counts["missed"] }));
+    }
     if hits.is_empty() { line } else { format!("{line} · {}", hits.join(", ")) }
 }
 

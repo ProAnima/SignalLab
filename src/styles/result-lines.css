@@ -1,0 +1,21 @@
+/* One-line verdict under a Send button: the console may be collapsed, the response below the fold. */
+.send-result { display: flex; align-items: baseline; gap: var(--space-2); margin: var(--space-3) 0 0; font: 11px/1.5 var(--mono); color: var(--text-dim); }
+.send-result > span { min-width: 0; overflow-wrap: anywhere; }
+.send-result.ok > span { color: var(--accent); }
+.send-result.warn > span { color: var(--amber); }
+.send-result.err > span { color: var(--red); }
+.send-result b { color: var(--text-dim); font-weight: 600; }
+.send-result time { margin-left: auto; flex-shrink: 0; color: var(--text-faint); }
+
+/* The collapsed console still shows its newest line. A long line must not widen the
+   grid column it sits in, hence the zero minimum on the grid item. */
+.console, .console-head { min-width: 0; }
+.console-last { display: flex; flex: 1; align-items: baseline; gap: 10px; min-width: 0; padding: 2px 6px; border: 0; background: transparent; color: var(--text-dim); font: 11px var(--mono); text-align: left; }
+.console-last:hover { background: rgba(255, 255, 255, 0.03); color: var(--text); }
+.console-last .t { flex-shrink: 0; color: var(--text-faint); }
+.console-last .tag { flex-shrink: 0; font-weight: 600; }
+.console-last.info .tag { color: var(--blue); }
+.console-last.ok .tag { color: var(--accent); }
+.console-last.warn .tag { color: var(--amber); }
+.console-last.err .tag { color: var(--red); }
+.console-last .msg { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

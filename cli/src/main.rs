@@ -15,6 +15,9 @@ mod fail;
 mod i18n;
 mod junit;
 mod mcp;
+mod mcp_library;
+mod mcp_send;
+mod mcp_tools;
 mod remote;
 mod run;
 mod send;
@@ -62,7 +65,7 @@ enum Command {
     Send(SendCommand),
     /// Fire a signal from a signal library by its id or name.
     Fire(FireArgs),
-    /// Play the other side — an HTTP API, an OSC, UDP or TCP device — until Ctrl+C or --for,
+    /// Play the other side — an HTTP API, an OSC, UDP or TCP device, an MQTT broker — until Ctrl+C or --for,
     /// printing every request and what it got.
     Emulate(EmulateArgs),
     /// List the emulators of the app's library (`signallab emulate <id>` starts one).

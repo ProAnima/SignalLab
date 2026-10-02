@@ -4,9 +4,11 @@
 //! TCP, QoS 0/1/2, retain, wildcards, a last-will, and a clean session. No
 //! MQTT 5, no persistent sessions, no TLS.
 //!
-//! Decoding covers the server-to-client direction; encoding covers the other.
-//! Everything is length-prefixed, so the decoder hands back `None` until a whole
-//! packet has arrived rather than guessing.
+//! `decode` and the `encode_*` before it are the client's side: what a broker
+//! sends, and what a client sends it. `decode_client` and the encoders after
+//! it are the broker's side, for the MQTT emulator. Everything is
+//! length-prefixed, so a decoder hands back `None` until a whole packet has
+//! arrived rather than guessing.
 
 use serde::{Deserialize, Serialize};
 
@@ -248,11 +250,9 @@ fn take_u16(buf: &[u8], at: &mut usize) -> Result<u16, String> {
     Ok(v)
 }
 
-/// Decode one packet from the front of `buf`.
-///
-/// `Ok(None)` means "not all here yet, keep reading" — the only correct answer
-/// for a stream, and the reason the caller keeps a persistent buffer.
-pub fn decode(buf: &[u8]) -> Result<Option<(Packet, usize)>, String> {
+/// The fixed header at the front of `buf`: type, flags, its own length and
+/// the packet's whole length — `None` until all of the packet is there.
+fn fixed_header(buf: &[u8], max: usize) -> Result<Option<(u8, u8, usize, usize)>, String> {
     if buf.len() < 2 {
         return Ok(None);
     }
@@ -278,13 +278,22 @@ pub fn decode(buf: &[u8]) -> Result<Option<(Packet, usize)>, String> {
         }
         multiplier *= 128;
     }
-    if remaining > MAX_REMAINING {
+    if remaining > max {
         return Err(format!("packet claims {remaining} bytes"));
     }
     let total = header + remaining;
     if buf.len() < total {
         return Ok(None);
     }
+    Ok(Some((kind, flags, header, total)))
+}
+
+/// Decode one packet from the front of `buf`.
+///
+/// `Ok(None)` means "not all here yet, keep reading" — the only correct answer
+/// for a stream, and the reason the caller keeps a persistent buffer.
+pub fn decode(buf: &[u8]) -> Result<Option<(Packet, usize)>, String> {
+    let Some((kind, flags, header, total)) = fixed_header(buf, MAX_REMAINING)? else { return Ok(None) };
     let body = &buf[header..total];
     let mut at = 0usize;
 
@@ -330,6 +339,198 @@ pub fn decode(buf: &[u8]) -> Result<Option<(Packet, usize)>, String> {
         other => return Err(format!("unexpected control packet type {other} from a broker")),
     };
     Ok(Some((packet, total)))
+}
+
+// ---------------------------------------------------------------------------
+// the broker's side
+// ---------------------------------------------------------------------------
+
+/// A CONNECT as a broker reads it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Connect {
+    pub protocol: String,
+    /// 4 is 3.1.1.
+    pub level: u8,
+    pub clean_session: bool,
+    pub keep_alive_s: u16,
+    pub client_id: String,
+    pub will: Option<ConnectWill>,
+    pub username: Option<String>,
+    pub password: Option<Vec<u8>>,
+}
+
+/// A client's last will, as its CONNECT carries it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ConnectWill {
+    pub topic: String,
+    pub payload: Vec<u8>,
+    pub qos: u8,
+    pub retain: bool,
+}
+
+/// A packet arriving from a client.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ClientPacket {
+    Connect(Connect),
+    Publish {
+        dup: bool,
+        qos: u8,
+        retain: bool,
+        topic: String,
+        packet_id: u16,
+        payload: Vec<u8>,
+    },
+    PubAck(u16),
+    PubRec(u16),
+    PubRel(u16),
+    PubComp(u16),
+    Subscribe {
+        packet_id: u16,
+        filters: Vec<(String, u8)>,
+    },
+    Unsubscribe {
+        packet_id: u16,
+        filters: Vec<String>,
+    },
+    PingReq,
+    Disconnect,
+}
+
+fn take_bytes(buf: &[u8], at: &mut usize) -> Result<Vec<u8>, String> {
+    if *at + 2 > buf.len() {
+        return Err("field length runs past the packet".into());
+    }
+    let len = u16::from_be_bytes([buf[*at], buf[*at + 1]]) as usize;
+    *at += 2;
+    if *at + len > buf.len() {
+        return Err("field runs past the packet".into());
+    }
+    let bytes = buf[*at..*at + len].to_vec();
+    *at += len;
+    Ok(bytes)
+}
+
+/// The flags 3.1.1 fixes for a packet type; a client that sends others is closed.
+fn flags_must_be(kind: &str, flags: u8, wanted: u8) -> Result<(), String> {
+    if flags == wanted {
+        Ok(())
+    } else {
+        Err(format!("{kind} with flags {flags:#x}"))
+    }
+}
+
+fn decode_connect(body: &[u8]) -> Result<Connect, String> {
+    let mut at = 0usize;
+    let protocol = take_str(body, &mut at)?;
+    let (Some(&level), Some(&flags)) = (body.get(at), body.get(at + 1)) else { return Err("CONNECT ends before its flags".into()) };
+    at += 2;
+    // Another version lays the rest out differently (MQTT 5 has properties):
+    // what it is is enough for the CONNACK that refuses it.
+    if protocol != "MQTT" || level != 4 {
+        return Ok(Connect { protocol, level, clean_session: false, keep_alive_s: 0, client_id: String::new(), will: None, username: None, password: None });
+    }
+    if flags & 0x01 != 0 {
+        return Err("CONNECT sets the reserved flag".into());
+    }
+    let keep_alive_s = take_u16(body, &mut at)?;
+    let client_id = take_str(body, &mut at)?;
+    let will = if flags & 0x04 != 0 {
+        let topic = take_str(body, &mut at)?;
+        let payload = take_bytes(body, &mut at)?;
+        let qos = (flags >> 3) & 0x03;
+        if qos > 2 {
+            return Err("CONNECT claims a will of QoS 3".into());
+        }
+        Some(ConnectWill { topic, payload, qos, retain: flags & 0x20 != 0 })
+    } else {
+        None
+    };
+    let username = if flags & 0x80 != 0 { Some(take_str(body, &mut at)?) } else { None };
+    let password = if flags & 0x40 != 0 { Some(take_bytes(body, &mut at)?) } else { None };
+    Ok(Connect { protocol, level, clean_session: flags & 0x02 != 0, keep_alive_s, client_id, will, username, password })
+}
+
+/// Decode one packet a client sent from the front of `buf`; a packet longer
+/// than `max` bytes, or one 3.1.1 forbids, is an error and ends the connection.
+pub fn decode_client(buf: &[u8], max: usize) -> Result<Option<(ClientPacket, usize)>, String> {
+    let Some((kind, flags, header, total)) = fixed_header(buf, max)? else { return Ok(None) };
+    let body = &buf[header..total];
+    let mut at = 0usize;
+    let packet = match kind {
+        CONNECT => {
+            flags_must_be("CONNECT", flags, 0)?;
+            ClientPacket::Connect(decode_connect(body)?)
+        }
+        PUBLISH => {
+            let qos = (flags >> 1) & 0x03;
+            if qos > 2 {
+                return Err("PUBLISH claims QoS 3".into());
+            }
+            let topic = take_str(body, &mut at)?;
+            let packet_id = if qos > 0 { take_u16(body, &mut at)? } else { 0 };
+            ClientPacket::Publish { dup: flags & 0x08 != 0, qos, retain: flags & 0x01 != 0, topic, packet_id, payload: body[at..].to_vec() }
+        }
+        PUBACK => ClientPacket::PubAck(take_u16(body, &mut at)?),
+        PUBREC => ClientPacket::PubRec(take_u16(body, &mut at)?),
+        PUBREL => {
+            flags_must_be("PUBREL", flags, 0x02)?;
+            ClientPacket::PubRel(take_u16(body, &mut at)?)
+        }
+        PUBCOMP => ClientPacket::PubComp(take_u16(body, &mut at)?),
+        SUBSCRIBE => {
+            flags_must_be("SUBSCRIBE", flags, 0x02)?;
+            let packet_id = take_u16(body, &mut at)?;
+            let mut filters = Vec::new();
+            while at < body.len() {
+                let filter = take_str(body, &mut at)?;
+                let Some(&qos) = body.get(at) else { return Err("SUBSCRIBE ends before a filter's QoS".into()) };
+                at += 1;
+                if qos > 2 {
+                    return Err(format!("SUBSCRIBE asks for QoS {qos}"));
+                }
+                filters.push((filter, qos));
+            }
+            if filters.is_empty() {
+                return Err("SUBSCRIBE without a filter".into());
+            }
+            ClientPacket::Subscribe { packet_id, filters }
+        }
+        UNSUBSCRIBE => {
+            flags_must_be("UNSUBSCRIBE", flags, 0x02)?;
+            let packet_id = take_u16(body, &mut at)?;
+            let mut filters = Vec::new();
+            while at < body.len() {
+                filters.push(take_str(body, &mut at)?);
+            }
+            if filters.is_empty() {
+                return Err("UNSUBSCRIBE without a filter".into());
+            }
+            ClientPacket::Unsubscribe { packet_id, filters }
+        }
+        PINGREQ => ClientPacket::PingReq,
+        DISCONNECT => ClientPacket::Disconnect,
+        other => return Err(format!("unexpected control packet type {other} from a client")),
+    };
+    Ok(Some((packet, total)))
+}
+
+pub fn encode_connack(session_present: bool, code: u8) -> Vec<u8> {
+    frame(CONNACK, 0, vec![u8::from(session_present), code])
+}
+
+/// A grant per filter, in order: the QoS given, or 0x80 for a refusal.
+pub fn encode_suback(packet_id: u16, codes: &[u8]) -> Vec<u8> {
+    let mut body = packet_id.to_be_bytes().to_vec();
+    body.extend_from_slice(codes);
+    frame(SUBACK, 0, body)
+}
+
+pub fn encode_unsuback(packet_id: u16) -> Vec<u8> {
+    ack(UNSUBACK, 0, packet_id)
+}
+
+pub fn encode_pingresp() -> Vec<u8> {
+    frame(PINGRESP, 0, Vec::new())
 }
 
 /// Why the broker refused, in words rather than a number.
@@ -533,5 +734,50 @@ mod tests {
     fn an_empty_payload_reads_as_empty_not_as_nothing() {
         assert!(summarize("t/x", b"", 0, true).contains("(empty)"));
         assert!(summarize("t/x", b"", 0, true).contains("retained"));
+    }
+
+    #[test]
+    fn a_broker_reads_what_the_client_side_writes() {
+        let will = Will { topic: "lab/a/online".into(), payload: "false".into(), qos: 1, retain: true };
+        let connect = encode_connect(&ConnectOpts { client_id: "dev-1", username: Some("lab"), password: Some("pw"), keep_alive_s: 30, clean_session: true, will: Some(&will) });
+        let (packet, used) = decode_client(&connect, 1024).unwrap().unwrap();
+        assert_eq!(used, connect.len());
+        let ClientPacket::Connect(read) = packet else { panic!("{packet:?}") };
+        assert_eq!((read.protocol.as_str(), read.level, read.clean_session, read.keep_alive_s, read.client_id.as_str()), ("MQTT", 4, true, 30, "dev-1"));
+        assert_eq!((read.username.as_deref(), read.password.as_deref()), (Some("lab"), Some(&b"pw"[..])));
+        assert_eq!(read.will, Some(ConnectWill { topic: "lab/a/online".into(), payload: b"false".to_vec(), qos: 1, retain: true }));
+
+        let publish = encode_publish("lab/a/cmd", b"ON", 2, true, 9, false);
+        assert_eq!(decode_client(&publish, 1024).unwrap().unwrap().0, ClientPacket::Publish { dup: false, qos: 2, retain: true, topic: "lab/a/cmd".into(), packet_id: 9, payload: b"ON".to_vec() });
+        let subscribe = encode_subscribe(3, &[("lab/+/state".into(), 1), ("#".into(), 0)]);
+        assert_eq!(decode_client(&subscribe, 1024).unwrap().unwrap().0, ClientPacket::Subscribe { packet_id: 3, filters: vec![("lab/+/state".into(), 1), ("#".into(), 0)] });
+        assert_eq!(decode_client(&encode_unsubscribe(4, &["#".into()]), 1024).unwrap().unwrap().0, ClientPacket::Unsubscribe { packet_id: 4, filters: vec!["#".into()] });
+        assert_eq!(decode_client(&encode_pubrel(5), 1024).unwrap().unwrap().0, ClientPacket::PubRel(5));
+        assert_eq!(decode_client(&encode_pingreq(), 1024).unwrap().unwrap().0, ClientPacket::PingReq);
+        assert_eq!(decode_client(&encode_disconnect(), 1024).unwrap().unwrap().0, ClientPacket::Disconnect);
+        for cut in 1..publish.len() {
+            assert_eq!(decode_client(&publish[..cut], 1024).unwrap(), None, "cut at {cut} waits");
+        }
+    }
+
+    #[test]
+    fn a_broker_refuses_what_3_1_1_forbids() {
+        assert!(decode_client(&encode_publish("t", &[0; 64], 0, false, 0, false), 16).unwrap_err().contains("claims"), "longer than the broker takes");
+        let mut subscribe = encode_subscribe(1, &[("t".into(), 1)]);
+        subscribe[0] &= 0xF0;
+        assert!(decode_client(&subscribe, 1024).is_err(), "SUBSCRIBE without its 0x02");
+        let mut qos3 = encode_subscribe(1, &[("t".into(), 1)]);
+        *qos3.last_mut().unwrap() = 3;
+        assert!(decode_client(&qos3, 1024).is_err());
+        assert!(decode_client(&[SUBSCRIBE << 4 | 0x02, 2, 0, 1], 1024).is_err(), "no filter");
+        assert!(decode_client(&[CONNACK << 4, 2, 0, 0], 1024).is_err(), "a broker's packet from a client");
+    }
+
+    #[test]
+    fn what_a_broker_answers_is_what_a_client_reads() {
+        assert_eq!(decode(&encode_connack(false, 4)).unwrap().unwrap().0, Packet::ConnAck { session_present: false, code: 4 });
+        assert_eq!(decode(&encode_suback(7, &[1, 0x80])).unwrap().unwrap().0, Packet::SubAck { packet_id: 7, codes: vec![1, 0x80] });
+        assert_eq!(decode(&encode_unsuback(8)).unwrap().unwrap().0, Packet::UnsubAck(8));
+        assert_eq!(decode(&encode_pingresp()).unwrap().unwrap().0, Packet::PingResp);
     }
 }

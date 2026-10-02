@@ -5,15 +5,25 @@
 //! to deliver events to their interface.
 
 pub mod broadcast;
+pub mod discovery;
 pub mod emulator;
 pub mod emulator_files;
 pub mod emulator_http;
+pub mod emulator_job;
+pub mod emulator_match;
+pub mod emulator_mqtt;
 pub mod emulator_net;
+pub mod emulator_rules;
+pub mod emulator_run;
+pub mod emulator_state;
 pub mod error;
 pub mod experiment;
 pub mod experiment_actions;
 pub mod experiment_data;
+pub mod experiment_fields;
 pub mod experiment_files;
+pub mod experiment_flow;
+pub mod experiment_report;
 pub mod experiment_run;
 pub mod experiment_steps;
 pub mod experiment_validate;
@@ -26,6 +36,7 @@ pub mod listen;
 pub mod matching;
 pub mod mqtt;
 pub mod mqtt_codec;
+pub mod mqtt_dial;
 pub mod net;
 pub mod netsim;
 pub mod osc;

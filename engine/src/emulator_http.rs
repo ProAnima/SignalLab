@@ -2,7 +2,8 @@
 //! request by the first route it matches — a response picked by the route's
 //! order, rendered with what arrived, after its delay, or a fault instead.
 //! In a run the same server is what *Wait for HTTP request* listens to: every
-//! request also goes to the run's inbox, routes or not.
+//! request also goes to the run's inbox, routes or not. While its outage has
+//! it down, no route is asked: every request meets the outage's fault.
 
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -12,7 +13,7 @@ use std::time::{Duration, Instant};
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full, Limited};
 use hyper::body::Incoming;
-use hyper::header::{HeaderName, HeaderValue, CONTENT_TYPE};
+use hyper::header::{HeaderName, HeaderValue, CONTENT_TYPE, RETRY_AFTER};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Request, StatusCode};
@@ -21,7 +22,10 @@ use serde_json::{json, Map, Value};
 use tokio::net::TcpListener;
 use tokio::task::JoinSet;
 
-use super::emulator::{kept, Context, Exchange, Fault, Response, Rules, HOLD};
+use super::emulator::{DownFault, Fault, Response, HOLD};
+use super::emulator_match::percent_decode;
+use super::emulator_rules::Rules;
+use super::emulator_state::{kept, Context, Exchange};
 use super::error::{EngineError, EngineResult, Field};
 use super::inspect::Frame;
 use super::matching::{shorten, Datagram};
@@ -101,8 +105,8 @@ fn query_of(query: &str) -> Value {
     let mut values = Map::new();
     for pair in query.split('&').filter(|pair| !pair.is_empty()) {
         let (name, value) = pair.split_once('=').unwrap_or((pair, ""));
-        let name = super::emulator::percent_decode(name, true);
-        values.entry(name).or_insert_with(|| Value::String(super::emulator::percent_decode(value, true)));
+        let name = percent_decode(name, true);
+        values.entry(name).or_insert_with(|| Value::String(percent_decode(value, true)));
     }
     Value::Object(values)
 }
@@ -186,16 +190,40 @@ fn no_route() -> Response {
     Response { status: 404, headers: Vec::new(), body: r#"{"error":"no_route"}"#.into(), delay_ms: 0, jitter_ms: 0, fault: Fault::None, weight: 1 }
 }
 
-/// A rendered response as hyper sends it, with a content type when it has none.
-fn build(status: u16, headers: &[(String, String)], body: String) -> EngineResult<hyper::Response<Full<Bytes>>> {
+/// The content type a response gets when its headers give none: JSON when
+/// the body parses, else text.
+fn content_kind(headers: &[(String, String)], body: &str) -> Option<&'static str> {
     let typed = headers.iter().any(|(name, _)| name.trim().eq_ignore_ascii_case("content-type"));
-    let kind = if typed || body.is_empty() {
+    if typed || body.is_empty() {
         None
-    } else if serde_json::from_str::<Value>(&body).is_ok() {
+    } else if serde_json::from_str::<Value>(body).is_ok() {
         Some("application/json")
     } else {
         Some("text/plain; charset=utf-8")
-    };
+    }
+}
+
+/// The first half of a body, on a character boundary.
+fn half(body: &str) -> String {
+    let mut end = body.len() / 2;
+    while !body.is_char_boundary(end) {
+        end -= 1;
+    }
+    body[..end].to_string()
+}
+
+/// A malformed answer's body: its first half, and an unclosed `{` when that
+/// half still parses (a number) or nothing is left — JSON that never reads.
+fn malformed(body: &str) -> String {
+    let mut cut = half(body);
+    if cut.trim().is_empty() || serde_json::from_str::<Value>(&cut).is_ok() {
+        cut.push('{');
+    }
+    cut
+}
+
+/// A rendered response as hyper sends it, with `kind` as its content type when its headers give none.
+fn build(status: u16, headers: &[(String, String)], body: String, kind: Option<&'static str>) -> EngineResult<hyper::Response<Full<Bytes>>> {
     let mut response = hyper::Response::new(Full::new(Bytes::from(body)));
     *response.status_mut() = StatusCode::from_u16(status).map_err(|_| EngineError::new("node.range").with("min", 100).with("max", 599).in_field(Field::new("status")))?;
     for (index, (name, value)) in headers.iter().enumerate() {
@@ -230,6 +258,55 @@ fn reply_text(response: &hyper::Response<Full<Bytes>>, body: &str) -> String {
     text
 }
 
+/// A run's *Wait for HTTP request* steps hear every request, answered or not.
+fn heard(context: &Context, peer: SocketAddr, started: Instant, body: &[u8], frame: Option<u64>, request: &Value) {
+    if let Some(inbox) = &context.inbox {
+        inbox.push(Datagram { bytes: body[..body.len().min(READ_BODY)].to_vec(), from: peer, at: started, topic: None, frame, request: Some(request.clone()) });
+    }
+}
+
+/// A request that arrived while the emulator is down: the outage's fault, no route.
+async fn down(context: &Context, peer: SocketAddr, started: Instant, line: &str, body: &[u8], request: &Value, back: Duration) -> Answer {
+    let fault = context.compiled.outage.as_ref().map(|outage| outage.fault).unwrap_or_default();
+    let verdict = match fault {
+        DownFault::Unavailable => "down → 503",
+        DownFault::Reset => "down → reset",
+        DownFault::Timeout => "down → timeout",
+    };
+    let frame = if context.capturing() {
+        context.publish(Frame::rx("http", "emulator").remote(peer).payload(body).summary(format!("{line} {verdict}")).detail(detail(line, request, "")).verdict(verdict))
+    } else {
+        None
+    };
+    heard(context, peer, started, body, frame, request);
+    let mut exchange = Exchange { from: peer.to_string(), request: shorten(line), frame, down: true, data: kept(request), ..Default::default() };
+    match fault {
+        DownFault::Unavailable => {
+            let body = json!({ "error": "unavailable" });
+            let size = body.to_string().len();
+            let mut response = plain(StatusCode::SERVICE_UNAVAILABLE, body);
+            // Whole seconds, at least one: when a client that honours it may try again.
+            response.headers_mut().insert(RETRY_AFTER, HeaderValue::from(back.as_secs() + u64::from(back.subsec_nanos() > 0)));
+            exchange.status = Some(503);
+            exchange.reply = status_line(&response, size);
+            exchange.ms = started.elapsed().as_millis() as u64;
+            context.emulation.record(exchange);
+            Ok(response)
+        }
+        DownFault::Reset => {
+            exchange.fault = Some(Fault::Reset);
+            context.emulation.record(exchange);
+            Err(Closed)
+        }
+        DownFault::Timeout => {
+            exchange.fault = Some(Fault::Timeout);
+            context.emulation.record(exchange);
+            tokio::time::sleep(HOLD).await;
+            Err(Closed)
+        }
+    }
+}
+
 async fn answer(context: &Context, peer: SocketAddr, request: Request<Incoming>) -> Answer {
     let started = Instant::now();
     let (parts, body) = request.into_parts();
@@ -249,6 +326,9 @@ async fn answer(context: &Context, peer: SocketAddr, request: Request<Incoming>)
         }
     };
     let mut request = request_value(&parts, &body, peer);
+    if let Some(back) = context.down_for() {
+        return down(context, peer, started, &line, &body, &request, back).await;
+    }
     let Rules::Http { routes, fallback } = &context.compiled.rules else { return Err(Closed) };
     let found = routes.iter().enumerate().find_map(|(index, route)| route.matcher.accepts(&request).map(|params| (index, params)));
     let no_route = no_route();
@@ -271,7 +351,11 @@ async fn answer(context: &Context, peer: SocketAddr, request: Request<Incoming>)
         let body = renderer.render(&response.body).map_err(|error| error.in_field(Field::new("body")))?;
         Ok((headers, body))
     });
-    let built = rendered.and_then(|(headers, body)| build(response.status, &headers, body.clone()).map(|built| (built, body)));
+    let built = rendered.and_then(|(headers, body)| {
+        let kind = content_kind(&headers, &body);
+        let body = if response.fault == Fault::Malformed { malformed(&body) } else { body };
+        build(response.status, &headers, body.clone(), kind).map(|built| (built, body))
+    });
     let built = built.map_err(|error| match picked {
         Some(picked) => error.with("response", picked),
         None => error,
@@ -286,6 +370,7 @@ async fn answer(context: &Context, peer: SocketAddr, request: Request<Incoming>)
         (Err(_), _) => (shown("failed"), String::new()),
         (Ok(_), Fault::Timeout) => (shown("timeout"), String::new()),
         (Ok(_), Fault::Reset) => (shown("reset"), String::new()),
+        (Ok((built, body)), Fault::Malformed) => (shown(&format!("{} · cut", status_line(built, body.len()))), reply_text(built, body)),
         (Ok((built, body)), Fault::None) => (shown(&status_line(built, body.len())), reply_text(built, body)),
     };
     let frame = if context.capturing() {
@@ -294,9 +379,7 @@ async fn answer(context: &Context, peer: SocketAddr, request: Request<Incoming>)
     } else {
         None
     };
-    if let Some(inbox) = &context.inbox {
-        inbox.push(Datagram { bytes: body[..body.len().min(READ_BODY)].to_vec(), from: peer, at: started, topic: None, frame, request: Some(request.clone()) });
-    }
+    heard(context, peer, started, &body, frame, &request);
     let mut exchange = Exchange { from: peer.to_string(), request: shorten(&line), rule, frame, data: kept(&request), ..Default::default() };
     let delay = context.delay(rule.unwrap_or(0), count, response.delay_ms, response.jitter_ms);
     match built {
@@ -325,6 +408,9 @@ async fn answer(context: &Context, peer: SocketAddr, request: Request<Incoming>)
             tokio::time::sleep(delay).await;
             exchange.status = Some(built.status().as_u16());
             exchange.reply = status_line(&built, body.len());
+            if response.fault == Fault::Malformed {
+                exchange.fault = Some(Fault::Malformed);
+            }
             exchange.ms = started.elapsed().as_millis() as u64;
             emulation.record(exchange);
             Ok(built)
@@ -335,7 +421,8 @@ async fn answer(context: &Context, peer: SocketAddr, request: Request<Incoming>)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::emulator::{self, Emulator, EmulatorHub, StartOptions};
+    use crate::emulator::Emulator;
+    use crate::emulator_job::{self, EmulatorHub, StartOptions};
     use crate::host::{Host, Recorder};
     use crate::inspect::Capture;
     use crate::jobs::JobRegistry;
@@ -349,7 +436,7 @@ mod tests {
         let (jobs, hub) = (JobRegistry::new(), EmulatorHub::new());
         let emulator: Emulator = serde_json::from_value(document).unwrap();
         let options = StartOptions { seed: Some(7), ..Default::default() };
-        let info = emulator::start(host, jobs.clone(), hub.clone(), emulator, options).await.unwrap();
+        let info = emulator_job::start(host, jobs.clone(), hub.clone(), emulator, options).await.unwrap();
         let local = info.params["local"].clone();
         (jobs, hub, info.id, format!("http://{local}"))
     }
@@ -449,8 +536,65 @@ mod tests {
         let long = vec![b'x'; READ_BODY + 1];
         let cut = request_value(&parts, &long, "127.0.0.1:9".parse().unwrap());
         assert_eq!((cut["body"].as_str().unwrap().len(), cut["truncated"].clone(), cut["json"].clone()), (READ_BODY, json!(true), Value::Null));
-        let built = build(200, &[("X-A".into(), "1".into())], "plain".into()).unwrap();
+        let headers = [("X-A".to_string(), "1".to_string())];
+        let built = build(200, &headers, "plain".into(), content_kind(&headers, "plain")).unwrap();
         assert_eq!(built.headers()["content-type"], "text/plain; charset=utf-8");
-        assert!(build(200, &[("X-A".into(), "bad\nvalue".into())], String::new()).unwrap_err().is("emulator.header_value_invalid"));
+        assert_eq!(content_kind(&[], "{\"a\":1}"), Some("application/json"));
+        assert_eq!(content_kind(&[("content-type".into(), "x/y".into())], "{}"), None, "the route's own type is kept");
+        assert!(build(200, &[("X-A".into(), "bad\nvalue".into())], String::new(), None).unwrap_err().is("emulator.header_value_invalid"));
+        assert_eq!((half("{\"id\":7}"), half("ééé"), half("")), ("{\"id".to_string(), "é".to_string(), String::new()));
+        assert_eq!((malformed("12345678"), malformed(""), malformed("{\"id\":7}")), ("1234{".to_string(), "{".to_string(), "{\"id".to_string()), "never JSON that parses");
+    }
+
+    #[tokio::test]
+    async fn a_malformed_body_stops_halfway_and_says_it_is_json() {
+        let port = free_port();
+        let (jobs, hub, id, base) = started(json!({
+            "name": "Broken", "bind": format!("127.0.0.1:{port}"), "protocol": "http",
+            "routes": [{ "path": "/order", "responses": [{ "fault": "malformed", "body": "{\"order\":\"A-17\",\"total\":12}" }] }]
+        }))
+        .await;
+        let response = client().get(format!("{base}/order")).send().await.unwrap();
+        assert_eq!((response.status().as_u16(), response.headers()["content-type"].to_str().unwrap()), (200, "application/json"));
+        let text = response.text().await.unwrap();
+        assert_eq!(text, "{\"order\":\"A-1");
+        assert!(serde_json::from_str::<Value>(&text).is_err(), "a JSON client fails to read it");
+        let exchange = &hub.snapshot(id, 0, 10).unwrap().exchanges[0];
+        assert_eq!((exchange.fault, exchange.reply.as_str()), (Some(Fault::Malformed), "200 OK · 13 B"));
+        jobs.stop(id);
+    }
+
+    #[tokio::test]
+    async fn an_outage_answers_503_until_it_is_back_then_routes_again() {
+        let port = free_port();
+        let (jobs, hub, id, base) = started(json!({
+            "name": "Flapping", "bind": format!("127.0.0.1:{port}"), "protocol": "http",
+            "routes": [{ "path": "/health", "responses": [{ "body": "ok" }] }],
+            "outage": { "up_ms": 300, "down_ms": 400 }
+        }))
+        .await;
+        let client = client();
+        assert_eq!(client.get(format!("{base}/health")).send().await.unwrap().status().as_u16(), 200, "up first");
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        let down = client.get(format!("{base}/health")).send().await.unwrap();
+        assert_eq!((down.status().as_u16(), down.headers()["retry-after"].to_str().unwrap()), (503, "1"));
+        assert_eq!(down.text().await.unwrap(), r#"{"error":"unavailable"}"#);
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        assert_eq!(client.get(format!("{base}/health")).send().await.unwrap().status().as_u16(), 200, "back up");
+        let counts = hub.snapshot(id, 0, 10).unwrap().counts;
+        assert_eq!((counts.total, counts.down, counts.unmatched, counts.hits.clone()), (3, 1, 0, vec![2]));
+        jobs.stop(id);
+
+        // Closing or holding instead.
+        let port = free_port();
+        let (jobs, _hub, id, base) = started(json!({
+            "name": "Gone", "bind": format!("127.0.0.1:{port}"), "protocol": "http",
+            "outage": { "up_ms": 10, "down_ms": 3_600_000, "fault": "reset" }
+        }))
+        .await;
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        let reset = client.get(format!("{base}/x")).send().await.unwrap_err();
+        assert!(!reset.is_timeout(), "closed: {reset}");
+        jobs.stop(id);
     }
 }

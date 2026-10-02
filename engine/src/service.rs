@@ -14,8 +14,11 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::broadcast::{self, DiscoveryConfig, EmitConfig};
-use crate::emulator::{self, Emulator, EmulatorHub, StartOptions};
+use crate::broadcast::{self, EmitConfig};
+use crate::discovery::{self, DiscoveryConfig};
+use crate::emulator::{self, Emulator};
+use crate::emulator_job::{self, EmulatorHub, StartOptions};
+use crate::emulator_state::RECENT;
 use crate::emulator_files::{self, EmulatorLibrary};
 use crate::error::EngineError;
 use crate::experiment::{Experiment, Node};
@@ -29,6 +32,7 @@ use crate::http::{self, BurstConfig, HttpRequest};
 use crate::inspect::{self, Capture};
 use crate::jobs::JobRegistry;
 use crate::mqtt::{self, Cmd, MqttConfig, MqttHub, Sub};
+use crate::mqtt_dial;
 use crate::net;
 use crate::netsim::{self, ProxyConfig};
 use crate::osc::{self, GenConfig};
@@ -313,7 +317,7 @@ impl Service {
             }
             "discovery_start" => {
                 let a = args!(command, value, { config: DiscoveryConfig });
-                reply(broadcast::start_discovery(host(), jobs(), a.config).await?)
+                reply(discovery::start_discovery(host(), jobs(), a.config).await?)
             }
 
             // ---- Inspector
@@ -366,7 +370,7 @@ impl Service {
             }
             "mqtt_publish_once" => {
                 let a = args!(command, value, { config: MqttConfig, topic: String, payload: String, qos: u8, retain: bool });
-                reply(mqtt::publish_once(host(), a.config, a.topic, a.payload, a.qos, a.retain).await?)
+                reply(mqtt_dial::publish_once(host(), a.config, a.topic, a.payload, a.qos, a.retain).await?)
             }
 
             // ---- signal library: storage only; firing goes through the commands above
@@ -392,12 +396,12 @@ impl Service {
             "emulator_start" => {
                 let a = args!(command, value, { emulator: Emulator, params: Option<BTreeMap<String, String>>, seed: Option<u64>, source: Option<String> });
                 let options = StartOptions { params: a.params.unwrap_or_default(), seed: a.seed, source: a.source };
-                reply(emulator::start(host(), jobs(), self.emulators.clone(), a.emulator, options).await?)
+                reply(emulator_job::start(host(), jobs(), self.emulators.clone(), a.emulator, options).await?)
             }
             // What a running emulator received and answered after `after` (a sequence number).
             "emulator_exchanges" => {
                 let a = args!(command, value, { job_id: u64, after: Option<u64>, limit: Option<usize> });
-                reply(self.emulators.snapshot(a.job_id, a.after.unwrap_or(0), a.limit.unwrap_or(emulator::RECENT))?)
+                reply(self.emulators.snapshot(a.job_id, a.after.unwrap_or(0), a.limit.unwrap_or(RECENT))?)
             }
 
             _ => Err(EngineError::new("command.unknown").with("name", command).into()),

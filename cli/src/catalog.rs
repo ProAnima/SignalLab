@@ -122,18 +122,19 @@ const KINDS: &[Kind] = &[
 /// What an emulator document holds, for a node's `emulator` and for `signallab emulate`.
 fn emulators() -> Value {
     json!({
-        "shape": "{ name, bind: \"IP:port\", protocol: http|osc|udp|tcp, ...the protocol's fields }",
+        "shape": "{ name, bind: \"IP:port\", protocol: http|osc|udp|tcp|mqtt, ...the protocol's fields, outage }",
         "rules": [
             "The first route or rule that matches answers; what none takes is counted (HTTP: 404, or fallback).",
             "Replies are templates read with what arrived as {{request…}}, and parameters; matching patterns may use parameters only.",
             "Bind 127.0.0.1 to answer this computer only, 0.0.0.0 to answer the network as well.",
             "Every exchange is counted per rule; a run's report has the counts of each Emulator node.",
+            "outage: {up_ms, down_ms, fault: unavailable|reset|timeout} — answering for up_ms, then down for down_ms, from the start on: HTTP meets fault (503 with Retry-After by default), a TCP device and an MQTT broker drop and refuse connections, OSC and UDP answer nothing; counts.down says how many met it.",
         ],
         "protocols": {
             "http": {
                 "fields": {
                     "routes": "[{method: ANY|GET|…, path: \"/users/:id\" (a final /* takes the rest), when: [{on: header|query|body|json, name, op, value}], order: sequence|cycle|random, responses: [...]}]",
-                    "responses": "[{status, headers: [[name, value]], body, delay_ms, jitter_ms, fault: none|timeout|reset, weight}]: sequence answers them in turn and then the last (500, 500, 200 for retries); cycle starts over; random draws by weight from the seed",
+                    "responses": "[{status, headers: [[name, value]], body, delay_ms, jitter_ms, fault: none|timeout|reset|malformed (the body stops halfway, still typed as JSON), weight}]: sequence answers them in turn and then the last (500, 500, 200 for retries); cycle starts over; random draws by weight from the seed",
                     "fallback": "a response for requests no route takes, or null for 404",
                 },
                 "request": "{{request.method}}, .path, .query.NAME, .headers.NAME (lower case), .body, .json.PATH, .params.NAME, .from",
@@ -155,6 +156,16 @@ fn emulators() -> Value {
                     "rules": "[{mode, pattern, reply, close: true to hang up after the reply, delay_ms, jitter_ms}]",
                 },
                 "request": "as udp",
+            },
+            "mqtt": {
+                "fields": {
+                    "username": "when set, a client must connect with it and password (parameters only); else anyone may",
+                    "password": "the password that goes with username",
+                    "retained": "[{topic, payload, qos}] held from the start, as if published with retain",
+                    "rules": "[{topic: filter (+, #), mode: any|contains|regex|hex, pattern, reply: {topic, payload, qos, retain} or null, delay_ms, jitter_ms}]: every message is routed to its subscribers as on any broker, then answered by the first rule it matches",
+                },
+                "request": "{{request.topic}}, {{request.levels[1]}}, {{request.payload}}, {{request.json.PATH}}, {{request.match}}, {{request.qos}}, {{request.retain}}, {{request.client}}, {{request.from}}",
+                "notes": "MQTT 3.1.1, plain TCP, QoS 0/1/2, retained messages, last wills, clean sessions; a second connection with a client id takes over from the first",
             },
         },
         "templates": "{{counter}} is the rule's hit number; {{uuid}}, {{now}}, {{now.iso}}, {{random_int(a, b)}} as in experiments",

@@ -404,7 +404,7 @@ impl NodeKind {
     }
 
     /// The UDP address a wait — or an action expecting a reply — listens on.
-    /// (*Wait for HTTP request* listens on TCP: `emulator::arm_run` opens it.)
+    /// (*Wait for HTTP request* listens on TCP: `emulator_run::arm_run` opens it.)
     pub fn bind(&self) -> Option<&str> {
         match self {
             NodeKind::WaitOsc { bind, .. } | NodeKind::WaitUdp { bind, .. } => Some(bind),

@@ -3,7 +3,8 @@
 //! the first rule it matches — the matching of *Wait for OSC* and *Wait for
 //! UDP* — with a rendered reply after the rule's delay. Replies leave from the
 //! emulator's own socket, so a device that answers the sender's port is what
-//! the system under test hears.
+//! the system under test hears. While its outage has it down, a device hears
+//! and answers nothing, and a TCP device drops and refuses its connections.
 
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -15,7 +16,9 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
 use tokio::task::JoinSet;
 
-use super::emulator::{osc_arg, Context, Delimiter, Exchange, OscOut, Rules, TcpResponder};
+use super::emulator::{Delimiter, OscOut};
+use super::emulator_rules::{osc_arg, Rules, TcpResponder};
+use super::emulator_state::{Context, Exchange};
 use super::error::{EngineError, EngineResult, Field};
 use super::inspect::{ascii_preview, Frame};
 use super::listen::Tap;
@@ -79,6 +82,9 @@ impl Responder {
     }
 
     fn answer(&self, socket: &Arc<UdpSocket>, datagram: &Datagram) -> Option<u64> {
+        if self.context.down_for().is_some() {
+            return self.down(datagram);
+        }
         match &self.context.compiled.rules {
             Rules::Osc(_) => self.osc(socket, datagram),
             Rules::Udp(_) => self.udp(socket, datagram),
@@ -173,6 +179,20 @@ impl Responder {
                 context.emulation.record(exchange);
             }
         }
+        frame
+    }
+
+    /// A datagram that arrived while the device is down: counted, not answered.
+    fn down(&self, datagram: &Datagram) -> Option<u64> {
+        let context = &self.context;
+        let osc = matches!(context.compiled.rules, Rules::Osc(_));
+        let request = match decode_packet(&datagram.bytes) {
+            Ok(messages) if osc && !messages.is_empty() => matching::shorten(&messages.iter().map(message_line).collect::<Vec<_>>().join("; ")),
+            _ => ascii_preview(&datagram.bytes, SHOWN),
+        };
+        let proto = if osc { "osc" } else { "udp" };
+        let frame = context.capturing().then(|| context.publish(Frame::rx(proto, "emulator").remote(datagram.from).payload(&datagram.bytes).summary(&request).verdict("down"))).flatten();
+        context.emulation.record(Exchange { from: datagram.from.to_string(), request, frame, down: true, ..Default::default() });
         frame
     }
 
@@ -277,6 +297,12 @@ pub(crate) async fn serve_tcp(listener: TcpListener, context: Arc<Context>) -> E
             drop(stream);
             continue;
         }
+        // Down: the connection is closed as it arrives, before the greeting.
+        if context.down_for().is_some() {
+            drop(stream);
+            context.emulation.record(Exchange { from: peer.to_string(), request: "connect".into(), down: true, ..Default::default() });
+            continue;
+        }
         active.fetch_add(1, Ordering::Relaxed);
         let (context, active) = (context.clone(), active.clone());
         connections.spawn(async move {
@@ -306,10 +332,22 @@ async fn connection(mut stream: TcpStream, peer: SocketAddr, context: &Context) 
     }
     let mut buffer = Vec::new();
     let mut chunk = vec![0u8; 8192];
+    // An outage drops connections that are quiet too, not only the next to speak.
+    let outage = context.compiled.outage.is_some();
+    let mut tick = tokio::time::interval(Duration::from_millis(100));
     loop {
-        let size = match stream.read(&mut chunk).await {
-            Ok(0) | Err(_) => return,
-            Ok(size) => size,
+        let size = tokio::select! {
+            read = stream.read(&mut chunk) => match read {
+                Ok(0) | Err(_) => return,
+                Ok(size) => size,
+            },
+            _ = tick.tick(), if outage => {
+                if context.down_for().is_some() {
+                    let _ = stream.shutdown().await;
+                    return;
+                }
+                continue;
+            }
         };
         buffer.extend_from_slice(&chunk[..size]);
         loop {
@@ -331,6 +369,13 @@ async fn reply_line(stream: &mut TcpStream, peer: SocketAddr, message: &[u8], co
     let started = Instant::now();
     let capture = context.capturing();
     let line = ascii_preview(message, SHOWN);
+    // Down: nothing is answered, and the connection drops.
+    if context.down_for().is_some() {
+        let frame = capture.then(|| context.publish(Frame::rx("tcp", "emulator").remote(peer).payload(message).summary(&line).verdict("down"))).flatten();
+        context.emulation.record(Exchange { from: peer.to_string(), request: line, frame, down: true, ..Default::default() });
+        let _ = stream.shutdown().await;
+        return false;
+    }
     let datagram = Datagram { bytes: message.to_vec(), from: peer, at: started, topic: None, frame: None, request: None };
     let found = rules.iter().enumerate().find_map(|(index, rule)| rule.matcher.matches(&datagram).map(|value| (index, rule, value)));
     let verdict = match &found {
@@ -379,7 +424,8 @@ async fn reply_line(stream: &mut TcpStream, peer: SocketAddr, message: &[u8], co
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::emulator::{self, Emulator, EmulatorHub, StartOptions};
+    use crate::emulator::Emulator;
+    use crate::emulator_job::{self, EmulatorHub, StartOptions};
     use crate::host::{Host, Recorder};
     use crate::inspect::Capture;
     use crate::jobs::JobRegistry;
@@ -389,7 +435,7 @@ mod tests {
         let host = Host::new(Recorder::new(), Capture::new());
         let (jobs, hub) = (JobRegistry::new(), EmulatorHub::new());
         let emulator: Emulator = serde_json::from_value(document).unwrap();
-        let info = emulator::start(host, jobs.clone(), hub.clone(), emulator, StartOptions { seed: Some(1), ..Default::default() }).await.unwrap();
+        let info = emulator_job::start(host, jobs.clone(), hub.clone(), emulator, StartOptions { seed: Some(1), ..Default::default() }).await.unwrap();
         let local = info.params["local"].parse().unwrap();
         (jobs, hub, info.id, local)
     }

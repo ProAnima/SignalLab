@@ -22,7 +22,8 @@ use super::experiment_actions::{host_port, mqtt_error};
 use super::inspect::{self, Frame};
 use super::listen::Inbox;
 use super::matching::Datagram;
-use super::mqtt::{self, MqttConfig};
+use super::mqtt::MqttConfig;
+use super::mqtt_dial;
 use super::mqtt_codec::{decode, encode_pingreq, encode_puback, encode_subscribe, summarize, Packet};
 
 /// A run's subscriptions, by broker (`host:port`) and topic filter.
@@ -41,6 +42,30 @@ pub fn filter_valid(filter: &str) -> bool {
         && levels.iter().enumerate().all(|(index, level)| {
             (!level.contains('+') || *level == "+") && (!level.contains('#') || (*level == "#" && index == levels.len() - 1))
         })
+}
+
+/// A topic a message may be published to: not empty, no wildcard, no NUL.
+pub fn topic_name_valid(topic: &str) -> bool {
+    !topic.is_empty() && !topic.contains(['+', '#', '\0']) && topic.len() <= u16::MAX as usize
+}
+
+/// Whether a message on `topic` is one `filter` subscribes to: `+` takes one
+/// level, a final `#` this level and everything under it. A topic starting
+/// with `$` is not taken by a filter starting with a wildcard.
+pub fn topic_matches(filter: &str, topic: &str) -> bool {
+    if topic.starts_with('$') && filter.starts_with(['+', '#']) {
+        return false;
+    }
+    let mut levels = topic.split('/');
+    for wanted in filter.split('/') {
+        match (wanted, levels.next()) {
+            ("#", _) => return true,
+            ("+", Some(_)) => {}
+            (wanted, Some(level)) if wanted == level => {}
+            _ => return false,
+        }
+    }
+    levels.next().is_none()
 }
 
 /// The key of a subscription in [`Subscriptions`].
@@ -79,7 +104,7 @@ impl Subscription {
             will: None,
             subscribe: vec![],
         };
-        let (mut stream, broker) = mqtt::dial(&config).await.map_err(|failure| mqtt_error(failure, &broker))?;
+        let (mut stream, broker) = mqtt_dial::dial(&config).await.map_err(|failure| mqtt_error(failure, &broker))?;
         let peer: SocketAddr = stream.peer_addr().unwrap_or_else(|_| SocketAddr::from(([0, 0, 0, 0], port)));
         let lost = |error: std::io::Error| EngineError::new("wait.receive_failed").with("target", &broker).because(error).in_field(Field::new("broker"));
         stream.write_all(&encode_subscribe(1, &[(filter.to_string(), 0)])).await.map_err(lost)?;
@@ -87,7 +112,7 @@ impl Subscription {
         // The answer to the SUBSCRIBE; anything else that arrives first is ignored.
         let mut buffer = Vec::with_capacity(256);
         let mut chunk = [0u8; 4096];
-        let codes = tokio::time::timeout(mqtt::HANDSHAKE_TIMEOUT, async {
+        let codes = tokio::time::timeout(mqtt_dial::HANDSHAKE_TIMEOUT, async {
             loop {
                 let size = stream.read(&mut chunk).await.map_err(lost)?;
                 if size == 0 {
@@ -183,5 +208,17 @@ mod tests {
         for bad in ["", "lab/#/x", "lab/a#", "lab/+x", "a/b#", "a\0b"] {
             assert!(!filter_valid(bad), "{bad}");
         }
+    }
+
+    #[test]
+    fn topics_match_filters_level_by_level() {
+        for (filter, topic) in [("a/b", "a/b"), ("a/+", "a/b"), ("a/#", "a"), ("a/#", "a/b/c"), ("#", "a/b"), ("+/+", "a/b"), ("a/+/c", "a//c"), ("+", "")] {
+            assert!(topic_matches(filter, topic), "{filter} takes {topic}");
+        }
+        for (filter, topic) in [("a/b", "a/b/c"), ("a/+", "a"), ("a/+", "a/b/c"), ("a/b", "a/B"), ("#", "$SYS/load"), ("+/load", "$SYS/load"), ("a/b/#", "a/c")] {
+            assert!(!topic_matches(filter, topic), "{filter} does not take {topic}");
+        }
+        assert!(topic_matches("$SYS/#", "$SYS/load"));
+        assert!(topic_name_valid("a/b") && !topic_name_valid("a/+") && !topic_name_valid("") && !topic_name_valid("a/#"));
     }
 }

@@ -1,0 +1,41 @@
+/* Experiments: nodes and their ports, the properties pane, the timeline. */
+
+.experiment-node { position: absolute; border-radius: var(--radius-sm); border: 1px solid var(--border-strong); background: var(--surface-2); box-shadow: var(--shadow-sm); touch-action: none; cursor: grab; }
+.experiment-node:active { cursor: grabbing; }
+.experiment-node.selected { border-color: var(--accent); box-shadow: var(--ring), var(--shadow-md); z-index: 1; }
+.experiment-node.running { border-color: var(--cyan); }
+.experiment-node.passed { border-color: var(--accent-deep); }
+.experiment-node.failed { border-color: var(--red); }
+.experiment-node-body { display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 5px; border: 0; background: transparent; color: inherit; text-align: left; width: 100%; height: 100%; padding: 11px 14px; border-radius: inherit; cursor: inherit; }
+.experiment-node-type { font-size: 12px; font-weight: 700; color: var(--text); }
+.experiment-node-subtitle { display: block; width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: 10px; color: var(--text-faint); }
+.experiment-port { position: absolute; top: calc(50% - 5px); width: 10px; height: 10px; border-radius: 50%; background: var(--surface-3); border: 2px solid var(--text-dim); }
+.experiment-port.input { left: -6px; }.experiment-port.output { right: -6px; }
+.experiment-properties { min-width: 0; overflow-y: auto; padding: 16px; border-left: 1px solid var(--border); background: var(--surface-1); }
+.experiment-properties h2 { margin: 10px 0 3px; font-size: 16px; }
+.experiment-properties label { display: flex; flex-direction: column; gap: 6px; margin: 0 0 13px; color: var(--text-dim); font-size: 11px; }
+/* An option that opens more fields: Wait for a reply, Retry on failure. */
+.experiment-option { margin: 0 0 var(--space-3); padding-top: var(--space-3); border-top: 1px solid var(--border); }
+/* The app's checkbox (label.checkbox), kept in a row inside the panel's column labels. */
+.experiment-properties label.experiment-check { display: inline-flex; flex-direction: row; white-space: nowrap; width: fit-content; margin-bottom: var(--space-2); color: var(--text); }
+.experiment-option-fields { padding-left: var(--space-3); border-left: 2px solid var(--border-strong); }
+.experiment-retry-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 var(--space-2); }
+.experiment-repeat-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 var(--space-2); }
+.experiment-properties input, .experiment-properties select, .experiment-properties textarea { width: 100%; min-width: 0; }
+.experiment-properties textarea { min-height: 76px; resize: vertical; }
+.experiment-delete { margin-top: 8px; }
+.experiment-timeline { position: relative; height: clamp(90px, var(--timeline-h, 142px), calc(100% - 260px)); min-height: 90px; border-top: 1px solid var(--border); background: var(--surface-1); display: flex; flex-direction: column; }
+.experiment-timeline-title { display: flex; align-items: center; justify-content: space-between; min-height: 32px; padding: 5px 14px; border-bottom: 1px solid var(--border); }
+.experiment-timeline-title strong { color: var(--accent); font: 700 11px var(--mono); }
+.experiment-report { margin-left: auto; margin-right: 12px; color: var(--text-faint); font-size: 10px; }
+.experiment-timeline-title strong.fail { color: var(--red); }
+.experiment-events { overflow: auto; display: flex; flex-direction: column; flex: 1; }
+.experiment-events button { display: flex; gap: 12px; align-items: baseline; width: 100%; text-align: left; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; background: transparent; color: var(--text-dim); padding: 5px 14px; font-size: 11px; }
+.experiment-events button:hover { background: var(--surface-2); }
+.experiment-events button.failed { color: var(--red); }
+.experiment-events button.passed b { color: var(--accent); }
+.experiment-events time { font-family: var(--mono); color: var(--text-faint); }
+.experiment-events b { min-width: 74px; font-weight: 600; color: var(--text); }
+.experiment-empty { padding: 14px; color: var(--text-faint); font-size: 11px; }
+.experiment-problem { padding: 5px 14px; color: var(--red); background: rgba(255,107,122,.07); font-size: 11px; }
+@media (max-width: 1080px) { .experiment-palette .section-label { display: none; } }

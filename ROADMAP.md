@@ -33,11 +33,11 @@ This decides what we build and what we leave to others:
 - **Runner:** one job per run; Stop cancels every branch; a Join that never fills fails at that Join.
 - **Data and replies** (milestones 3 and 4.1): parameters, profiles, secrets, `{{templates}}`, Extract / Check value / Branch on value, Wait for OSC and Wait for UDP with Matched and Timeout outputs.
 - **Server mode** (delivery D1–D4): the same engine and interface in a browser, and a Docker image.
-- **Emulators** (milestone 5): HTTP APIs and OSC/UDP/TCP devices with templated replies, sequences and faults — on their own screen, as an experiment node with *Wait for HTTP request*, from `signallab emulate` and over MCP.
+- **Emulators** (milestone 5): HTTP APIs, OSC/UDP/TCP devices and an MQTT broker with templated replies, sequences, faults and outages — on their own screen, as an experiment node with *Wait for HTTP request*, from `signallab emulate` and over MCP.
 
 ### Known gaps in what exists
 
-- Emulators play HTTP, OSC, UDP and TCP; there is no MQTT broker of our own yet, so MQTT tests need one running.
+- An emulator's outage is a fixed schedule from its start; changing it mid-run, in step with the traffic, is milestone 6.
 - HTTP burst reports min/avg/max, not percentiles; there is no rate control.
 - The Inspector ring truncates payloads at 1 KiB and holds 8192 frames: good for looking, not for replay.
 - Remaining editor work: multi-selection and copy/paste.
@@ -127,7 +127,7 @@ Detailed design: [docs/milestone-4-reactive.md](docs/milestone-4-reactive.md). *
 
 **Goal.** SignalLab plays the dependency: the service, device or API the system under test calls.
 
-**Status:** delivered as **emulators** — an *Emulators* screen with a library (`emulators.json`, a demo API and a demo OSC, UDP and TCP device on loopback), HTTP routes (method, `:name` path segments, header/query/body/JSON conditions) with responses in sequence, in turn or a seeded weighted mix, delays with seeded jitter and the faults *no answer* and *connection closed*; OSC/UDP responders and a TCP line device (greeting, hang-up); templated replies (`{{request.…}}`); per-rule counts, a live exchange list and Inspector frames; **Mock this** on the HTTP screen; the **Emulator** node (opened before the first step, its counts in the report) and **Wait for HTTP request**; the template *Retry a flaky API* (the "done when" below, also an engine test); `signallab emulate`, MCP tools and the API commands. Still open from this section: *Mock this* on a *Send now* response, *Copy URL* per route, malformed-body and flapping faults (milestone 6).
+**Status:** delivered as **emulators** — an *Emulators* screen with a library (`emulators.json`, a demo API and a demo OSC, UDP and TCP device on loopback), HTTP routes (method, `:name` path segments, header/query/body/JSON conditions) with responses in sequence, in turn or a seeded weighted mix, delays with seeded jitter and the faults *no answer* and *connection closed*; OSC/UDP responders and a TCP line device (greeting, hang-up); templated replies (`{{request.…}}`); per-rule counts, a live exchange list and Inspector frames; **Mock this** on the HTTP screen; the **Emulator** node (opened before the first step, its counts in the report) and **Wait for HTTP request**; the template *Retry a flaky API* (the "done when" below, also an engine test); `signallab emulate`, MCP tools and the API commands. Since then also: *Mock this* on a *Send now* response (a URL template becomes a path pattern), *Copy URL* per route, the *malformed* fault (JSON that stops halfway), **outages** on every emulator (up so long, down so long — the flapping of milestone 6, as a fixed schedule), and an **MQTT 3.1.1 broker** emulator (QoS 0/1/2, retained, wills, takeover, a login, device rules), so MQTT gear and *Wait for MQTT* need no broker installed. Section 5 is complete.
 
 **What the user gets**
 
@@ -277,7 +277,7 @@ Detailed design: [docs/delivery.md](docs/delivery.md).
 
 ## Next concrete slice (milestone 6 — faults as nodes)
 
-Milestone 5 is delivered as emulators (HTTP, OSC, UDP, TCP), the *Emulator* node and *Wait for HTTP request*; document version 6. Milestone 4 before it added **Repeat** and the bounded **Loop** (version 5). Every screen, the Emulators screen included, is walked end to end — desktop app and server, Windows and Linux, and the published image (`npm run e2e`). Next: **faults as nodes and phases** (milestone 6) — the impairment relay as a node with profiles that change mid-run, and the emulators' fault vocabulary (error rate, flapping) on the same schedule. An MQTT broker emulator is a candidate for the same slice, since show and installation gear test against one.
+Milestone 5 is delivered as emulators (HTTP, OSC, UDP, TCP, an MQTT broker), with outages and the malformed fault, the *Emulator* node and *Wait for HTTP request*; document version 6. Milestone 4 before it added **Repeat** and the bounded **Loop** (version 5). Every screen, the Emulators screen included, is walked end to end — desktop app and server, Windows and Linux, and the published image (`npm run e2e`). Next: **faults as nodes and phases** (milestone 6) — the impairment relay as a node with profiles that change mid-run, and the emulators' outages put on the same schedule, so a phase can take a dependency down and bring it back.
 
 ### PR 4.2 as planned
 

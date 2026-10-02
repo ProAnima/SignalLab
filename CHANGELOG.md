@@ -37,6 +37,21 @@ release notes — so what is written here is what users read. See
   `signallab emulators` lists the library. An assistant gets `start_emulator`,
   `emulator_exchanges` and `list_emulators` over MCP. The server's API has the same
   commands (`emulator_start`, `emulator_exchanges`, `emulators_load`, …).
+- **An MQTT broker of its own.** An emulator can be an MQTT 3.1.1 broker: clients
+  connect (with a user name and password, when it asks for one), subscribe with `+` and
+  `#`, publish at QoS 0, 1 and 2; retained messages, last wills and a client id taking
+  over its old connection work as on any broker. Rules make it a device too: on a message
+  to `lab/+/set`, publish `lab/{{request.levels[1]}}/state`. MQTT gear and experiments
+  with *Wait for MQTT* need no broker installed any more; a demo broker is in the library.
+- **Dependencies that flap and break.** Any emulator can go down now and then — up for
+  so long, down for so long, from the start: HTTP answers 503 with `Retry-After` (or
+  closes, or holds the request), TCP devices and the broker drop and refuse connections,
+  OSC and UDP devices go silent; what met an outage is counted apart. A response can be
+  *malformed*: complete HTTP whose JSON stops halfway.
+- Every HTTP route has **Copy the URL**, and **Mock this** is offered on a *Send now*
+  response in the experiment editor as well, a URL template becoming a path pattern
+  (`{{api}}/orders/{{id}}` → `/orders/:id`). A problem in an emulator says which rule
+  and which response it is in.
 - **For an assistant (LLM).** `signallab mcp` serves Signal Lab over the Model Context
   Protocol: an assistant in Claude Code, Claude Desktop, Cursor or VS Code can learn what
   an experiment is made of, write one, validate it, run it and read step by step why it

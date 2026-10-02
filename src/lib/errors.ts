@@ -74,6 +74,11 @@ export function describeError(failure: Failure, t: Translate, nodeLabel?: (id: s
   const where: string[] = [];
   const node = failure.node ? nodeLabel?.(failure.node) : null;
   if (node) where.push(node);
+  // An emulator's problems say which rule (route) or retained message, and which response, they are in.
+  for (const part of ["rule", "retained", "response"] as const) {
+    const n = failure.params?.[part];
+    if (n !== undefined && n !== "") where.push(t(`emu.where.${part}`, { n }));
+  }
   if (failure.field) where.push(fieldLabel(failure.field, t));
   if (failure.params?.position) where.push(t("err.position", { position: failure.params.position }));
   const located = where.join(" · ");

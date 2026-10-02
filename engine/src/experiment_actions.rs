@@ -14,7 +14,8 @@ use super::experiment::NodeKind;
 use super::http::{self, HttpResponse};
 use super::inspect::{self, Frame};
 use super::listen::Listener;
-use super::mqtt::{self, MqttCause, MqttFailure};
+use super::mqtt;
+use super::mqtt_dial::{self, MqttCause, MqttFailure};
 use super::osc;
 use super::osc_codec::{arg_str, encode_message};
 use super::transport::{self, Cause};
@@ -144,7 +145,7 @@ pub async fn execute(host: &Host, client_id: String, kind: &NodeKind) -> EngineR
                 will: None,
                 subscribe: vec![],
             };
-            let publish = mqtt::publish(host.clone(), config, topic.clone(), payload.clone(), *qos, *retain);
+            let publish = mqtt_dial::publish(host.clone(), config, topic.clone(), payload.clone(), *qos, *retain);
             match tokio::time::timeout(MQTT_TIMEOUT, publish).await {
                 Ok(result) => result.map(sent).map_err(|failure| mqtt_error(failure, &broker)),
                 Err(_) => {

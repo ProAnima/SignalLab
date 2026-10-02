@@ -422,7 +422,8 @@ label does that).
 
 `scripts/e2e.mjs` walks every screen of the real app the way a person does and
 checks the far end of everything it sends. The tour itself,
-`tests/e2e/tour.ts`, runs inside the page: it finds controls by their visible
+`tests/e2e/tour.ts` with its steps by screen in `tests/e2e/steps/` and their
+vocabulary in `tests/e2e/dsl.ts`, runs inside the page: it finds controls by their visible
 English labels (from `en.ts`, so a renamed text is a type error, not a broken
 test), types, clicks only what is on screen, enabled and not covered, and reads
 results off the screen. The runner injects it, calls its steps one by one,

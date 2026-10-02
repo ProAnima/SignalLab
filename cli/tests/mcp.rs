@@ -240,7 +240,7 @@ async fn an_emulator_is_started_read_and_stopped_by_a_client() {
     tokio::task::spawn_blocking(move || {
         let mut client = Client::start(&["--emulators", &library_path], &[]);
         let (text, listed, failed) = client.call("list_emulators", json!({}));
-        assert!(!failed && listed["emulators"].as_array().unwrap().len() == 4 && text.contains("Demo API [demo-api] — http on 127.0.0.1:8080"), "{text}");
+        assert!(!failed && listed["emulators"].as_array().unwrap().len() == 5 && text.contains("Demo API [demo-api] — http on 127.0.0.1:8080"), "{text}");
 
         // One from the library, on a port of the test's choosing.
         let (text, started, failed) = client.call("start_emulator", json!({ "name": "demo-api", "bind": format!("127.0.0.1:{port}") }));
