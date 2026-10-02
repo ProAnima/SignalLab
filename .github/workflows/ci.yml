@@ -167,7 +167,7 @@ jobs:
           image: signallab
           version: ci
           junit: action/junit.xml
-      - name: GitHub Action, a failing run
+      - name: GitHub Action, a failing run fails the step
         id: action-fail
         continue-on-error: true
         uses: ./
@@ -177,12 +177,22 @@ jobs:
           image: signallab
           version: ci
           junit: action/failed.xml
-      - name: GitHub Action, what the two runs left
+      - name: GitHub Action, a failing run read without failing
+        id: action-read
+        uses: ./
+        with:
+          experiments: http-check
+          image: signallab
+          version: ci
+          junit: action/read.xml
+          fail-on-error: "false"
+      - name: GitHub Action, what the runs left
         run: |
           grep -q 'tests="2" failures="0"' action/junit.xml
           test "${{ steps.action-pass.outputs.exit-code }}" = 0
-          test "${{ steps.action-fail.outputs.exit-code }}" = 1
+          test "${{ steps.action-fail.outcome }}" = failure
           grep -q 'type="transport.refused"' action/failed.xml
+          test "${{ steps.action-read.outputs.exit-code }}" = 1
 
       # The interface the image serves, every screen, in WebKitGTK; the
       # container shares the host's loopback with the tour's fixtures.

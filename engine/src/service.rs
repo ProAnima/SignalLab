@@ -21,6 +21,7 @@ use crate::experiment_data;
 use crate::experiment_files;
 use crate::experiment_run::{self, RunHandle, RunOptions};
 use crate::experiment_validate;
+use crate::firewall;
 use crate::host::Host;
 use crate::http::{self, BurstConfig, HttpRequest};
 use crate::inspect::{self, Capture};
@@ -97,6 +98,18 @@ fn parse<T: DeserializeOwned>(command: &str, args: Value) -> Result<T, Failure> 
     serde_json::from_value(args).map_err(|error| EngineError::new("command.args_invalid").with("name", command).because(error).into())
 }
 
+/// The programs whose firewall rules matter here: this one, and the command
+/// line installed next to it (`signallab`), which listens for the same gear.
+fn firewall_programs() -> Vec<std::path::PathBuf> {
+    let program = firewall::this_program();
+    let sibling = program.with_file_name(if cfg!(windows) { "signallab.exe" } else { "signallab" });
+    let mut programs = vec![program.clone()];
+    if sibling != program && sibling.is_file() {
+        programs.push(sibling);
+    }
+    programs
+}
+
 fn reply(value: impl Serialize) -> Reply {
     serde_json::to_value(value).map_err(|error| EngineError::new("command.reply_invalid").because(error).into())
 }
@@ -160,6 +173,18 @@ impl Service {
         let store = self.secrets.as_ref();
         match command {
             "app_info" => reply(self.info()),
+            // Whether the firewall lets other machines reach this program (Windows: per program).
+            "firewall_status" => reply(firewall::status(firewall_programs()).await?),
+            // Asked by a person: the system shows its own administrator prompt. Not on a server,
+            // where nobody is at the screen to answer it: its firewall is the host's admin's.
+            "firewall_allow" => {
+                let a = args!(command, value, { public: bool });
+                if self.mode == Mode::Server {
+                    return Err(EngineError::new("firewall.server").into());
+                }
+                firewall::allow(firewall_programs(), a.public).await?;
+                reply(firewall::status(firewall_programs()).await?)
+            }
             "get_host_info" => reply(net::host_info().await),
 
             // ---- jobs

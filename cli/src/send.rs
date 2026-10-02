@@ -31,7 +31,7 @@ async fn invoke(service: &Service, command: &str, args: Value) -> Result<Value, 
 
 /// One OSC argument from the command line: `i:3 f:0.5 d:1.5 h:64 s:text b:hex T F N`;
 /// a plain integer is i, a plain decimal is f, anything else is s.
-pub fn osc_arg(text: &str) -> Result<OscArg, EngineError> {
+pub(crate) fn osc_arg(text: &str) -> Result<OscArg, EngineError> {
     let invalid = || EngineError::new("cli.osc_arg_invalid").with("value", text);
     match text {
         "T" => return Ok(OscArg::Bool(true)),
@@ -62,7 +62,7 @@ pub fn osc_arg(text: &str) -> Result<OscArg, EngineError> {
 }
 
 /// "de ad be ef", "deadbeef", "de:ad" — pairs of hex digits.
-fn hex_bytes(text: &str) -> Option<Vec<u8>> {
+pub(crate) fn hex_bytes(text: &str) -> Option<Vec<u8>> {
     let digits: String = text.chars().filter(|char| !char.is_whitespace() && !matches!(char, ':' | '-' | ',')).collect();
     if digits.is_empty() || !digits.len().is_multiple_of(2) {
         return None;
@@ -71,7 +71,7 @@ fn hex_bytes(text: &str) -> Option<Vec<u8>> {
 }
 
 /// A single datagram to one target, the way the app fires a UDP signal.
-fn datagram(target: &str, payload: &RawPayload) -> Value {
+pub(crate) fn datagram(target: &str, payload: &RawPayload) -> Value {
     json!({ "config": {
         "mode": "list", "target": target, "port": 0, "payload": payload, "bind": null, "ttl": 1,
         "multicast_loop": false, "rate": 1, "count": 1, "duration_s": 0,
@@ -79,7 +79,7 @@ fn datagram(target: &str, payload: &RawPayload) -> Value {
 }
 
 /// A one-shot MQTT publish: a fresh client id each time, so a live connection with the same id is never knocked off.
-fn mqtt_publish(broker: &str, topic: &str, payload: &str, qos: u8, retain: bool) -> Result<Value, Failure> {
+pub(crate) fn mqtt_publish(broker: &str, topic: &str, payload: &str, qos: u8, retain: bool) -> Result<Value, Failure> {
     let (host, port) = match broker.rsplit_once(':') {
         Some((host, port)) => (host.trim_matches(['[', ']']).to_string(), port.parse::<u16>().ok()),
         None => (broker.to_string(), Some(1883)),
@@ -96,7 +96,7 @@ fn mqtt_publish(broker: &str, topic: &str, payload: &str, qos: u8, retain: bool)
 }
 
 /// A response that never came is the transport failure the app shows for it (`responseFailure`).
-fn response_failure(response: &HttpResponse, url: &str) -> Option<EngineError> {
+pub(crate) fn response_failure(response: &HttpResponse, url: &str) -> Option<EngineError> {
     let error = response.error.as_ref()?;
     Some(match response.cause {
         Some(cause) => cause.error(url).because(error),
@@ -199,7 +199,7 @@ async fn send_inner(ctx: &Ctx, command: SendCommand) -> Result<Exit, Failure> {
 }
 
 /// The library at `path`, else the app's (`signals.json` in its data folder). Never created here.
-fn library(path: Option<PathBuf>) -> Result<(PathBuf, Library), Failure> {
+pub(crate) fn library(path: Option<PathBuf>) -> Result<(PathBuf, Library), Failure> {
     let path = path.unwrap_or_else(|| paths::data_dir().join("signals.json"));
     let text = match std::fs::read_to_string(&path) {
         Ok(text) => text,
@@ -215,7 +215,7 @@ fn library(path: Option<PathBuf>) -> Result<(PathBuf, Library), Failure> {
 }
 
 /// By id, else by name (ignoring case): one signal, or why not.
-fn find<'a>(library: &'a Library, wanted: &str, path: &std::path::Path) -> Result<&'a Signal, Failure> {
+pub(crate) fn find<'a>(library: &'a Library, wanted: &str, path: &std::path::Path) -> Result<&'a Signal, Failure> {
     if let Some(signal) = library.signals.iter().find(|signal| signal.id == wanted) {
         return Ok(signal);
     }

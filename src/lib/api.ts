@@ -460,6 +460,21 @@ export interface InspectBatch {
 }
 
 /** Where the engine runs, for the interface to adapt to (engine/src/service.rs). */
+/** What the firewall does with what other machines send to this program (`engine/firewall.rs`). */
+export interface FirewallStatus {
+  /** There is a per-program firewall here (Windows). */
+  applies: boolean;
+  program: string;
+  /** On for the network the machine is on now. */
+  enabled: boolean;
+  /** "domain", "private", "public". */
+  networks: string[];
+  allowed: boolean;
+  /** A rule blocks it (a "Cancel" at the system's prompt); it wins over an allow. */
+  blocked: boolean;
+  rules: number;
+}
+
 export interface AppInfo {
   version: string;
   mode: "desktop" | "server";
@@ -475,6 +490,9 @@ export const api = {
   appInfo: () => invoke<AppInfo>("app_info"),
   hostInfo: () => invoke<HostInfo>("get_host_info"),
   jobsList: () => invoke<JobInfo[]>("jobs_list"),
+  firewallStatus: () => invoke<FirewallStatus>("firewall_status"),
+  /** The system asks for administrator rights first; the new status comes back. */
+  firewallAllow: (alsoPublic: boolean) => invoke<FirewallStatus>("firewall_allow", { public: alsoPublic }),
   jobStop: (id: number) => invoke<boolean>("job_stop", { id }),
   jobsStopAll: () => invoke<void>("jobs_stop_all"),
   experimentLoad: () => invoke<Experiment>("experiment_load"),

@@ -10,7 +10,12 @@
 # the token stay. More: docs/delivery.md, section 7.
 #
 #   sh install.sh [--version X.Y.Z] [--port N | --listen IP:PORT] [--dir DIR]
-#                 [--name NAME] [--image NAME] [--yes] [--uninstall [--purge]] [--help]
+#                 [--name NAME] [--image NAME] [--open-udp PORTS] [--no-firewall]
+#                 [--yes] [--uninstall [--purge]] [--help]
+#
+# With ufw or firewalld on, it offers to open the server's port (and the UDP
+# ports given with --open-udp, for monitors and waits) and closes them again on
+# --uninstall.
 #
 # Settings of your own (experiment secrets, allowed host names, HTTPS cookies)
 # go in compose.override.yaml next to the compose file: this script rewrites
@@ -23,6 +28,8 @@ PORT=1430
 LISTEN=
 DIR=
 YES=0
+OPEN_UDP=
+FIREWALL=1
 ACTION=install
 PURGE=0
 NAME=signallab
@@ -48,7 +55,9 @@ Options:
   --dir DIR          where the compose file goes (default: /opt/signallab as root, ~/signallab otherwise)
   --name NAME        the container and its data volume (default: signallab) — a second server needs its own
   --image NAME       another image or registry (a full NAME:TAG is used as it is)
-  --yes              install Docker without asking, when it is missing
+  --open-udp PORTS   also let UDP in on these ports when a firewall is on: 9000,9100:9110
+  --no-firewall      never change the firewall (ufw, firewalld)
+  --yes              answer yes: install Docker, open the firewall
   --uninstall        stop and remove the server; the data stays
   --purge            with --uninstall: delete the data and the token too
 
@@ -72,6 +81,9 @@ while [ $# -gt 0 ]; do
     --name=*) NAME=${1#*=}; shift ;;
     --image) value "$@"; IMAGE=$2; shift 2 ;;
     --image=*) IMAGE=${1#*=}; shift ;;
+    --open-udp) value "$@"; OPEN_UDP=$2; shift 2 ;;
+    --open-udp=*) OPEN_UDP=${1#*=}; shift ;;
+    --no-firewall) FIREWALL=0; shift ;;
     --yes|-y) YES=1; shift ;;
     --uninstall) ACTION=uninstall; shift ;;
     --purge) PURGE=1; shift ;;
@@ -85,6 +97,7 @@ case "$PORT" in ''|*[!0-9]*) fail "--port is a number, not $PORT" ;; esac
 [ -n "$LISTEN" ] || LISTEN="0.0.0.0:$PORT"
 PORT=${LISTEN##*:}
 case "$NAME" in ''|*[!a-z0-9_-]*) fail "--name is lower-case letters, digits, - and _" ;; esac
+case "$OPEN_UDP" in *[!0-9,:]*) fail "--open-udp is ports and ranges: 9000,9100:9110" ;; esac
 case "$VERSION" in latest|[0-9]*) ;; v[0-9]*) VERSION=${VERSION#v} ;; *) fail "--version is X.Y.Z or latest, not $VERSION" ;; esac
 # A full reference (signallab:dev, registry/name:tag) is used as it is.
 case "${IMAGE##*/}" in *:*) REF=$IMAGE ;; *) REF="$IMAGE:$VERSION" ;; esac
@@ -162,11 +175,49 @@ fi
 FILE="$DIR/compose.yaml"
 in_dir() { (cd "$DIR" && $COMPOSE "$@"); }
 
+# ---- the firewall: ufw or firewalld, by port ------------------------------------------
+
+# What this script opened, one "tcp PORT" or "udp PORTS" per line, so --uninstall closes it.
+OPENED="$DIR/.firewall"
+
+firewall_tool() {
+  if command -v ufw >/dev/null 2>&1 && ${SUDO:+$SUDO }ufw status 2>/dev/null | grep -q "Status: active"; then echo ufw
+  elif command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state 2>/dev/null | grep -q running; then echo firewalld
+  fi
+}
+
+# open|close PROTOCOL PORTS — PORTS as ufw writes them (9000 or 9100:9110).
+firewall_rule() {
+  case "$TOOL" in
+    ufw)
+      if [ "$1" = open ]; then ${SUDO:+$SUDO }ufw allow "$3/$2" comment "Signal Lab" >/dev/null
+      else ${SUDO:+$SUDO }ufw delete allow "$3/$2" >/dev/null 2>&1 || true; fi ;;
+    firewalld)
+      ports=$(printf '%s' "$3" | tr ':' '-')
+      if [ "$1" = open ]; then ${SUDO:+$SUDO }firewall-cmd --quiet --permanent --add-port="$ports/$2"
+      else ${SUDO:+$SUDO }firewall-cmd --quiet --permanent --remove-port="$ports/$2" || true; fi ;;
+  esac
+}
+
+firewall_reload() {
+  [ "$TOOL" = firewalld ] && ${SUDO:+$SUDO }firewall-cmd --quiet --reload
+  return 0
+}
+
 # ---- uninstall ------------------------------------------------------------------------
 
 if [ "$ACTION" = uninstall ]; then
   [ -f "$FILE" ] || fail "no Signal Lab installation in $DIR (use --dir)"
   step "Stopping and removing Signal Lab"
+  if [ -f "$OPENED" ]; then
+    TOOL=$(firewall_tool)
+    if [ -n "$TOOL" ]; then
+      while read -r protocol ports; do firewall_rule close "$protocol" "$ports"; done < "$OPENED"
+      firewall_reload
+      say "Closed in $TOOL what the install had opened."
+    fi
+    $AS_OWNER rm -f "$OPENED"
+  fi
   if [ "$PURGE" -eq 1 ]; then
     ask "Also delete its data — experiments, signals, reports and the access token?" || fail "nothing was removed"
     in_dir down --volumes --remove-orphans
@@ -283,8 +334,23 @@ say "  Logs:    $DOCKER logs -f $NAME"
 say "  Remove:  curl -fsSL $SCRIPT_URL | sh -s -- --uninstall$AGAIN    (add --purge to delete the data too)"
 say "  Files:   $FILE  (your settings: compose.override.yaml)"
 
-if command -v ufw >/dev/null 2>&1 && ${SUDO:+$SUDO }ufw status 2>/dev/null | grep -q "Status: active"; then
+TOOL=
+[ "$FIREWALL" -eq 1 ] && TOOL=$(firewall_tool)
+if [ -n "$TOOL" ]; then
+  wanted="$PORT/tcp"
+  [ -n "$OPEN_UDP" ] && wanted="$wanted and UDP $OPEN_UDP"
   say ""
-  say "  The ufw firewall is on: let browsers in with  ${SUDO:+$SUDO }ufw allow $PORT/tcp"
-  say "  (and the UDP ports your monitors and waits listen on, e.g. ${SUDO:+$SUDO }ufw allow 9000/udp)."
+  if ask "The $TOOL firewall is on. Let other machines reach Signal Lab — $wanted?"; then
+    : > "$OPENED.new"
+    firewall_rule open tcp "$PORT" && echo "tcp $PORT" >> "$OPENED.new"
+    for ports in $(printf '%s' "$OPEN_UDP" | tr ',' ' '); do
+      firewall_rule open udp "$ports" && echo "udp $ports" >> "$OPENED.new"
+    done
+    firewall_reload
+    $AS_OWNER mv "$OPENED.new" "$OPENED" 2>/dev/null || $AS_OWNER cp "$OPENED.new" "$OPENED"
+    say "  Opened in $TOOL: $wanted (closed again by --uninstall)."
+  else
+    say "  The $TOOL firewall is on and was not changed: browsers elsewhere reach port $PORT only once it lets them,"
+    say "  and monitors and waits hear other machines only on UDP ports it opens (--open-udp 9000,9100:9110)."
+  fi
 fi

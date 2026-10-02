@@ -270,13 +270,19 @@ async function openDesktop(opts, work) {
   const port = await freePort();
   const profile = join(work, "webview2");
   rmSync(profile, { recursive: true, force: true });
-  const desktop = start(app, [], { WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${port}`, WEBVIEW2_USER_DATA_FOLDER: profile, SIGNALLAB_DATA_DIR: dataDir });
+  // The debug build opens DevTools on this port itself (src-tauri/src/lib.rs): WebView2 does
+  // not take WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS everywhere (a CI runner ignored it).
+  const desktop = start(app, [], { SIGNALLAB_E2E_DEVTOOLS_PORT: String(port), WEBVIEW2_USER_DATA_FOLDER: profile, SIGNALLAB_DATA_DIR: dataDir });
   const page = await devtools(port, (address) => /tauri\.localhost|^tauri:/.test(address)).catch((error) => {
     const state = desktop.child.exitCode === null ? "the app is still running" : `the app exited with ${desktop.child.exitCode}`;
+    // What the webview's processes were started with: whether the DevTools port reached them.
+    const webviews = spawnSync("powershell", ["-NoProfile", "-NonInteractive", "-Command",
+      "Get-CimInstance Win32_Process -Filter \"Name='msedgewebview2.exe'\" | Where-Object { $_.CommandLine -notmatch '--type=' } | ForEach-Object { $_.CommandLine }"],
+      { encoding: "utf8", timeout: 20_000 }).stdout?.trim();
     // A window that is there but not answering: the screen shows why (a dialog, an error page).
     if (opts.out) screenshot(join(opts.out, "screen.png"));
     desktop.stop();
-    throw new Error(`${error.message}; ${state}\n${desktop.output()}`);
+    throw new Error(`${error.message}; ${state}\nwebview: ${webviews || "no msedgewebview2 browser process"}\n${desktop.output()}`);
   });
   return { page, engine: "WebView2 (Tauri)", dataDir, stop: () => { page.close(); desktop.stop(); }, output: desktop.output };
 }

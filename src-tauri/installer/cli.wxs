@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The MSI's part of the command line (docs/automation.md): signallab.exe next to
+  the app, and the install folder on the machine's PATH while it is installed —
+  Windows Installer's own Environment element adds it and takes it off again.
+  Built by scripts/cli-bundle.mjs before bundling. The MSI leaves the firewall
+  to the IT that deploys it (Group Policy); the app offers the rule when it
+  first listens.
+-->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Fragment>
+    <DirectoryRef Id="INSTALLDIR">
+      <Component Id="SignalLabCommandLine" Guid="6E0B5D7C-3A47-4F49-9D6B-5A2E8C1F0B31">
+        <File Id="SignalLabCommandLineExe" Name="signallab.exe" Source="$(sys.SOURCEFILEDIR)..\..\target\release\signallab.exe" KeyPath="yes" />
+        <Environment Id="SignalLabOnPath" Name="PATH" Value="[INSTALLDIR]" Permanent="no" Part="last" Action="set" System="yes" />
+      </Component>
+    </DirectoryRef>
+  </Fragment>
+</Wix>

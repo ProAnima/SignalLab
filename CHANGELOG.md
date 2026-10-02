@@ -12,6 +12,24 @@ release notes — so what is written here is what users read. See
 
 ### Added
 
+- **For an assistant (LLM).** `signallab mcp` serves Signal Lab over the Model Context
+  Protocol: an assistant in Claude Code, Claude Desktop, Cursor or VS Code can learn what
+  an experiment is made of, write one, validate it, run it and read step by step why it
+  failed, send one OSC message, datagram, HTTP request or MQTT publish, listen on a port,
+  and fire library signals — here, or on a lab server with `--server`.
+  `signallab mcp --print-config <client>` prints the configuration to paste.
+- **`signallab` comes with the app.** The Windows setup and the MSI install it next to the
+  app and put it on `PATH`; the `.deb` and `.rpm` put it in `/usr/bin`. `signallab nodes`
+  lists every kind of node with its fields and an example.
+- **The firewall, handled.** The Windows setup for everyone allows Signal Lab and
+  `signallab` through Windows Firewall on private and domain networks (and removes the
+  rules on uninstall; `/NOFIREWALL` skips it). Otherwise the app, the first time it listens,
+  says when the firewall is in the way — a *Cancel* at the system's prompt, or a public
+  network — and offers **Allow** with the system's administrator prompt.
+  `signallab doctor` shows the firewall, the network, the data folder and a server's token;
+  `signallab firewall allow` fixes the firewall from a terminal. The server's install script
+  opens its port in ufw or firewalld when asked (`--open-udp` for monitor ports) and closes it
+  again on `--uninstall`.
 - **Signal Lab in CI/CD.** `signallab`, a command line next to the installers and in
   the image: `signallab run tests/*.json --junit junit.xml` runs experiments headless
   and exits 0 when all pass, 1 when one fails, 2 for invalid input, 3 when it could not

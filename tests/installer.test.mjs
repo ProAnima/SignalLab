@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -35,4 +36,35 @@ test("installing takes few steps and both languages", () => {
   assert.deepEqual(windows.nsis.languages, ["English", "Russian"]);
   assert.equal(windows.nsis.displayLanguageSelector, true);
   assert.equal(windows.nsis.installMode, "both", "per user without admin rights, or for every user of a show PC");
+});
+
+test("the command line comes with the app: in the setup, the MSI and the Linux packages", () => {
+  assert.equal(conf.build.beforeBundleCommand, "node scripts/cli-bundle.mjs", "signallab is built before the installers are");
+  const hooks = readFileSync(join("src-tauri", windows.nsis.installerHooks), "utf8");
+  for (const piece of ["NSIS_HOOK_POSTINSTALL", "NSIS_HOOK_PREUNINSTALL", "signallab.exe", "path.ps1", "/NOPATH", "/NOFIREWALL", "profile=private,domain"]) {
+    assert.ok(hooks.includes(piece), `hooks.nsh: ${piece}`);
+  }
+  assert.ok(existsSync("src-tauri/installer/path.ps1"));
+  assert.deepEqual(windows.wix.fragmentPaths, ["installer/cli.wxs"]);
+  const fragment = readFileSync("src-tauri/installer/cli.wxs", "utf8");
+  for (const id of windows.wix.componentRefs) assert.ok(fragment.includes(`Component Id="${id}"`), id);
+  assert.ok(fragment.includes('Name="PATH"') && fragment.includes('Permanent="no"'), "the MSI puts the folder on PATH and takes it off again");
+  for (const format of ["deb", "rpm"]) assert.equal(conf.bundle.linux[format].files["/usr/bin/signallab"], "../target/release/signallab", format);
+});
+
+test("PATH: the folder goes on once, comes off cleanly, and nothing else on it changes", { skip: process.platform !== "win32" && "Windows only" }, () => {
+  const key = `Software\\SignalLabPathTest-${process.pid}`;
+  const ps = (script) => spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script], { encoding: "utf8" });
+  const value = () => ps(`$k = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('${key}'); $k.GetValue('Path', '', 'DoNotExpandEnvironmentNames') + '|' + $k.GetValueKind('Path')`).stdout.trim();
+  const path = (flag, folder) => ps(`& 'src-tauri\\installer\\path.ps1' ${flag} '${folder}' -Key '${key}'`);
+  try {
+    ps(`[Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('${key}').SetValue('Path', '%USERPROFILE%\\bin;C:\\Tools', 'ExpandString')`);
+    assert.equal(path("-Add", "C:\\Program Files\\Signal Lab").status, 0);
+    assert.equal(path("-Add", "C:\\Program Files\\Signal Lab\\").status, 0);
+    assert.equal(value(), "%USERPROFILE%\\bin;C:\\Tools;C:\\Program Files\\Signal Lab|ExpandString", "once, with %USERPROFILE% kept as it was");
+    assert.equal(path("-Remove", "c:\\program files\\signal lab").status, 0);
+    assert.equal(value(), "%USERPROFILE%\\bin;C:\\Tools|ExpandString");
+  } finally {
+    ps(`[Microsoft.Win32.Registry]::CurrentUser.DeleteSubKeyTree('${key}', $false)`);
+  }
 });

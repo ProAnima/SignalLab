@@ -1636,6 +1636,29 @@ button.experiment-validation:hover { color: var(--amber); border-color: var(--am
   letter-spacing: 0.4px;
   text-transform: uppercase;
 }
+/* Floats under the header, like the connection banner; the desktop app only. */
+.firewall-banner {
+  position: fixed;
+  top: 62px;
+  left: 50%;
+  z-index: 60;
+  transform: translateX(-50%);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  max-width: calc(100vw - 32px);
+  padding: 8px 10px 8px 14px;
+  border: 1px solid rgba(255, 192, 105, 0.35);
+  border-radius: var(--radius-sm);
+  background: rgba(40, 30, 14, 0.95);
+  color: var(--amber);
+  font-size: 12px;
+  box-shadow: var(--shadow-md);
+}
+.firewall-banner .firewall-error { flex-basis: 100%; color: var(--red); }
+.firewall-banner .firewall-actions { display: flex; gap: 6px; margin-left: auto; }
+
 /* Floats under the header so the grid keeps its shape. */
 .connection-banner {
   position: fixed;

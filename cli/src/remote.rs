@@ -79,7 +79,7 @@ impl Remote {
     }
 
     /// Run on the server; `line` gets every `started`, `step` and `ended` line as it arrives.
-    pub async fn run(&self, request: &Value, line: &mut dyn FnMut(&str, &Value)) -> Result<Value, Failure> {
+    pub async fn run(&self, request: &Value, line: &mut (dyn FnMut(&str, &Value) + Send)) -> Result<Value, Failure> {
         let response = self
             .post("/api/run")
             .header(reqwest::header::ACCEPT, "application/x-ndjson")

@@ -3,18 +3,21 @@
 Status: 2026-10-02.
 
 The experiments that bring an installation up are also its regression tests.
-Signal Lab runs them without a person in two ways: the **command line**
-`signallab` (in this process, or on a lab server) and the **HTTP API** of
-`signal-lab-server`. Both go through the engine's own command table, so a run
+Signal Lab runs them without a person in three ways: the **command line**
+`signallab` (in this process, or on a lab server), **an assistant** (an LLM in
+Claude Code, Claude Desktop, Cursor or VS Code, through `signallab mcp`) and the
+**HTTP API** of `signal-lab-server`. Both go through the engine's own command table, so a run
 in a pipeline is the run the app would make — same steps, same report, same
 messages in English or Russian.
 
 ## 1. The command line
 
-`signallab` ships next to the installers in every release
-(`signallab-<version>-windows-x64.zip`, `signallab-<version>-linux-x64.tar.gz`)
-and in the server image (`/usr/local/bin/signallab`). From a checkout:
-`cargo run -p signal-lab-cli -- <command>`.
+`signallab` comes with the desktop app: the Windows setup and the MSI put it
+next to the app and that folder on `PATH`, the `.deb` and `.rpm` in `/usr/bin` —
+so after installing the app it works in any new terminal. It is also in every
+release on its own (`signallab-<version>-windows-x64.zip`,
+`signallab-<version>-linux-x64.tar.gz`) and in the server image
+(`/usr/local/bin/signallab`). From a checkout: `cargo run -p signal-lab-cli -- <command>`.
 
 ```bash
 signallab run tests/smoke.json --param api=http://127.0.0.1:8080 --junit junit.xml
@@ -24,6 +27,8 @@ signallab send osc 127.0.0.1:9000 /cue/go f:0.75 s:main
 signallab send http GET http://127.0.0.1:8080/health --expect-status 200
 signallab fire "Fader value" --library signals.json
 signallab templates
+signallab nodes                                    # what an experiment is made of (JSON)
+signallab doctor                                   # what stands between Signal Lab and the gear
 ```
 
 ### `run` and `validate`
@@ -112,7 +117,64 @@ byte-identical to one fired in the app.
 paths (`/cue/go` becomes `C:/Program Files/Git/cue/go`). Write `//cue/go`, or
 run with `MSYS_NO_PATHCONV=1`; PowerShell and `cmd` are not affected.
 
-## 2. The HTTP API
+### `doctor` and `firewall allow`
+
+`signallab doctor [--server URL --token-file PATH]` says what could stand
+between Signal Lab and the gear, and exits 1 when something does: the network
+this machine is on; the data folder; the firewall — on Windows, for
+`signallab` and the desktop app each, whether a rule lets other machines in on
+the current kind of network (private, domain, public) or one blocks them (a
+*Cancel* at the system's prompt); on Linux, whether ufw or firewalld is on
+and how to open a port; and with `--server`, whether that server answers and
+takes the token.
+
+`signallab firewall allow [--public]` fixes the Windows part: Windows asks for
+administrator rights, then the inbound rules of `signallab` and the app (the
+blocking ones included) are replaced by one allow rule each, on private and
+domain networks — and public ones with `--public` (a venue's Wi-Fi often is
+one). On Linux it prints the ufw or firewalld command for the ports you listen on.
+
+## 2. For an assistant: `signallab mcp`
+
+`signallab mcp` is a [Model Context Protocol](https://modelcontextprotocol.io)
+server on stdio. An assistant can then build, check and run experiments and
+talk to gear directly:
+
+| Tool | |
+| --- | --- |
+| `describe_nodes` | the document format, every kind of node with its fields, outputs and an example, the `{{template}}` language |
+| `list_templates`, `get_template` | the bundled experiments, to run or adapt |
+| `validate_experiment` | the editor's check, nothing sent |
+| `run_experiment` | a run to its end: every step, what came back, why it failed; progress while it runs; cancelling stops the run |
+| `send_osc`, `send_udp`, `send_http`, `send_mqtt` | one message, as the app sends it |
+| `listen` | what arrives on a UDP port for a while — OSC decoded, other datagrams as text and hex |
+| `list_signals`, `fire_signal` | the user's signal library |
+| `list_jobs`, `stop_job` | what is running |
+
+Results are text for the model and the same as structured data; failures are
+the engine's codes with the interface's words (`--lang ru` for Russian). Tools
+that only read are marked read-only, so a client can let them run without
+asking; everything that sends is marked as reaching the outside world.
+
+`signallab mcp --print-config <client>` prints what a client needs, with this
+executable's own path:
+
+```bash
+signallab mcp --print-config claude-code      # claude mcp add signallab -- "…\signallab.exe" mcp
+signallab mcp --print-config claude-desktop   # the mcpServers entry for claude_desktop_config.json
+signallab mcp --print-config cursor           # the same for .cursor/mcp.json
+signallab mcp --print-config vscode           # the servers entry for .vscode/mcp.json
+```
+
+With `--server http://lab-pc:1430` (and `SIGNALLAB_TOKEN` in the client's
+environment) the runs and sends happen on the lab server, through its API —
+the gear only the lab can reach; `listen` stays on this machine. From the image:
+`docker run -i --rm --network host --entrypoint signallab ghcr.io/proanima/signallab mcp`.
+`--library PATH` names a signal library other than the app's. Runs keep their
+reports in the app's data folder (`Documents/SignalLab/runs`, or `--data-dir`),
+so they stay after the session and are where the app keeps its own.
+
+## 3. The HTTP API
 
 `signal-lab-server` serves the API next to the interface. Without a token it
 listens on loopback only and needs no authentication; with one, every endpoint
@@ -165,7 +227,7 @@ jq '{document: ., overrides: {api: "http://10.0.0.5"}}' tests/smoke.json |
     -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" --data @-
 ```
 
-## 3. Runs on a lab server
+## 4. Runs on a lab server
 
 Gear on an installation's network is reachable from the lab PC, not from a
 cloud runner. Run the server there (`deploy/install.sh`, docs/delivery.md §7),
@@ -180,7 +242,7 @@ own network, secrets and data folder, streams the steps back (`/api/run` with
 NDJSON) and keeps the report, which `--report` downloads. The exit codes are the
 same; a server that cannot be reached or refuses the token is `3`.
 
-## 4. CI recipes
+## 5. CI recipes
 
 **GitHub Actions**, with the action from this repository (Linux runners; it runs
 `signallab` from the image with host networking and the workspace mounted):
@@ -204,8 +266,10 @@ jobs:
 ```
 
 Inputs: `experiments`, `params`, `profile`, `server`, `token`, `junit`,
-`timeout`, `version` (the image tag, default `latest`), `image`, `lang`;
-outputs `junit` and `exit-code`. On a lab server instead:
+`timeout`, `version` (the image tag, default `latest`), `image`, `lang`,
+`fail-on-error` (`"false"` to go on after a failed run and branch on `exit-code` —
+GitHub hands on no outputs of an action that failed); outputs `junit` and
+`exit-code`. On a lab server instead:
 `server: http://lab-pc:1430` and `token: ${{ secrets.SIGNALLAB_TOKEN }}`.
 
 **With the binary** (any runner, Windows included):
@@ -234,7 +298,7 @@ signallab:
 **Any shell or scheduler** (cron, Jenkins, a deploy script): `signallab run …`
 and branch on its exit code; `--json` for a machine to read.
 
-## 5. What is checked
+## 6. What is checked
 
 | | Where |
 | --- | --- |
@@ -243,3 +307,7 @@ and branch on its exit code; `--json` for a machine to read.
 | The command line as a pipeline runs it: exit codes 0/1/2/3, JUnit, reports, `--json`, secrets never shown, Russian, sends that arrive on a socket, a library signal, a run on a server started in the test | `cli/tests/cli.rs` |
 | Its messages: the dictionaries extracted whole (CRLF too), plural rules, number formats, the wording of failures | `cli/src/i18n.rs`, `cli/src/extract.rs` (unit tests) |
 | `signallab` in the image: version, validate, run read-only, and against the running server | `scripts/image.mjs smoke` |
+| Every kind of node in one experiment, passing here and on a server against an HTTP API, a TCP sink, an OSC and a UDP device that answer, and an MQTT broker | `cli/tests/nodes.rs` |
+| `signallab mcp` as a client drives it: every tool, progress, a cancelled run that stops, protocol errors, `--server`, `--print-config` | `cli/tests/mcp.rs` |
+| The node catalogue the assistant reads: every kind the engine has, each example accepted with its outputs | `cli/src/catalog.rs` (unit tests) |
+| `signallab doctor` with a server whose token is right and one whose token is not | `cli/tests/doctor.rs` |

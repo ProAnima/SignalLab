@@ -86,15 +86,15 @@ impl Record {
     }
 }
 
-/// Where experiments run.
-enum Engine {
+/// Where experiments run (and, for `signallab mcp`, where sends go).
+pub(crate) enum Engine {
     Here { service: Service, temporary: Option<PathBuf> },
     Server(Remote),
 }
 
 impl Engine {
     /// The engine in this process: its data folder chosen first, secrets from files or the system store.
-    fn here(place: &Place, data_dir: Option<&Path>) -> Result<Engine, Failure> {
+    pub(crate) fn here(place: &Place, data_dir: Option<&Path>) -> Result<Engine, Failure> {
         let (dir, temporary) = match data_dir {
             Some(dir) => (dir.to_path_buf(), None),
             None => {
@@ -115,7 +115,7 @@ impl Engine {
         Ok(Engine::Here { service: Service::new(host, Mode::Server, store), temporary })
     }
 
-    fn new(place: &Place, data_dir: Option<&Path>) -> Result<Engine, Failure> {
+    pub(crate) fn new(place: &Place, data_dir: Option<&Path>) -> Result<Engine, Failure> {
         match &place.server {
             Some(url) => Ok(Engine::Server(Remote::new(url, place.token_file.as_deref())?)),
             None => Engine::here(place, data_dir),
@@ -123,7 +123,7 @@ impl Engine {
     }
 
     /// The editor's check: problems that stop a run are the error, the other profiles' come back.
-    async fn validate(&self, document: &Experiment, overrides: &BTreeMap<String, String>) -> Result<Vec<Value>, Failure> {
+    pub(crate) async fn validate(&self, document: &Experiment, overrides: &BTreeMap<String, String>) -> Result<Vec<Value>, Failure> {
         let args = json!({ "document": document, "overrides": overrides });
         let issues = match self {
             Engine::Here { service, .. } => service.invoke("experiment_validate", args).await.map_err(|failure| match failure {
@@ -135,7 +135,17 @@ impl Engine {
     }
 
     /// Run `document`; `line` gets every `started`, `step` and `ended` as it happens.
-    async fn run(&self, document: Experiment, options: RunOptions, line: &mut dyn FnMut(&str, &Value)) -> Result<Value, Failure> {
+    /// One command of the engine's table, here or on the server; a refusal is the command's own failure.
+    pub(crate) async fn invoke(&self, command: &str, args: Value) -> Result<Value, Failure> {
+        match self {
+            Engine::Here { service, .. } => service.invoke(command, args).await.map_err(|failure| match failure {
+                signal_lab_engine::Failure::Engine(error) => Failure::sending(error),
+            }),
+            Engine::Server(remote) => remote.invoke(command, &args).await,
+        }
+    }
+
+    pub(crate) async fn run(&self, document: Experiment, options: RunOptions, line: &mut (dyn FnMut(&str, &Value) + Send)) -> Result<Value, Failure> {
         match self {
             Engine::Here { service, .. } => {
                 let mut handle = service.run(document, options).await.map_err(Failure::starting)?;
@@ -178,7 +188,7 @@ impl Engine {
         !matches!(self, Engine::Here { temporary: Some(_), .. })
     }
 
-    fn remote(&self) -> bool {
+    pub(crate) fn remote(&self) -> bool {
         matches!(self, Engine::Server(_))
     }
 }
@@ -192,7 +202,7 @@ impl Drop for Engine {
 }
 
 /// A file, else a bundled template by name.
-fn read_input(label: &str) -> Result<Input, Failure> {
+pub(crate) fn read_input(label: &str) -> Result<Input, Failure> {
     let path = Path::new(label);
     let text = if path.is_file() {
         std::fs::read_to_string(path).map_err(|error| Failure::invalid(EngineError::new("file.io").with("path", path.display()).because(error)))?
@@ -338,7 +348,7 @@ pub fn step_text(texts: &Texts, step: &Step) -> String {
 }
 
 /// The run's failure in words, located by node.
-fn failure_text(texts: &Texts, document: &Experiment, error: &EngineError, remote: bool) -> (String, Option<String>) {
+pub(crate) fn failure_text(texts: &Texts, document: &Experiment, error: &EngineError, remote: bool) -> (String, Option<String>) {
     let wording: &[&str] = if remote { &["cli.serverErr.", "cli.err."] } else { &["cli.err."] };
     let described = texts.describe(error, wording, &|id| document.nodes.iter().any(|node| node.id == id).then(|| node_label(texts, document, id)));
     (described.text, described.detail)

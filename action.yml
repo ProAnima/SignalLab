@@ -58,6 +58,10 @@ inputs:
     description: Language of the messages, en or ru.
     required: false
     default: en
+  fail-on-error:
+    description: Fail the step when an experiment fails ("false" to go on and read exit-code — a failing composite step hands on no outputs).
+    required: false
+    default: "true"
 
 outputs:
   junit:
@@ -120,7 +124,7 @@ runs:
         echo "exit-code=$?" >> "$GITHUB_OUTPUT"
 
     - name: Fail when signallab did
-      if: steps.run.outputs.exit-code != '0'
+      if: steps.run.outputs.exit-code != '0' && inputs.fail-on-error != 'false'
       shell: bash
       env:
         CODE: ${{ steps.run.outputs.exit-code }}

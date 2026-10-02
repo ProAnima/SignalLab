@@ -34,6 +34,18 @@ pub fn run() {
             // The service starts the Inspector's pump, which needs the runtime.
             let service = tauri::async_runtime::block_on(async move { Service::new(host, Mode::Desktop, Arc::new(SystemStore)) });
             app.manage(Arc::new(service));
+            // The window of tauri.conf.json, made here (it has "create": false) so a debug
+            // build can open the webview's DevTools for the end-to-end tour — only when the
+            // tour asks, and never in a release build.
+            let config = app.config().app.windows.first().cloned().ok_or("tauri.conf.json has no window")?;
+            #[allow(unused_mut)]
+            let mut window = tauri::WebviewWindowBuilder::from_config(app.handle(), &config)?;
+            #[cfg(all(windows, debug_assertions))]
+            if let Ok(port) = std::env::var("SIGNALLAB_E2E_DEVTOOLS_PORT") {
+                // Tauri's own defaults, which giving any arguments replaces.
+                window = window.additional_browser_args(&format!("--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --remote-debugging-port={port}"));
+            }
+            window.build()?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![engine])

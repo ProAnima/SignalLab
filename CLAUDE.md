@@ -110,6 +110,7 @@ engine/src/               signal-lab-engine — no Tauri, no window
   mqtt.rs                 one broker connection as a job; MqttHub routes commands
   signals.rs              signal library: file + starter set (storage only)
   jobs.rs                 job registry: start / list / stop
+  firewall.rs             Windows Firewall per program: status (COM, any language), allow (UAC)
 engine/tests/ping_reply.rs  an experiment run end to end over loopback (repeat_loop.rs: Repeat and Loop)
 tests/e2e/tour.ts         the end-to-end tour, run inside the page: every screen, by its visible labels
 scripts/e2e.mjs           its runner: builds, starts the app / server + a browser, steps, screenshots
@@ -128,11 +129,19 @@ cli/                      `signallab`, the command line for scripts and CI (docs
   src/send.rs             send osc|udp|http|mqtt, fire a library signal — the app's own commands
   src/i18n.rs             the interface's dictionaries (build.rs embeds them) and translate.ts in Rust
   src/junit.rs            the JUnit report; src/fail.rs the exit codes 0/1/2/3
+  src/mcp.rs              `signallab mcp`: the Model Context Protocol on stdio, for an LLM
+  src/catalog.rs          every kind of node with fields, outputs, an example (describe_nodes, `nodes`)
+  src/doctor.rs           `doctor` and `firewall allow`
 cli/tests/cli.rs          the binary as a pipeline runs it, against loopback and a server started there
+cli/tests/nodes.rs        every kind of node in one experiment, here and on a server, against loopback gear (common/)
+cli/tests/mcp.rs          `signallab mcp` driven like an LLM client: every tool, progress, cancel, --server
 action.yml                the GitHub Action: signallab from the image, a JUnit report
 Dockerfile, deploy/compose.yaml, scripts/image.mjs   the server image and its smoke test
 deploy/install.sh         the server on a Linux host in one command (Docker, host network, token)
-src-tauri/installer/      the installers' artwork (generated, committed; tests/installer.test.mjs)
+src-tauri/installer/      the installers' artwork (generated, committed; tests/installer.test.mjs),
+                          hooks.nsh + path.ps1 (setup: signallab.exe, PATH, firewall), cli.wxs (MSI)
+scripts/cli-bundle.mjs    builds signallab for the installers (beforeBundleCommand)
+src/components/FirewallBanner.tsx  the desktop app's firewall notice, with Allow
 ```
 
 ## Invariants worth not breaking
@@ -164,6 +173,18 @@ src-tauri/installer/      the installers' artwork (generated, committed; tests/i
   `src/lib/locales`), exits 0 passed / 1 failed / 2 invalid / 3 could not run,
   and its own codes need `err.<code>` texts like the engine's (the scan in
   `engine/src/error.rs` covers `cli/src`).
+- **Every kind of node is in two lists.** `cli/src/catalog.rs` (what an LLM
+  and `signallab nodes` read) and `cli/tests/nodes.rs` (one experiment with
+  all of them, run here and on a server); both fail on a `NodeKind` they lack.
+- **`signallab mcp` owns stdout.** One JSON-RPC message per line and nothing
+  else; people's text goes to stderr. Tools only read or are marked as reaching
+  the outside world; every action is an engine command, as in the app.
+- **The firewall changes only when a person says so.** The desktop app's notice
+  and `signallab firewall allow` run the system's administrator prompt
+  (`firewall::allow`); the setup *for everyone* adds one allow rule per program
+  (private, domain; `/NOFIREWALL` skips it) and its uninstaller removes them;
+  a server never changes its host's firewall (`firewall.server`). Reading the
+  rules goes through the firewall's COM interface, never netsh's localized text.
 - **Long-running work is a job.** Register it with `JobRegistry` so the console
   strip can list and stop it, and call `finish(id)` when it ends on its own.
 - **Modules never call the Inspector directly** — publish a normalized `Frame`

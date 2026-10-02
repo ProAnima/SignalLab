@@ -5,6 +5,7 @@ import { Brand } from "./components/Brand";
 import { Palette } from "./components/Palette";
 import { TooltipLayer } from "./components/TooltipLayer";
 import { Splitter } from "./components/Splitter";
+import { FirewallBanner } from "./components/FirewallBanner";
 import { ExperimentView, type ExperimentHandle } from "./views/ExperimentView";
 import { SignalsView } from "./views/SignalsView";
 import { MqttView } from "./views/MqttView";
@@ -235,6 +236,7 @@ function Shell() {
 
       {/* In a browser the engine is on the server; say when it cannot be reached. */}
       {connection === "lost" && <div className="connection-banner" role="status">{t("app.connectionLost")}</div>}
+      <FirewallBanner />
       <main className="main" ref={mainRef}>
         <div className="experiment-host" hidden={view !== "experiment"}>
           <ExperimentView ref={experiment} active={view === "experiment"} focusMode={focusMode} setFocusMode={setFocusMode} onShowFrame={showFrame} />

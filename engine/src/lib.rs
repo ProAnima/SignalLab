@@ -13,6 +13,7 @@ pub mod experiment_files;
 pub mod experiment_run;
 pub mod experiment_steps;
 pub mod experiment_validate;
+pub mod firewall;
 pub mod host;
 pub mod http;
 pub mod inspect;

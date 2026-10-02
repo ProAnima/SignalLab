@@ -140,10 +140,38 @@ the dialog and banner of the MSI are drawn from the app icon by
 | Silent, for every user (elevated) | `"Signal Lab_X.Y.Z_x64-setup.exe" /S /ALLUSERS` |
 | With a progress bar and no questions | `… /P` |
 | Without shortcuts / into a folder | `… /NS`, `… /D=C:\Tools\Signal Lab` (last) |
+| Without PATH / without firewall rules | `… /NOPATH`, `… /NOFIREWALL` |
 | MSI, silent | `msiexec /i "Signal Lab_X.Y.Z_x64_en-US.msi" /qn` |
 
-Windows asks once, on the first listening port (an OSC monitor, a wait), whether Signal
-Lab may receive on the network; the installers do not change the firewall themselves.
+**The command line comes with the app.** The setup and the MSI put `signallab.exe`
+next to the app and that folder on `PATH` — the user's for a setup *for me*, the
+machine's for *for everyone* and the MSI (Windows Installer's own `Environment`
+entry) — so `signallab` and `signallab mcp` work in any new terminal; the `.deb`
+and `.rpm` put it in `/usr/bin`. It is built by `scripts/cli-bundle.mjs`, the
+bundle's `beforeBundleCommand`; the setup's part is `src-tauri/installer/hooks.nsh`
+(PATH through `path.ps1`, which keeps `PATH`'s `%VARIABLES%` and type as they are)
+and the MSI's `cli.wxs`. Uninstalling takes it off `PATH` again.
+
+**The firewall.** Windows Defender Firewall decides per program, and asks the person
+at the screen the first time a program listens — a *Cancel* there leaves a rule that
+silently drops what other machines send, and on a network Windows calls *public* (a
+venue's Wi-Fi, often) a rule for private networks does not apply. So:
+
+- The setup *for everyone* (it has administrator rights) adds an inbound allow rule
+  for `signal-lab.exe` and one for `signallab.exe`, on private and domain networks,
+  and the uninstaller removes every inbound rule of the two — the prompt's included.
+  `/NOFIREWALL` skips it; the MSI leaves the firewall to the IT that deploys it.
+- A setup *for me* cannot change the firewall. When something first listens (a
+  monitor, discovery, the relay, a run) the app looks at the rules once
+  (`firewall_status`) and, when they are in the way, says so in a notice with
+  **Allow** — or **Allow, on public networks too** on a public network. That runs the
+  system's own administrator prompt and replaces the program's inbound rules with one
+  allow rule (`firewall_allow`, `engine/src/firewall.rs`). Never on a server.
+- `signallab doctor` shows the same for the command line and the app, and
+  `signallab firewall allow [--public]` fixes it from a terminal.
+
+Loopback (127.0.0.1) is never filtered, which is why everything works on one machine
+even with no rule at all.
 Until the installers are signed (§6) SmartScreen warns about an unknown publisher:
 *More info → Run anyway*.
 
@@ -199,7 +227,14 @@ server and keeps the data; `--uninstall --purge` deletes that too.
 | `--dir DIR` | where the compose file goes |
 | `--name NAME` | container and volume name — a second server on the same host needs its own |
 | `--image NAME` | another registry or a local build (`--image signallab:dev`) |
-| `--yes` | install Docker without asking |
+| `--open-udp PORTS` | with a firewall on, also let UDP in on these ports (monitors, waits): `9000,9100:9110` |
+| `--no-firewall` | never change ufw or firewalld |
+| `--yes` | install Docker and open the firewall without asking |
+
+With **ufw** or **firewalld** on, the script asks to open the server's port (and the
+`--open-udp` ports), writes down what it opened in `.firewall` next to the compose file,
+and `--uninstall` closes exactly that again. Host networking means the container
+listens on the host's own ports, so the host's firewall is the one that matters.
 
 Settings of one's own — experiment secrets, `SIGNALLAB_ALLOWED_HOSTS`, `--secure-cookie`
 behind HTTPS — go in `compose.override.yaml` next to the compose file, which the script
@@ -397,7 +432,7 @@ screenshots each, and between steps checks the loopback fixtures
 
 | Target | Here (Windows) | Linux (Docker, CI) |
 | --- | --- | --- |
-| desktop | the debug build of the app (`tauri build --debug --no-bundle`) in WebView2, over DevTools (`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`), with a profile and data folder of its own | the same build in WebKitGTK, driven by WebKitWebDriver (`TAURI_WEBVIEW_AUTOMATION=true`) on Xvfb |
+| desktop | the debug build of the app (`tauri build --debug --no-bundle`) in WebView2, over DevTools (the debug build opens them itself when `SIGNALLAB_E2E_DEVTOOLS_PORT` is set — `src-tauri/src/lib.rs`; a release build never does), with a profile and data folder of its own | the same build in WebKitGTK, driven by WebKitWebDriver (`TAURI_WEBVIEW_AUTOMATION=true`) on Xvfb |
 | server | `signal-lab-server` on a free loopback port, in headless Edge or Chrome on a fresh profile | the server, or the image (`--image`, sharing the tour's network namespace), in MiniBrowser |
 
 What it covers, in order: the shell (every screen, its heading, no horizontal

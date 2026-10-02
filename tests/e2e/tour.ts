@@ -214,6 +214,9 @@ function untipped(root: ParentNode): string[] {
  * after a screen opened); a person waits for that, so the check is made again
  * for a moment before it counts as covered.
  */
+/** How often the firewall notice was in the way and answered (the shell step reports it). */
+let firewallNotices = 0;
+
 async function click(element: HTMLElement, what = describe(element)) {
   if ((element as HTMLButtonElement).disabled) throw new Error(`${what} is disabled`);
   let hit: Element | null = null;
@@ -227,6 +230,14 @@ async function click(element: HTMLElement, what = describe(element)) {
       element.click();
       await sleep(30);
       return;
+    }
+    // The firewall notice of the desktop app (a fresh machine's first listener): a person answers "Not now".
+    const notice = hit.closest(".firewall-banner");
+    if (notice && !notice.contains(element)) {
+      firewallNotices += 1;
+      const buttons = notice.querySelectorAll<HTMLButtonElement>("button");
+      buttons[buttons.length - 1]?.click();
+      await sleep(50);
     }
   }
   throw new Error(`${what} is covered by ${describe(hit!)}`);
@@ -1053,6 +1064,13 @@ async function cleanup(expect: Expect) {
   await until("no jobs", () => textOf(document.querySelector(".sidebar .foot")).includes(T("app.activeJobs", { n: 0 })), 5000);
   expect("no job is left running", true);
   expect("no connection banner appeared", !document.querySelector(".connection-banner"));
+  // On a machine whose firewall has no rule for the app yet, the notice came up and was answered "Not now".
+  const notice = document.querySelector(".firewall-banner");
+  if (notice) {
+    await click(buttonWith(notice as HTMLElement, T("fw.dismiss")));
+    firewallNotices += 1;
+  }
+  expect("the firewall notice, when it came, was answered", !document.querySelector(".firewall-banner"), firewallNotices ? `answered ${firewallNotices}×` : "it did not come");
 }
 
 const STEPS: Record<string, (expect: Expect, args: StepArgs) => Promise<Record<string, unknown> | void>> = {

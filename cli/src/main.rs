@@ -5,12 +5,15 @@
 //! signal from a library. Everything goes through the engine's own commands
 //! (`engine::Service`), so it behaves as the app does. See docs/automation.md.
 
+mod catalog;
+mod doctor;
 // build.rs reads the dictionaries with it; here only its tests run.
 #[cfg(test)]
 mod extract;
 mod fail;
 mod i18n;
 mod junit;
+mod mcp;
 mod remote;
 mod run;
 mod send;
@@ -60,6 +63,15 @@ enum Command {
     Fire(FireArgs),
     /// List the bundled templates (`signallab run <name>` runs one).
     Templates,
+    /// What an experiment is made of: every kind of node with its fields, outputs and an example (JSON).
+    Nodes,
+    /// Serve Signal Lab to an LLM over the Model Context Protocol (stdio): experiments, sends, listening.
+    Mcp(McpArgs),
+    /// What stands between Signal Lab and the gear: the firewall, the network, the data folder, a server and its token.
+    Doctor(DoctorArgs),
+    /// The firewall: `allow` lets other machines reach signallab and the desktop app (Windows asks for administrator rights).
+    #[command(subcommand)]
+    Firewall(FirewallCommand),
     /// Print the version.
     Version,
 }
@@ -203,6 +215,47 @@ enum SendCommand {
 }
 
 #[derive(Args, Debug)]
+pub struct DoctorArgs {
+    /// Also check this Signal Lab server and its token.
+    #[arg(long, value_name = "URL", env = "SIGNALLAB_SERVER")]
+    server: Option<String>,
+    /// File holding the server's token [default: SIGNALLAB_TOKEN]
+    #[arg(long, value_name = "PATH", env = "SIGNALLAB_TOKEN_FILE")]
+    token_file: Option<PathBuf>,
+}
+
+#[derive(Subcommand, Debug)]
+enum FirewallCommand {
+    /// Replace this installation's inbound firewall rules with one that allows it, on private and domain networks.
+    Allow(FirewallArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct FirewallArgs {
+    /// On public networks too (a venue's Wi-Fi is often one).
+    #[arg(long)]
+    public: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct McpArgs {
+    #[command(flatten)]
+    place: Place,
+
+    /// Data folder for the runs and their reports [default: the app's, Documents/SignalLab].
+    #[arg(long, value_name = "PATH", conflicts_with = "server")]
+    data_dir: Option<PathBuf>,
+
+    /// The signal library for list_signals and fire_signal [default: the app's signals.json]
+    #[arg(long, value_name = "PATH")]
+    library: Option<PathBuf>,
+
+    /// Print what a client needs to start this server, and exit.
+    #[arg(long, value_name = "CLIENT", value_parser = ["claude-code", "claude-desktop", "cursor", "vscode"])]
+    print_config: Option<String>,
+}
+
+#[derive(Args, Debug)]
 struct FireArgs {
     /// The signal's id or name.
     signal: String,
@@ -237,6 +290,13 @@ async fn main() -> ExitCode {
         Command::Send(command) => send::send(&ctx, command).await,
         Command::Fire(args) => send::fire(&ctx, args).await,
         Command::Templates => run::templates(&ctx),
+        Command::Nodes => {
+            println!("{}", serde_json::to_string_pretty(&catalog::describe(&ctx.texts)).unwrap_or_default());
+            Exit::Passed
+        }
+        Command::Mcp(args) => mcp::serve(ctx, args).await,
+        Command::Doctor(args) => doctor::doctor(&ctx, args).await,
+        Command::Firewall(FirewallCommand::Allow(args)) => doctor::firewall(&ctx, args).await,
         Command::Version => {
             if ctx.json {
                 println!("{}", serde_json::json!({ "version": env!("CARGO_PKG_VERSION") }));

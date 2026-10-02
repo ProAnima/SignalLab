@@ -424,14 +424,21 @@ signallab send osc 127.0.0.1:9000 /cue/go f:0.75
 `0` all passed, `1` one failed, `2` invalid input, `3` could not run. Steps print as
 they happen in English or Russian, `--json` gives a JSON object per line, `--junit`
 a report every CI system shows, and `--server` sends the runs to a lab PC that can
-reach the gear. It ships next to the installers and in the image; a GitHub Action
-wraps it:
+reach the gear. It comes with the desktop app — the installers put it on `PATH`
+(`/usr/bin` on Linux) — and in the image; `signallab doctor` says what stands
+between it and the gear, the firewall included. A GitHub Action wraps it:
 
 ```yaml
 - uses: ProAnima/SignalLab@v0.4.0
   with:
     experiments: tests/signallab/*.json
 ```
+
+**For an assistant:** `signallab mcp` is a Model Context Protocol server, so an
+LLM in Claude Code, Claude Desktop, Cursor or VS Code can read what an experiment
+is made of, write one, validate and run it, send single messages and listen on a
+port — here, or on a lab server with `--server`. `signallab mcp --print-config
+claude-code` prints the line to add it.
 
 The server's API does the same over HTTP: `POST /api/run` waits for a run and
 answers with its result, or streams its steps as NDJSON; `/api/invoke/<command>`
