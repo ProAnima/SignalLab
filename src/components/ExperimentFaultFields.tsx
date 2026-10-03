@@ -1,4 +1,4 @@
-import type { DownFault, Experiment, ExperimentNode } from "../lib/api";
+import type { DownFault, Experiment, ExperimentNode, RelayProtocol } from "../lib/api";
 import { useT, type TKey } from "../lib/i18n";
 import { TemplateField } from "./TemplateField";
 import { ImpairProfileFields } from "./ImpairProfileFields";
@@ -6,6 +6,9 @@ import { ImpairProfileFields } from "./ImpairProfileFields";
 const DOWN_FAULTS: DownFault[] = ["unavailable", "reset", "timeout"];
 
 type FaultNode = Extract<ExperimentNode, { type: "impairment" | "impairment_change" | "emulator_state" }>;
+
+/** A relay's protocol; a Change impairment of no relay reads its profile as a UDP one. */
+const relayProtocol = (relay: Extract<ExperimentNode, { type: "impairment" }> | undefined): RelayProtocol => relay?.protocol ?? "udp";
 
 /**
  * The fields of the nodes that break things on cue: an Impairment's relay and
@@ -20,15 +23,19 @@ export function ExperimentFaultFields({ node, doc, patch }: { node: FaultNode; d
     case "impairment": return <>
       <label data-tip={t("exp.relayListenHint")}>{t("exp.relayListen")}<TemplateField primary value={node.listen} placeholder="127.0.0.1:9010" onChange={listen => patch({ listen })} /></label>
       <label data-tip={t("exp.relayTargetHint")}>{t("exp.relayTarget")}<TemplateField value={node.target} placeholder="127.0.0.1:9000" onChange={target => patch({ target })} /></label>
-      <ImpairProfileFields profile={node.profile} onChange={profile => patch({ profile })} />
+      <label data-tip={t("ns.protocolHint")}>{t("ns.protocol")}<select value={node.protocol ?? "udp"} onChange={event => patch({ protocol: event.target.value === "tcp" ? "tcp" : undefined })}>
+        <option value="udp">UDP</option>
+        <option value="tcp">TCP</option>
+      </select></label>
+      <ImpairProfileFields profile={node.profile} onChange={profile => patch({ profile })} protocol={node.protocol ?? "udp"} />
     </>;
     case "impairment_change": return <>
       {relays.length === 0 ? <p className="experiment-empty">{t("exp.noRelays")}</p>
         : <label data-tip={t("exp.relayHint")}>{t("exp.relay")}<select data-primary value={node.relay} onChange={event => patch({ relay: event.target.value })}>
           {!relays.some(relay => relay.id === node.relay) && <option value={node.relay}>—</option>}
-          {relays.map(relay => <option key={relay.id} value={relay.id}>{relay.listen} → {relay.target}</option>)}
+          {relays.map(relay => <option key={relay.id} value={relay.id}>{relay.protocol === "tcp" ? "TCP " : ""}{relay.listen} → {relay.target}</option>)}
         </select></label>}
-      <ImpairProfileFields profile={node.profile} onChange={profile => patch({ profile })} />
+      <ImpairProfileFields profile={node.profile} onChange={profile => patch({ profile })} protocol={relayProtocol(relays.find(relay => relay.id === node.relay))} />
     </>;
     case "emulator_state": {
       const chosen = emulators.find(emulator => emulator.id === node.emulator);

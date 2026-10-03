@@ -119,7 +119,8 @@ engine/src/               signal-lab-engine — no Tauri, no window
   latency.rs              LatencyHistogram: p50…p99 within 0.5 %, atomics, constant memory, coarse bins
   load.rs                 Load on an HTTP node: profiles checked, the schedule, metrics, thresholds, the run
   experiment_compare.rs   run history from the reports, two runs compared (experiment_runs/_compare)
-  netsim.rs               UDP impairment relay: profiles, seeded per-leg decisions, live changes, phases
+  netsim.rs               impairment relay: profiles, seeded per-leg decisions, live changes, phases (UDP)
+  netsim_tcp.rs           the relay over TCP: a connection per client, streams delayed in order, throttled, reset, half-open
   netsim_run.rs           a run's relays (Impairment nodes), opened before the first step
   storm.rs                UDP/TCP load generator
   error.rs                EngineError {code, params, node, field, detail}
@@ -273,7 +274,13 @@ src/components/FirewallBanner.tsx  the desktop app's firewall notice, with Allow
   Both name another node by id (`impair.relay_unknown`, `emulator.node_unknown`).
   Every relay decision draws from the run's seed per direction (`Leg`), so the
   same seed and traffic drop the same packets — keep it that way: no
-  `thread_rng` in the relay.
+  `thread_rng` in the relay. A relay's `protocol` is UDP or TCP; each reads only
+  its own values (`ImpairProfile::for_protocol`, applied on `Relay::new` and
+  `set`). Over TCP (`netsim_tcp`) a chunk is never due before the one ahead of it,
+  the bandwidth limit holds the reader back past a second of queue (backpressure,
+  never a drop), a reset closes both sockets with `set_zero_linger`, and a
+  half-open connection keeps both open, untouched, until the relay goes — its
+  connections are children of the relay's task, so a run's end closes them.
 - **Credentials go only into the request.** `HttpRequest::auth` (Basic,
   Bearer, Digest) becomes an `Authorization` header in `http::builder` as the
   request is sent; frames, steps and reports carry the response, never that

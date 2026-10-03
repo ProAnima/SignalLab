@@ -329,7 +329,7 @@ pub(crate) fn check_node(kind: &NodeKind, params: &BTreeMap<String, String>) -> 
             check_timeout(*timeout_ms)?;
         }
         // Opened before the first step: its addresses may use parameters only.
-        NodeKind::Impairment { listen, target, profile } => {
+        NodeKind::Impairment { listen, target, profile, .. } => {
             for (field, text) in [("listen", listen), ("target", target)] {
                 if text.trim().is_empty() {
                     return Err(required(Field::new(field)));

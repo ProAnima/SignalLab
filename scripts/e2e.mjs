@@ -307,6 +307,7 @@ function plan(ports, fixtures, mode, dataDir, { feedbackHere }) {
     { name: "broadcast", args: { port: ports.discovery } },
     { name: "netsimStart", args: { relay: ports.relay, sink: ports.sink }, after: async () => { mark(); await fixtures.sendUdp(ports.relay, 20); } },
     { name: "netsimCheck", args: { n: 20 }, after: (expect) => expect("all 20 arrived at the relay's target", counts.udp - at.udp === 20, `${counts.udp - at.udp} arrived`) },
+    { name: "netsimTcp", args: { relay: ports.tcpRelay, port: ports.http }, before: mark, after: (expect) => expect("the API got the request through the relay", counts.http - at.http === 1, `${counts.http - at.http} requests`) },
     { name: "storm", args: { sink: ports.sink, tcp: ports.tcp }, before: mark, after: async (expect, data) => {
       await sleep(300);
       expect("the UDP sink received what the storm counted", counts.udp - at.udp >= data.udp * 0.95, `${counts.udp - at.udp} of ${data.udp}`);
@@ -385,7 +386,7 @@ async function tour(target, opts, source) {
   const ports = {
     ...fixtures.ports, osc: await freePort("udp"), discovery: await freePort("udp"), relay: await freePort("udp"),
     // The emulators the tour makes listen on TCP ports of their own.
-    emulator: await freePort(), emulatorRun: await freePort(), broker: await freePort(),
+    emulator: await freePort(), emulatorRun: await freePort(), broker: await freePort(), tcpRelay: await freePort(),
   };
   const started = Date.now();
   console.log(`\n▶ ${label}`);

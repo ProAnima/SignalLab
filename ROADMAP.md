@@ -39,7 +39,6 @@ This decides what we build and what we leave to others:
 
 ### Known gaps in what exists
 
-- The impairment relay is UDP only; impairing a TCP stream (latency, throttling, reset, half-open) is still to come.
 - Load applies to HTTP nodes; OSC, UDP and MQTT under load are still to come. A soak longer than a run's five minutes needs the run limit raised — a decision of its own.
 
 ## Delivery order
@@ -154,7 +153,7 @@ Detailed design: [docs/milestone-4-reactive.md](docs/milestone-4-reactive.md). *
 
 **Goal.** Degrade the network or a dependency on a schedule, from the same graph, and always restore it.
 
-**Status:** delivered — the **Impairment**, **Change impairment** and **Emulator down/up** nodes (document version 7); presets *LAN*, *Busy Wi-Fi*, *4G*, *Satellite*, *Intermittent*, *Offline*; bursts of loss (Gilbert–Elliott), reordering, a bandwidth limit and offline in the relay; profiles changed while a relay runs, on the Impairment screen too; every decision drawn from the run's seed; each phase counted in the run report (version 4) and every applied fault a timeline step; relays closed with the run whatever its outcome; *Route through impairment* on OSC and UDP nodes; the templates *Fault phases* and *Dependency outage*; a running emulator taken down and brought up by hand, over the API and over MCP. The "done when" below is an engine test (`engine/tests/faults.rs`). Still open: TCP impairment, and comparing two runs' reports side by side (milestone 7).
+**Status:** delivered — the **Impairment**, **Change impairment** and **Emulator down/up** nodes (document version 7); presets *LAN*, *Busy Wi-Fi*, *4G*, *Satellite*, *Intermittent*, *Offline*; bursts of loss (Gilbert–Elliott), reordering, a bandwidth limit and offline in the relay; profiles changed while a relay runs, on the Impairment screen too; every decision drawn from the run's seed; each phase counted in the run report (version 4) and every applied fault a timeline step; relays closed with the run whatever its outcome; *Route through impairment* on OSC and UDP nodes; the templates *Fault phases* and *Dependency outage*; a running emulator taken down and brought up by hand, over the API and over MCP. The "done when" below is an engine test (`engine/tests/faults.rs`). TCP impairment followed: a TCP relay (latency and jitter in order, a bandwidth limit that slows the sender, connections reset or left half-open, offline) on the screen and as the node's `protocol: tcp` (`engine/src/netsim_tcp.rs`, `engine/tests/faults.rs`); comparing two runs came with milestone 7.
 
 **What the user gets**
 
@@ -173,7 +172,7 @@ Detailed design: [docs/milestone-4-reactive.md](docs/milestone-4-reactive.md). *
 
 - `netsim.rs` gets a control channel so a running relay can change its `ImpairProfile` without rebinding; new fields default to "off", so existing configurations keep working.
 - All random decisions come from the experiment seed; every applied fault is a timeline event.
-- TCP proxy impairment (latency, throttling, reset, half-open) is a separate, later addition.
+- TCP proxy impairment (latency, throttling, reset, half-open): delivered after milestone 7, as a relay's protocol.
 
 **Done when** the same seeded fault experiment gives the same drop pattern twice, Stop in the middle restores a clean relay, and a clean run and a faulted run can be compared.
 
@@ -279,9 +278,9 @@ Detailed design: [docs/delivery.md](docs/delivery.md).
 - **Performance.** All high-rate events go through the rate gate and report what was not drawn.
 - **Tests.** Local protocol fixtures in `cargo test`; editor transformations in `npm test`; every new node kind round-trips through JSON and appears in both locales.
 
-## Next concrete slice (TCP impairment, then milestone 8)
+## Next concrete slice (milestone 8 — record, replay, mutate)
 
-Milestone 7 is delivered for HTTP: the *Load* setting with five profiles, thresholds as checks, run history and Compare (document version 9, run reports version 5). Next: impairing a TCP stream (latency, throttling, reset, half-open) beside the UDP relay, then milestone 8 — record, replay, mutate.
+Milestone 7 is delivered for HTTP: the *Load* setting with five profiles, thresholds as checks, run history and Compare (document version 9, run reports version 5). TCP impairment followed — the relay's `protocol: tcp`, its streams delayed in order, throttled, reset or left half-open (also version 9). Next: milestone 8 — record a session, replay it without the equipment, and mutate it.
 
 Delivered before it, since milestone 6 (faults as nodes and phases, seeded and counted per phase): the HTTP burst at a fixed rate with p50/p90/p95/p99 (the start of milestone 7), WebSocket (milestone 10's first transport: a screen, connect/send/wait/close nodes, `send ws`), Basic/Bearer/Digest authentication and cookie jars for HTTP, and a parameter matrix for `signallab run`; document version 8. Milestone 5 before it delivered emulators (HTTP, OSC, UDP, TCP, an MQTT broker), with outages and the malformed fault, the *Emulator* node and *Wait for HTTP request* (version 6). Every screen, the WebSocket screen included, is walked end to end — desktop app and server, Windows and Linux, and the published image (`npm run e2e`). Next: the rest of milestone 7 — the *Load* setting on an HTTP node with ramp, step and spike profiles, thresholds as checks (`p95 < 300 ms`), and Compare of two runs' reports.
 

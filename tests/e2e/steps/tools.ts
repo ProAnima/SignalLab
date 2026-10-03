@@ -174,6 +174,45 @@ export async function netsimCheck(expect: Expect, args: StepArgs) {
   return { forwarded: numberIn(metric(shown, T("ns.forwarded"))) };
 }
 
+/**
+ * A TCP relay in front of the fixture's API: the profile shows a stream's
+ * fates, not a datagram's; a request sent through it from the HTTP screen is
+ * answered, 150 ms later each way; the relay counts the connection.
+ */
+export async function netsimTcp(expect: Expect, args: StepArgs) {
+  const shown = await go("netsim");
+  await type(control(shown, T("ns.protocol")), "tcp");
+  const labels = [...shown.querySelectorAll("label")].map(textOf);
+  expect("a TCP relay's profile: resets and half-open connections, no packet loss", labels.some((label) => label.startsWith(T("ns.reset"))) && labels.some((label) => label.startsWith(T("ns.stall"))) && !labels.some((label) => label.startsWith(T("ns.loss"))), labels.join(" | "));
+  await type(control(shown, T("ns.listen")), `127.0.0.1:${args.relay}`);
+  await type(control(shown, T("ns.target")), `127.0.0.1:${args.port}`);
+  await click(button(shown, T("ns.preset.lan")));
+  await type(control(shown, T("ns.latency")), 150);
+  await type(control(shown, T("ns.jitter")), 0);
+  const nameless = unnamed(shown);
+  expect("every field has a name", nameless.length === 0, nameless.join(" | "));
+  await click(button(shown, T("ns.startRelay")));
+  await until("the relay", () => hasButton(shown, T("ns.stopRelay")));
+
+  const http = await go("http");
+  const request = panel(http, T("http.request"));
+  await type(request.querySelector("select")!, "GET");
+  await type(control(request, "URL"), `http://127.0.0.1:${args.relay}/e2e/through-tcp-relay`);
+  const before = textOf(result(request));
+  await click(button(request, T("common.send")));
+  const verdict = await until("the answer through the relay", () => result(request)?.classList.contains("ok") && textOf(result(request)) !== before && result(request));
+  const ms = Number(/· ([\d,.]+) ms/.exec(textOf(verdict))?.[1]?.replace(/,/g, "") ?? NaN);
+  expect("a request through the TCP relay is answered, 150 ms later each way", textOf(verdict).startsWith("200") && ms >= 290, textOf(verdict));
+
+  const relay = await go("netsim");
+  // Its counters come four times a second: the request and its answer, both ways.
+  await until("the request and its answer counted", () => numberIn(metric(relay, T("ns.forwarded"))) >= 2);
+  expect("the relay counts the connection and what it forwarded", numberIn(metric(relay, T("ns.connections"))) === 1, textOf(relay.querySelector(".metrics")));
+  await click(button(relay, T("ns.stopRelay")));
+  await until("the relay to stop", () => hasButton(relay, T("ns.startRelay")));
+  await type(control(relay, T("ns.protocol")), "udp");
+}
+
 export async function storm(expect: Expect, args: StepArgs) {
   const shown = await go("storm");
   const run = async (protocol: "udp" | "tcp", port: number, size: number) => {

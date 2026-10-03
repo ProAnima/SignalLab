@@ -185,6 +185,54 @@ async fn a_stopped_run_leaves_nothing_impaired() {
     assert!(std::net::UdpSocket::bind(("127.0.0.1", relay)).is_ok(), "and its port is free again");
 }
 
+/// A TCP relay in front of an HTTP API: a request through it takes the
+/// relay's latency both ways; switched to resetting, the next request meets
+/// a reset; the report counts the connections and the reset, phase by phase.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_tcp_relay_delays_a_request_and_then_resets_one_on_cue() {
+    let service = service();
+    let (api, relay) = (tcp_port(), tcp_port());
+    let url = format!("http://127.0.0.1:{relay}/health");
+    let get = |id: &str, x: f64| node(id, x, json!({ "type": "http", "request": { "method": "GET", "url": url, "headers": [["Connection", "close"]], "body": null, "timeout_ms": 3000 } }));
+    let doc = document(
+        vec![
+            node("start", 0.0, json!({ "type": "start" })),
+            node("api", 100.0, json!({ "type": "emulator", "emulator": { "name": "API", "bind": format!("127.0.0.1:{api}"), "protocol": "http",
+                "routes": [{ "path": "/health", "responses": [{ "body": "ok" }] }] } })),
+            node("relay", 200.0, json!({ "type": "impairment", "protocol": "tcp", "listen": format!("127.0.0.1:{relay}"), "target": format!("127.0.0.1:{api}"),
+                "profile": { "name": "slow", "latency_ms": 120 } })),
+            get("slow", 300.0),
+            node("slower", 400.0, json!({ "type": "assert_latency", "max_ms": 5000 })),
+            node("cut", 500.0, json!({ "type": "impairment_change", "relay": "relay", "profile": { "name": "cut", "reset": 1 } })),
+            get("cut_off", 600.0),
+            node("end", 700.0, json!({ "type": "end" })),
+        ],
+        vec![
+            ("start", "next", "api"),
+            ("api", "next", "relay"),
+            ("relay", "next", "slow"),
+            ("slow", "next", "slower"),
+            ("slower", "next", "cut"),
+            ("cut", "next", "cut_off"),
+            ("cut_off", "next", "end"),
+        ],
+        1,
+    );
+    let result = run(&service, doc).await;
+    let slow = result.steps.iter().find(|step| step.node_id == "slow" && step.state == "passed").expect("the slow request went through");
+    let ms: f64 = slow.detail.split(" · ").nth(1).and_then(|part| part.trim_end_matches(" ms").parse().ok()).unwrap();
+    assert!(ms >= 240.0, "120 ms each way: {}", slow.detail);
+    let error = result.error.as_ref().expect("the reset request failed the run");
+    assert_eq!(error.node.as_deref(), Some("cut_off"));
+    assert!(error.code.starts_with("transport."), "a transport failure: {}", error.code);
+    let report = serde_json::to_value(&result.impairments[0]).unwrap();
+    assert_eq!(report["protocol"], "tcp");
+    let phases: Vec<(&str, u64, u64)> = report["phases"].as_array().unwrap().iter()
+        .map(|phase| (phase["profile"].as_str().unwrap(), phase["counts"]["connections"].as_u64().unwrap_or(0), phase["counts"]["reset"].as_u64().unwrap_or(0)))
+        .collect();
+    assert_eq!(phases, [("slow", 1, 0), ("cut", 1, 1)], "{report}");
+}
+
 /// A dependency taken down and brought back by the run's own steps: the
 /// client meets 503 meanwhile, then 200.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

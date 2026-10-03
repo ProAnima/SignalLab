@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { LOCALES } from "../src/lib/locales/index.ts";
 import { en } from "../src/lib/locales/en.ts";
-import { changedProfile, fullProfile, impairNotation, IMPAIR_PRESETS, presetOf, presetProfile, profileLabel } from "../src/lib/impairments.ts";
+import { changedProfile, forProtocol, fullProfile, impairNotation, IMPAIR_PRESETS, presetOf, presetProfile, profileLabel } from "../src/lib/impairments.ts";
 import { createNode, createNodeIn, routeThroughImpairment, validPortsFor } from "../src/lib/experimentGraph.ts";
 import { messageParams } from "../src/lib/errors.ts";
 
@@ -34,6 +34,24 @@ test("a profile without a name reads as the engine's timeline writes it", () => 
   assert.equal(impairNotation({ ...fullProfile(), burst_start: 0.03, burst_length: 15 }), "bursts 3% × 15");
   const engine = readFileSync("engine/src/netsim.rs", "utf8");
   assert.ok(engine.includes('"60 ms ±25 · loss 2% · 20000 kbps"'), "the engine's test still says the same");
+});
+
+test("a TCP relay reads its own values: the delay, the bandwidth, resets and half-open connections", () => {
+  // The same case as engine/src/netsim.rs: a 4G preset with a reset on a TCP relay.
+  const mixed = { ...fullProfile(), latency_ms: 60, jitter_ms: 25, loss: 0.005, reorder: 0.005, rate_kbps: 20000, reset: 0.01 };
+  assert.equal(impairNotation(forProtocol(mixed, "tcp")), "60 ms ±25 · reset 1% · 20000 kbps");
+  assert.equal(impairNotation(forProtocol(mixed, "udp")), "60 ms ±25 · loss 0.5% · reorder 0.5% · 20000 kbps");
+  for (const preset of IMPAIR_PRESETS) {
+    assert.equal(presetOf(presetProfile(preset, "tcp"), "tcp"), preset, `${preset} for TCP`);
+    for (const { code, dict } of LOCALES) assert.ok(dict[`ns.presetHintTcp.${preset}`], `${code}: ${preset}'s TCP tooltip`);
+  }
+  assert.equal(presetOf(presetProfile("4g"), "tcp"), "4g", "UDP's 4G, read by a TCP relay, is TCP's 4G");
+  assert.equal(presetOf(presetProfile("intermittent", "tcp"), "udp"), null, "an intermittent stream is not an intermittent datagram link");
+  assert.equal(changedProfile(presetProfile("4g", "tcp"), { stall: 0.01 }, "tcp").name, "", "edited, it is not 4G any more");
+  assert.equal(changedProfile(presetProfile("4g", "tcp"), { loss: 0.3 }, "tcp").name, "4g", "a value a TCP relay does not read changes nothing it does");
+  assert.equal(profileLabel(presetProfile("satellite", "tcp"), (preset) => `«${preset}»`, "tcp"), "«satellite»");
+  const engine = readFileSync("engine/src/netsim.rs", "utf8");
+  assert.ok(engine.includes('"60 ms ±25 · reset 1% · 20000 kbps"'), "the engine's test still says the same");
 });
 
 test("Route through impairment: a relay in front of the node, the node pointed at it, the wires kept", () => {

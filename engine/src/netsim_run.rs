@@ -1,9 +1,10 @@
-//! The impairment relays of a run: one per *Impairment* node, opened before
-//! the first step like the run's emulators and listeners (a taken port is an
-//! error at that node, before any traffic), impairing with the node's profile
-//! until a *Change impairment* step switches it, and closed with the run —
-//! a stopped or failed run leaves nothing impaired behind. Each relay draws
-//! from the run's seed, so the same seed and traffic drop the same packets.
+//! The impairment relays of a run: one per *Impairment* node, UDP or TCP,
+//! opened before the first step like the run's emulators and listeners (a
+//! taken port is an error at that node, before any traffic), impairing with
+//! the node's profile until a *Change impairment* step switches it, and closed
+//! with the run — a stopped or failed run leaves nothing impaired behind, and
+//! a TCP relay's connections close with it. Each relay draws from the run's
+//! seed, so the same seed and traffic drop the same packets.
 
 use std::collections::{BTreeMap, HashMap};
 use std::net::SocketAddr;
@@ -14,7 +15,7 @@ use crate::host::Host;
 use super::error::{EngineError, EngineResult, Field};
 use super::experiment::{Node, NodeKind};
 use super::experiment_data as data;
-use super::netsim::{self, ImpairmentSummary, Relay};
+use super::netsim::{ImpairmentSummary, Opened, Relay, RelayProtocol};
 
 /// Aborts a relay of the run when the run lets go of it.
 struct Serving(tokio::task::AbortHandle);
@@ -79,19 +80,19 @@ pub fn addresses(listen: &str, target: &str, params: &BTreeMap<String, String>) 
 pub async fn arm_run(host: &Host, nodes: &[Node], params: &BTreeMap<String, String>, seed: u64, job: u64) -> EngineResult<RunRelays> {
     let mut armed = RunRelays::default();
     for node in nodes {
-        let NodeKind::Impairment { listen, target, profile } = &node.kind else { continue };
+        let NodeKind::Impairment { listen, target, profile, protocol } = &node.kind else { continue };
         let at = |error: EngineError| error.at(&node.id);
         let (listen_address, target_address) = addresses(listen, target, params).map_err(at)?;
-        let (downstream, upstream) = netsim::open(listen_address, &listen_address.to_string(), target_address, &target_address.to_string())
+        let opened = Opened::open(*protocol, listen_address, &listen_address.to_string(), target_address, &target_address.to_string())
             .await
             .map_err(|error| at(error.in_field(Field::new("listen"))))?;
-        let local = downstream.local_addr().unwrap_or(listen_address);
-        let relay = Relay::new(local, target_address, profile.clone(), seed);
+        let local = opened.local().unwrap_or(listen_address);
+        let relay = Relay::new(local, target_address, *protocol, profile.clone(), seed);
         // A relay that stops relaying keeps why: its steps fail with it and the report says so.
         let serving = tokio::spawn({
             let (relay, host, id) = (relay.clone(), host.clone(), node.id.clone());
             async move {
-                let error = relay.clone().serve(host, job, id, downstream, upstream).await;
+                let error = relay.clone().run(host, job, id, opened).await;
                 relay.fail(error);
             }
         });
@@ -101,47 +102,54 @@ pub async fn arm_run(host: &Host, nodes: &[Node], params: &BTreeMap<String, Stri
     Ok(armed)
 }
 
-/// Two UDP addresses one would take from the other: the same port on the
-/// same IP, or on any IP when either is unspecified (`0.0.0.0` receives what
-/// `127.0.0.1` would, and the OS lets both bind).
+/// Two addresses one would take from the other: the same port on the same
+/// IP, or on any IP when either is unspecified (`0.0.0.0` receives what
+/// `127.0.0.1` would, and the OS may let both bind).
 fn clash(a: SocketAddr, b: SocketAddr) -> bool {
     a.port() == b.port() && (a.ip() == b.ip() || a.ip().is_unspecified() || b.ip().is_unspecified())
 }
 
-/// No two of a run's sockets on one UDP port: a relay's listen port is not
-/// another relay's, an OSC or UDP emulator's, or a wait's. And no relay
-/// forwards into itself, directly or through other relays: its packets
-/// would circle on loopback.
+/// No two of a run's sockets on one port of one protocol: a UDP relay's
+/// listen port is not another UDP relay's, an OSC or UDP emulator's, or a
+/// wait's; a TCP relay's is not another TCP relay's, an HTTP, TCP or MQTT
+/// emulator's, or a *Wait for HTTP request*'s. And no relay forwards into
+/// itself, directly or through other relays: its traffic would circle on
+/// loopback.
 pub fn check_run_binds(nodes: &[Node], params: &BTreeMap<String, String>) -> EngineResult<()> {
-    let mut taken: Vec<(SocketAddr, &str)> = Vec::new();
+    let mut taken: Vec<(RelayProtocol, SocketAddr, &str)> = Vec::new();
     for node in nodes {
-        let bind = match &node.kind {
-            NodeKind::Emulator { emulator } if !emulator.kind.over_tcp() => emulator.bind.trim().parse().ok(),
-            kind => kind.bind().and_then(|bind| bind.trim().parse::<SocketAddr>().ok()).filter(|address| address.port() != 0),
+        let (protocol, bind) = match &node.kind {
+            NodeKind::Emulator { emulator } => (if emulator.kind.over_tcp() { RelayProtocol::Tcp } else { RelayProtocol::Udp }, emulator.bind.trim().parse().ok()),
+            NodeKind::WaitHttp { bind, .. } => (RelayProtocol::Tcp, bind.trim().parse().ok()),
+            kind => (RelayProtocol::Udp, kind.bind().and_then(|bind| bind.trim().parse::<SocketAddr>().ok()).filter(|address| address.port() != 0)),
         };
         if let Some(bind) = bind {
-            taken.push((bind, &node.id));
+            taken.push((protocol, bind, &node.id));
         }
     }
-    let mut relays: Vec<(SocketAddr, SocketAddr, &str)> = Vec::new();
+    let mut relays: Vec<(RelayProtocol, SocketAddr, SocketAddr, &str)> = Vec::new();
     for node in nodes {
-        let NodeKind::Impairment { listen, target, .. } = &node.kind else { continue };
+        let NodeKind::Impairment { listen, target, protocol, .. } = &node.kind else { continue };
         let Ok((listen, target)) = addresses(listen, target, params) else { continue };
-        let other = taken.iter().map(|(bind, id)| (*bind, *id)).chain(relays.iter().map(|(bind, _, id)| (*bind, *id))).find(|(bind, _)| clash(*bind, listen));
-        if let Some((_, other)) = other {
+        let other = taken
+            .iter()
+            .map(|(protocol, bind, id)| (*protocol, *bind, *id))
+            .chain(relays.iter().map(|(protocol, bind, _, id)| (*protocol, *bind, *id)))
+            .find(|(other, bind, _)| other == protocol && clash(*bind, listen));
+        if let Some((_, _, other)) = other {
             return Err(EngineError::new("impair.bind_taken").with("target", listen).with("other", other).in_field(Field::new("listen")).at(&node.id));
         }
-        relays.push((listen, target, &node.id));
+        relays.push((*protocol, listen, target, &node.id));
     }
-    // Follow each relay's target through the relays it reaches; back at the start is a loop.
-    for (start, (_, target, id)) in relays.iter().enumerate() {
+    // Follow each relay's target through the relays of its protocol it reaches; back at the start is a loop.
+    for (start, (protocol, _, target, id)) in relays.iter().enumerate() {
         let mut next = *target;
         for _ in 0..relays.len() {
-            let Some(hop) = relays.iter().position(|(listen, _, _)| clash(*listen, next)) else { break };
+            let Some(hop) = relays.iter().position(|(other, listen, _, _)| other == protocol && clash(*listen, next)) else { break };
             if hop == start {
                 return Err(EngineError::new("impair.loop").with("target", target).in_field(Field::new("target")).at(id));
             }
-            next = relays[hop].1;
+            next = relays[hop].2;
         }
     }
     Ok(())
@@ -193,5 +201,21 @@ mod tests {
         assert_eq!(round.code, "impair.loop", "a → b → a");
         // Two relays in a row in front of a device are fine.
         assert!(check_run_binds(&[relay("a", "127.0.0.1:9010", "127.0.0.1:9011"), relay("b", "127.0.0.1:9011", "127.0.0.1:9000")], &params).is_ok());
+    }
+
+    #[test]
+    fn a_tcp_relay_shares_no_tcp_port_and_may_share_a_udp_one() {
+        let params = BTreeMap::new();
+        let tcp = |id: &str, listen: &str, target: &str| node(id, json!({ "type": "impairment", "listen": listen, "target": target, "protocol": "tcp" }));
+        let udp = |id: &str, listen: &str| node(id, json!({ "type": "impairment", "listen": listen, "target": "127.0.0.1:9000" }));
+        assert!(check_run_binds(&[tcp("a", "127.0.0.1:9010", "127.0.0.1:9000"), udp("b", "127.0.0.1:9010")], &params).is_ok(), "one port, two protocols");
+        let api = node("api", json!({ "type": "emulator", "emulator": { "name": "API", "bind": "127.0.0.1:18080", "protocol": "http", "routes": [] } }));
+        let taken = check_run_binds(&[api, tcp("relay", "127.0.0.1:18080", "127.0.0.1:9000")], &params).unwrap_err();
+        assert_eq!((taken.code.as_str(), taken.params["other"].as_str()), ("impair.bind_taken", "api"));
+        let wait = node("hook", json!({ "type": "wait_http", "bind": "127.0.0.1:18081" }));
+        assert_eq!(check_run_binds(&[wait, tcp("relay", "0.0.0.0:18081", "127.0.0.1:9000")], &params).unwrap_err().params["other"], "hook");
+        let round = check_run_binds(&[tcp("a", "127.0.0.1:9010", "127.0.0.1:9011"), tcp("b", "127.0.0.1:9011", "127.0.0.1:9010")], &params).unwrap_err();
+        assert_eq!(round.code, "impair.loop");
+        assert!(check_run_binds(&[tcp("a", "127.0.0.1:9010", "127.0.0.1:9011"), udp("b", "127.0.0.1:9011")], &params).is_ok(), "a UDP relay is not on a TCP relay's way");
     }
 }

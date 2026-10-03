@@ -149,7 +149,7 @@
           "http_cookies": { "arguments": {}, "returns": "the screen's cookie jar: [{name, value, domain, host_only, path, expires, secure, http_only, same_site}]" },
           "http_cookies_clear": { "arguments": {}, "returns": "null" },
           "http_burst_start": { "arguments": { "config": "BurstConfig" }, "returns": "JobInfo", "job": true },
-          "netsim_start": { "arguments": { "config": "ProxyConfig" }, "returns": "JobInfo", "job": true },
+          "netsim_start": { "arguments": { "config": "ProxyConfig: {listen, target, profile, seed?, protocol?: udp|tcp}" }, "returns": "JobInfo", "job": true },
           "netsim_set_profile": { "arguments": { "jobId": "integer", "profile": "ImpairProfile" }, "returns": "null: the running relay impairs with the profile from now on" },
           "storm_start": { "arguments": { "config": "StormConfig" }, "returns": "JobInfo", "job": true },
           "scan_start": { "arguments": { "config": "ScanConfig" }, "returns": "JobInfo", "job": true },

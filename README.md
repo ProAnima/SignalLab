@@ -40,7 +40,7 @@ choice. See [Interface & localization](#interface--localization).
 | **Inspector** | One timeline for every module, in the bottom panel next to the console so it is there on every screen: each OSC send, monitor packet, beacon, discovery probe and impaired relay frame, decoded, with a hex dump and the relay's verdict on it. A frame keeps its bytes whole, up to 256 KiB (the list shows the first KiB, *Show all* the rest; the capture holds up to 64 MiB, the oldest frames making room), so *Save as signal* replays it byte for byte. Its tab shows when capture is on and how many frames it holds; the panel can be maximised. Filter by protocol / direction / text, then export the buffer — every byte kept — to `.jsonl` or `.txt`. |
 | **WebSocket** | Connect to a `ws://` or `wss://` service with the **headers and subprotocols** it expects, send text or bytes, and read every message as it comes, newest last, JSON formatted; the close handshake and who closed, with what code. In experiments: **WebSocket connect**, **send**, **Wait for WebSocket** and **close** — a token extracted earlier can be in the URL or a header. |
 | **HTTP** | Inspect a single request/response (status, latency, headers, body) — with **Basic, Bearer or Digest** authentication (the server's 401 challenge answered, MD5 or SHA-256) and a **cookie jar** that sends back what servers set, as a browser does — then run a concurrent **load burst** — as fast as its workers go, or at a fixed **rate** where a request that finds every worker busy is counted as *missed* rather than sent late — with live RPS, **p50/p90/p95/p99** and min/avg/max latency. Ramps, steps, spikes and thresholds are an HTTP node's *Load* in an experiment. |
-| **Impairment** | A UDP relay that sits between a client and a target and injects **latency, jitter, packet loss, bursts of loss, duplication, corruption, reordering and a bandwidth limit**, or lets nothing through — a software network conditioner. Presets (*LAN*, *Busy Wi-Fi*, *4G*, *Satellite*, *Intermittent*, *Offline*) set it in one click, and an edit applies while it runs, without dropping the port. Every decision is seeded: the same traffic meets the same fate. |
+| **Impairment** | A relay that sits between a client and a target — a software network conditioner. Over **UDP** it injects **latency, jitter, packet loss, bursts of loss, duplication, corruption, reordering and a bandwidth limit**, or lets nothing through. Over **TCP** each connection is joined to one of its own to the target and both streams are **delayed** (in order, whatever the jitter), **held to a bandwidth** (the sender is slowed down, nothing is dropped), **reset** or **left half-open** — nothing more goes through and nobody is told — or paused while offline. Presets (*LAN*, *Busy Wi-Fi*, *4G*, *Satellite*, *Intermittent*, *Offline*) set it in one click for either protocol, and an edit applies while it runs, without dropping the port. Every decision is seeded: the same traffic meets the same fate. |
 | **Storm** | A controlled **UDP/TCP traffic generator** for stress-testing your own servers, with live pps / Mbps metering and a bounded duration. |
 | **Scanner** | Concurrency-bounded **TCP connect port scan** with best-effort service banners and progress. |
 
@@ -120,9 +120,10 @@ emulator, the run's own listener answers 204. An OSC or UDP emulator shares its 
 with the run's waits, and an MQTT broker emulator is what *Wait for MQTT* and the MQTT
 node talk to — gear tested against a broker of the run's own.
 
-**Faults on a schedule.** An **Impairment** node puts an impairment relay in front of a
-device for the whole run (*Route through impairment* on an OSC or UDP node inserts one
-and points the node at it); **Change impairment** switches it to another profile from
+**Faults on a schedule.** An **Impairment** node puts an impairment relay — UDP, or TCP
+in front of an API, a broker or a TCP device — in front of a dependency for the whole
+run (*Route through impairment* on an OSC or UDP node inserts one and points the node at
+it); **Change impairment** switches it to another profile from
 that step on, and **Emulator down/up** takes one of the run's emulators down — HTTP meets
 503, a closed connection or no answer — and brings it back. A branch of Delays and
 switches next to the traffic reads as a schedule: clean, lossy, offline, clean again
@@ -233,7 +234,8 @@ engine/src/              the Rust engine (crate signal-lab-engine, no Tauri)
   latency.rs             latency percentiles in constant memory
   load.rs                an HTTP node under load: profiles, schedule, metrics, thresholds
   experiment_compare.rs  run history from the reports, two runs compared
-  netsim.rs              UDP impairment relay: profiles, seeded decisions, phases
+  netsim.rs              impairment relay: profiles, seeded decisions, phases; UDP datagrams
+  netsim_tcp.rs          the TCP relay: streams delayed in order, throttled, reset, half-open
   netsim_run.rs          a run's relays, opened before the first step
   storm.rs               UDP/TCP load generator
   mqtt_codec.rs          self-contained MQTT 3.1.1 codec (no deps)

@@ -28,10 +28,14 @@ export async function selectNode(editor: HTMLElement, type: Key, index = 0, expe
 }
 
 export async function runAndWait(editor: HTMLElement, timeout = 15000) {
+  // Every run writes a report of its own: an outcome beside the last run's report is the last run's,
+  // still shown while this one validates and saves (a run again in the same editor).
+  const report = () => editor.querySelector(".experiment-report")?.getAttribute("data-tip") ?? "";
+  const before = report();
   await click(button(editor, T("exp.run")));
   const outcome = await until("the run to end", () => {
     const text = textOf(editor.querySelector(".experiment-timeline-title strong"));
-    return (text === T("exp.passed") || text.startsWith(T("exp.failed"))) && hasButton(editor, T("exp.run")) && text;
+    return (text === T("exp.passed") || text.startsWith(T("exp.failed"))) && hasButton(editor, T("exp.run")) && report() !== before && text;
   }, timeout);
   const rows = [...editor.querySelectorAll(".experiment-events button")].map(textOf);
   return { outcome, rows };

@@ -122,9 +122,10 @@ const KINDS: &[Kind] = &[
     Kind {
         kind: "impairment",
         fields: &[
-            ("listen", "IP:port the system under test sends to instead of the target; parameters only (opened before the first step)"),
+            ("listen", "IP:port the system under test sends to (or connects to) instead of the target; parameters only (opened before the first step)"),
             ("target", "IP:port it forwards to (replies come back the same way); parameters only"),
             ("profile", "the impairment from the first step on (see \"impairment profile\"); the flow passes at once"),
+            ("protocol", "udp (default): datagrams; tcp: each connection joined to one to the target, its streams impaired"),
         ],
         // The profile written out whole, as the engine keeps it.
         example: || json!({ "listen": "127.0.0.1:9010", "target": "{{device}}", "profile": profile(json!({ "name": "lan", "latency_ms": 1, "jitter_ms": 1 })) }),
@@ -236,9 +237,10 @@ fn emulators() -> Value {
         },
         "templates": "{{counter}} is the rule's hit number; {{uuid}}, {{now}}, {{now.iso}}, {{random_int(a, b)}} as in experiments",
         "impairment profile": {
-            "fields": "{name (a label: lan, wifi, 4g, satellite, intermittent, offline, or your own), latency_ms, jitter_ms, loss, duplicate, corrupt, reorder (probabilities 0..1), rate_kbps (0: no limit; packets queue, past a second they are dropped as throttled), burst_start (0..1) and burst_length (packets, mean): bursts of loss, offline (nothing gets through)}",
+            "fields": "{name (a label: lan, wifi, 4g, satellite, intermittent, offline, or your own), latency_ms, jitter_ms, loss, duplicate, corrupt, reorder (probabilities 0..1), rate_kbps (0: no limit; packets queue, past a second they are dropped as throttled), burst_start (0..1) and burst_length (packets, mean): bursts of loss, offline (nothing gets through), reset and stall (TCP, probabilities 0..1 per chunk of a stream: the connection reset, or left half-open)}",
+            "tcp": "A TCP relay reads latency_ms and jitter_ms (each chunk delayed, a stream kept in order), rate_kbps (each stream held to it; past a second of queue the sender is slowed down, nothing is dropped), offline (nothing flows, new connections wait), reset and stall; loss, bursts, duplicate, corrupt and reorder are a datagram's and are not read.",
             "seed": "every decision draws from the run's seed: the same seed and the same traffic drop the same packets",
-            "report": "impairments: per impairment node, counts in all and a phase per profile it had (from_ms, to_ms, received, forwarded, dropped, throttled, duplicated, corrupted, reordered)",
+            "report": "impairments: per impairment node, counts in all and a phase per profile it had (from_ms, to_ms, received, forwarded, dropped, throttled, duplicated, corrupted, reordered; over TCP also connections, reset, stalled)",
         },
         "example": (KINDS.iter().find(|kind| kind.kind == "emulator").map(|kind| (kind.example)()).unwrap_or_default())["emulator"].clone(),
     })

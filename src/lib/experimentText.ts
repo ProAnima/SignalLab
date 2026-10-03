@@ -75,7 +75,7 @@ function summary(node: ExperimentNode, t: Translate): string {
     case "wait_mqtt": return `${node.topic} ⇠ ${node.host}:${node.port} · ${node.timeout_ms} ms`;
     case "wait_http": return `${anyMethod(node.method)} ${node.path} ⇠ ${bindPort(node.bind)} · ${node.timeout_ms} ms`;
     case "emulator": return `${node.emulator.protocol.toUpperCase()} ${bindPort(node.emulator.bind)} · ${node.emulator.name}`;
-    case "impairment": return `${bindPort(node.listen)} → ${node.target} · ${presetLabel(node.profile, t)}`;
+    case "impairment": return `${node.protocol === "tcp" ? "TCP " : ""}${bindPort(node.listen)} → ${node.target} · ${presetLabel(node.profile, t, node.protocol)}`;
     case "impairment_change": return `${node.relay || "?"} → ${presetLabel(node.profile, t)}`;
     case "emulator_state": return t(node.down ? "exp.emulatorDownSummary" : "exp.emulatorUpSummary", { name: node.emulator || "?" });
     case "ws_connect": return node.url;
@@ -87,7 +87,7 @@ function summary(node: ExperimentNode, t: Translate): string {
 }
 
 /** An impairment profile as the canvas names it: a preset in the reader's language, else what it does. */
-const presetLabel = (profile: Parameters<typeof profileLabel>[0], t: Translate) => profileLabel(profile, (preset) => t(`ns.preset.${preset}`));
+const presetLabel = (profile: Parameters<typeof profileLabel>[0], t: Translate, protocol?: Parameters<typeof profileLabel>[2]) => profileLabel(profile, (preset) => t(`ns.preset.${preset}`), protocol);
 
 /** A node as the reader knows it: its type. */
 export const nodeLabel = (type: NodeType, t: Translate): string => t(NODE_CATALOG[type].title);

@@ -197,7 +197,7 @@ export type ExperimentNode = {
   /** A request to the run's HTTP emulator on `bind`, or to a listener of the run's own that answers 204. */
   | { type: "wait_http"; bind: string; method: string; path: string; when: Condition[]; timeout_ms: number; variable: string }
   /** A UDP impairment relay for the whole run: `listen` → `target`; addresses take parameters only. */
-  | { type: "impairment"; listen: string; target: string; profile: ImpairProfile }
+  | { type: "impairment"; listen: string; target: string; profile: ImpairProfile; protocol?: RelayProtocol }
   /** The run's Impairment `relay` (a node id) impairs with `profile` from now on. */
   | { type: "impairment_change"; relay: string; profile: ImpairProfile }
   /** The run's Emulator `emulator` (a node id) goes down, or comes back up. */
@@ -379,13 +379,21 @@ export interface ImpairProfile {
   burst_start?: number;
   burst_length?: number;
   offline?: boolean;
+  /** TCP: the chance a chunk of a stream resets its connection. */
+  reset?: number;
+  /** TCP: the chance a chunk leaves its connection half-open. */
+  stall?: number;
 }
+/** What a relay carries: datagrams, or TCP streams. */
+export type RelayProtocol = "udp" | "tcp";
 
 export interface ProxyConfig {
   listen: string;
   target: string;
   profile: ImpairProfile;
   seed?: number | null;
+  /** Absent: UDP. */
+  protocol?: RelayProtocol;
 }
 
 export interface StormConfig {
@@ -648,6 +656,8 @@ export interface BurstProgress {
 export interface ProxyStat {
   job_id: number; ts: number; received: number; forwarded: number; dropped: number; throttled: number;
   duplicated: number; corrupted: number; reordered: number; bytes: number;
+  /** TCP: connections taken, reset, left half-open (absent while 0). */
+  connections?: number; reset?: number; stalled?: number;
   /** The profile it impairs with now, as the timeline names it. */
   profile: string;
 }

@@ -12,6 +12,16 @@ release notes — so what is written here is what users read. See
 
 ### Added
 
+- **TCP impairment.** The Impairment screen and the experiment's Impairment node
+  take a protocol: over TCP each connection to the relay is joined to one of its
+  own to the target, and both streams are delayed (in order, whatever the
+  jitter), held to a bandwidth limit (the sender slows down; nothing is dropped),
+  reset (both sides get a reset) or left half-open (nothing more goes through,
+  and nobody is told), or paused while offline — every decision drawn from the
+  seed. The presets have TCP versions; the screen counts connections, resets,
+  half-open connections and how often a stream was held back; a run's report
+  counts them per phase, and *Change impairment* switches a TCP relay too.
+
 - **Load on an HTTP node.** An experiment's HTTP request can run under a
   profile — constant, ramp, steps, spike or random (Poisson) arrivals, up to
   100 000 requests a second and 512 at once — drawn in the properties before it

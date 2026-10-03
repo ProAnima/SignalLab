@@ -11,7 +11,7 @@ use super::experiment_data::{CompareOp, ExtractFrom, Param, Profile};
 use super::http::HttpRequest;
 use super::load::Load;
 use super::matching::{ArgRule, UdpMode};
-use super::netsim::ImpairProfile;
+use super::netsim::{ImpairProfile, RelayProtocol};
 use super::osc_codec::OscArg;
 use super::template::Rng;
 
@@ -21,7 +21,7 @@ pub const VERSION: u32 = 9;
 /// no repeats or loops, 5 had no emulators or HTTP waits, 6 no impairments
 /// or emulator switches, 7 no WebSocket nodes, HTTP authentication or a
 /// cookie jar (off for them, so they run as before), 8 no load on an HTTP
-/// node; serde defaults supply what is missing. Each new version exists so
+/// node or TCP impairment; serde defaults supply what is missing. Each new version exists so
 /// that an older Signal Lab refuses a newer file instead of silently dropping
 /// those settings.
 pub const LEGACY_VERSIONS: &[u32] = &[1, 2, 3, 4, 5, 6, 7, 8];
@@ -349,14 +349,17 @@ pub enum NodeKind {
         #[serde(default = "default_request_variable")]
         variable: String,
     },
-    /// A UDP impairment relay for the whole run — clients send to `listen`,
-    /// it forwards to `target` and back — opened before the first step and
-    /// impairing with `profile` until a *Change impairment* switches it.
+    /// An impairment relay for the whole run — clients send to (or connect
+    /// to) `listen`, it forwards to `target` and back — opened before the
+    /// first step and impairing with `profile` until a *Change impairment*
+    /// switches it. Datagrams by default; TCP streams with `protocol: tcp`.
     Impairment {
         listen: String,
         target: String,
         #[serde(default)]
         profile: ImpairProfile,
+        #[serde(default, skip_serializing_if = "RelayProtocol::is_udp")]
+        protocol: RelayProtocol,
     },
     /// The run's Impairment `relay` (its node id) impairs with `profile` from now on.
     ImpairmentChange {

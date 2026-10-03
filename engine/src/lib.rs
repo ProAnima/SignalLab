@@ -47,6 +47,7 @@ pub mod mqtt_dial;
 pub mod net;
 pub mod netsim;
 pub mod netsim_run;
+pub mod netsim_tcp;
 pub mod osc;
 pub mod osc_codec;
 pub mod paths;

@@ -1,8 +1,10 @@
-//! Network impairment: a UDP relay that sits between a client and a target and
-//! impairs traffic in both directions — latency, jitter, loss, bursts of loss,
-//! duplication, corruption, reordering, a bandwidth limit, or nothing at all
-//! getting through. Point the client at the relay's listen port; it forwards
-//! to the real target and mangles traffic according to its profile.
+//! Network impairment: a relay that sits between a client and a target and
+//! impairs traffic in both directions. Over UDP — latency, jitter, loss,
+//! bursts of loss, duplication, corruption, reordering, a bandwidth limit, or
+//! nothing at all getting through; over TCP (`netsim_tcp`) — latency, jitter
+//! and a bandwidth limit on each stream, connections reset or left half-open,
+//! or nothing flowing. Point the client at the relay's listen port; it
+//! forwards to the real target and impairs traffic according to its profile.
 //!
 //! The profile can change while the relay runs (`Relay::set`), without
 //! rebinding: the Impairment screen applies an edit at once, and an
@@ -20,6 +22,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use crate::host::Host;
 use tokio::net::UdpSocket;
+use tokio::sync::watch;
 use tokio::task::JoinSet;
 
 use super::error::{EngineError, EngineResult, Field};
@@ -48,7 +51,29 @@ const MAX_PHASES: usize = 1000;
 /// Mixed into the seed, so the relay's draws never repeat a template's.
 const IMPAIR_STREAM: u64 = 0x696d_7061_6972_0001;
 
-/// What a relay does to every packet, in both directions.
+/// What a relay carries: datagrams, or TCP streams.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RelayProtocol {
+    #[default]
+    Udp,
+    Tcp,
+}
+
+impl RelayProtocol {
+    pub fn is_udp(&self) -> bool {
+        *self == RelayProtocol::Udp
+    }
+}
+
+fn is_zero_f64(value: &f64) -> bool {
+    *value == 0.0
+}
+
+/// What a relay does to every packet, in both directions. A TCP relay reads
+/// latency, jitter, the bandwidth limit, offline, `reset` and `stall`; loss,
+/// bursts, duplication, corruption and reordering are a datagram's (a TCP
+/// stream retransmits and orders itself), and `reset` and `stall` a stream's.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ImpairProfile {
     /// A name for the timeline and the report: a preset's key (`4g`), or a person's own.
@@ -85,6 +110,14 @@ pub struct ImpairProfile {
     /// Nothing gets through.
     #[serde(default)]
     pub offline: bool,
+    /// TCP: the probability 0..1 a chunk of a stream resets its connection
+    /// instead of going through — both sides get a reset.
+    #[serde(default, skip_serializing_if = "is_zero_f64")]
+    pub reset: f64,
+    /// TCP: the probability 0..1 a chunk leaves its connection half-open —
+    /// nothing more goes through either way, and neither side is told.
+    #[serde(default, skip_serializing_if = "is_zero_f64")]
+    pub stall: f64,
 }
 
 fn probability(value: f64, field: &'static str) -> EngineResult<()> {
@@ -108,7 +141,7 @@ impl ImpairProfile {
     pub fn check(&self) -> EngineResult<()> {
         within(self.latency_ms, 0.0, MAX_DELAY_MS, "latency_ms")?;
         within(self.jitter_ms, 0.0, MAX_DELAY_MS, "jitter_ms")?;
-        for (value, field) in [(self.loss, "loss"), (self.duplicate, "duplicate"), (self.corrupt, "corrupt"), (self.reorder, "reorder"), (self.burst_start, "burst_start")] {
+        for (value, field) in [(self.loss, "loss"), (self.duplicate, "duplicate"), (self.corrupt, "corrupt"), (self.reorder, "reorder"), (self.burst_start, "burst_start"), (self.reset, "reset"), (self.stall, "stall")] {
             probability(value, field)?;
         }
         if self.rate_kbps != 0.0 {
@@ -137,7 +170,7 @@ impl ImpairProfile {
         if self.latency_ms > 0.0 || self.jitter_ms > 0.0 {
             parts.push(if self.jitter_ms > 0.0 { format!("{} ms ±{}", self.latency_ms, self.jitter_ms) } else { format!("{} ms", self.latency_ms) });
         }
-        for (value, what) in [(self.loss, "loss"), (self.duplicate, "dup"), (self.corrupt, "corrupt"), (self.reorder, "reorder")] {
+        for (value, what) in [(self.loss, "loss"), (self.duplicate, "dup"), (self.corrupt, "corrupt"), (self.reorder, "reorder"), (self.reset, "reset"), (self.stall, "stall")] {
             if value > 0.0 {
                 parts.push(format!("{what} {}", percent(value)));
             }
@@ -149,6 +182,15 @@ impl ImpairProfile {
             parts.push(format!("{} kbps", self.rate_kbps));
         }
         if parts.is_empty() { "clean".into() } else { parts.join(" · ") }
+    }
+
+    /// What a relay of `protocol` reads of it: the other protocol's values are
+    /// left out, so its label and its counts say only what it does.
+    pub fn for_protocol(&self, protocol: RelayProtocol) -> ImpairProfile {
+        match protocol {
+            RelayProtocol::Udp => ImpairProfile { reset: 0.0, stall: 0.0, ..self.clone() },
+            RelayProtocol::Tcp => ImpairProfile { loss: 0.0, duplicate: 0.0, corrupt: 0.0, reorder: 0.0, burst_start: 0.0, burst_length: 0.0, ..self.clone() },
+        }
     }
 }
 
@@ -162,6 +204,9 @@ pub struct ProxyConfig {
     /// The draws' seed; `None`: a fresh one.
     #[serde(default)]
     pub seed: Option<u64>,
+    /// Datagrams (the default) or TCP streams.
+    #[serde(default)]
+    pub protocol: RelayProtocol,
 }
 
 /// What a relay did, in all or in one phase.
@@ -176,18 +221,28 @@ pub struct ImpairCounts {
     pub corrupted: u64,
     pub reordered: u64,
     pub bytes: u64,
+    /// TCP: connections taken, connections reset, connections left half-open.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub connections: u64,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub reset: u64,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub stalled: u64,
 }
 
 #[derive(Default)]
-struct Stats {
-    received: AtomicU64,
-    forwarded: AtomicU64,
-    dropped: AtomicU64,
-    throttled: AtomicU64,
+pub(crate) struct Stats {
+    pub(crate) received: AtomicU64,
+    pub(crate) forwarded: AtomicU64,
+    pub(crate) dropped: AtomicU64,
+    pub(crate) throttled: AtomicU64,
     duplicated: AtomicU64,
     corrupted: AtomicU64,
     reordered: AtomicU64,
-    bytes: AtomicU64,
+    pub(crate) bytes: AtomicU64,
+    pub(crate) connections: AtomicU64,
+    pub(crate) reset: AtomicU64,
+    pub(crate) stalled: AtomicU64,
 }
 
 impl Stats {
@@ -202,6 +257,9 @@ impl Stats {
             corrupted: load(&self.corrupted),
             reordered: load(&self.reordered),
             bytes: load(&self.bytes),
+            connections: load(&self.connections),
+            reset: load(&self.reset),
+            stalled: load(&self.stalled),
         }
     }
 }
@@ -244,6 +302,8 @@ struct PhaseLog {
 pub struct ImpairmentSummary {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub node: Option<String>,
+    #[serde(skip_serializing_if = "RelayProtocol::is_udp")]
+    pub protocol: RelayProtocol,
     pub listen: String,
     pub target: String,
     pub counts: ImpairCounts,
@@ -390,24 +450,29 @@ impl Tap {
 pub struct Relay {
     pub listen: SocketAddr,
     pub target: SocketAddr,
+    pub protocol: RelayProtocol,
     current: RwLock<Current>,
+    /// Told of every profile change: a TCP stream held while offline resumes at once.
+    changed: watch::Sender<u64>,
     /// In all: every phase's counters add up to these.
-    stats: Stats,
+    pub(crate) stats: Stats,
     in_flight: AtomicUsize,
     phases: Mutex<PhaseLog>,
     opened: Instant,
     /// When it opened, wall clock: the phases' times are from then.
     opened_ms: u64,
-    seed: u64,
+    pub(crate) seed: u64,
     failed: Mutex<Option<EngineError>>,
 }
 
 impl Relay {
-    pub(crate) fn new(listen: SocketAddr, target: SocketAddr, profile: ImpairProfile, seed: u64) -> Arc<Relay> {
+    pub(crate) fn new(listen: SocketAddr, target: SocketAddr, protocol: RelayProtocol, profile: ImpairProfile, seed: u64) -> Arc<Relay> {
         Arc::new(Relay {
             listen,
             target,
-            current: RwLock::new(Current { profile: Arc::new(profile), stats: Arc::default(), since_ms: 0 }),
+            protocol,
+            current: RwLock::new(Current { profile: Arc::new(profile.for_protocol(protocol)), stats: Arc::default(), since_ms: 0 }),
+            changed: watch::channel(0).0,
             stats: Stats::default(),
             in_flight: AtomicUsize::new(0),
             phases: Mutex::new(PhaseLog { closed: Vec::new(), earlier: 0 }),
@@ -422,6 +487,29 @@ impl Relay {
         self.current.read().unwrap().profile.clone()
     }
 
+    /// The profile now and the counters of its phase, read together: what a
+    /// packet or a chunk is decided by, and where it is counted.
+    pub(crate) fn now(&self) -> (Arc<ImpairProfile>, Arc<Stats>) {
+        let current = self.current.read().unwrap();
+        (current.profile.clone(), current.stats.clone())
+    }
+
+    /// Count one event in all and in the phase that decided it.
+    pub(crate) fn count(&self, phase: &Stats, field: fn(&Stats) -> &AtomicU64, by: u64) {
+        field(&self.stats).fetch_add(by, Ordering::Relaxed);
+        field(phase).fetch_add(by, Ordering::Relaxed);
+    }
+
+    /// Returns once the profile is not offline: at once, or when a change brings it back.
+    pub(crate) async fn until_online(&self) {
+        let mut changes = self.changed.subscribe();
+        while self.profile().offline {
+            if changes.changed().await.is_err() {
+                return;
+            }
+        }
+    }
+
     /// Impair with `profile` from now on: the phase so far is closed.
     pub fn set(&self, profile: ImpairProfile) {
         let mut log = self.phases.lock().unwrap();
@@ -433,7 +521,9 @@ impl Relay {
             log.earlier += 1;
         }
         log.closed.push(closed);
-        *current = Current { profile: Arc::new(profile), stats: Arc::default(), since_ms: now_ms };
+        *current = Current { profile: Arc::new(profile.for_protocol(self.protocol)), stats: Arc::default(), since_ms: now_ms };
+        drop(current);
+        self.changed.send_modify(|generation| *generation += 1);
     }
 
     /// It stopped relaying: why, kept for the steps that use it and the report.
@@ -458,6 +548,7 @@ impl Relay {
         phases.push(Phase { profile: current.profile.label(), from_ms: current.since_ms, to_ms: self.opened.elapsed().as_millis() as u64, counts: current.stats.counts() });
         ImpairmentSummary {
             node: node.map(str::to_string),
+            protocol: self.protocol,
             listen: self.listen.to_string(),
             target: self.target.to_string(),
             counts: self.stats.counts(),
@@ -676,17 +767,56 @@ struct ProxyStat {
     profile: String,
 }
 
+/// What a relay serves with: its two UDP sockets, or the TCP listener clients connect to.
+pub(crate) enum Opened {
+    Udp(Arc<UdpSocket>, Arc<UdpSocket>),
+    Tcp(tokio::net::TcpListener),
+}
+
+impl Opened {
+    /// Bind what a relay of `protocol` listens with (and, over UDP, the socket to the target).
+    pub(crate) async fn open(protocol: RelayProtocol, listen: SocketAddr, listen_text: &str, target: SocketAddr, target_text: &str) -> EngineResult<Opened> {
+        Ok(match protocol {
+            RelayProtocol::Udp => {
+                let (downstream, upstream) = open(listen, listen_text, target, target_text).await?;
+                Opened::Udp(downstream, upstream)
+            }
+            RelayProtocol::Tcp => Opened::Tcp(super::netsim_tcp::open(listen, listen_text).await?),
+        })
+    }
+
+    pub(crate) fn local(&self) -> Option<SocketAddr> {
+        match self {
+            Opened::Udp(downstream, _) => downstream.local_addr().ok(),
+            Opened::Tcp(listener) => listener.local_addr().ok(),
+        }
+    }
+}
+
+impl Relay {
+    /// Relay until it cannot any more; the error says why.
+    pub(crate) async fn run(self: Arc<Self>, host: Host, job_id: u64, name: String, opened: Opened) -> EngineError {
+        match opened {
+            Opened::Udp(downstream, upstream) => self.serve(host, job_id, name, downstream, upstream).await,
+            Opened::Tcp(listener) => self.serve_tcp(host, job_id, name, listener).await,
+        }
+    }
+}
+
 pub async fn start_proxy(host: Host, jobs: JobRegistry, hub: RelayHub, cfg: ProxyConfig) -> EngineResult<JobInfo> {
     cfg.profile.check()?;
     let listen = parse_bind(&cfg.listen)?;
     let target = parse_target(&cfg.target)?;
-    let (downstream, upstream) = open(listen, &cfg.listen, target, &cfg.target).await?;
-    let local = downstream.local_addr().unwrap_or(listen);
+    let opened = Opened::open(cfg.protocol, listen, &cfg.listen, target, &cfg.target).await?;
+    let local = opened.local().unwrap_or(listen);
 
     let id = jobs.next_id();
-    let info = JobInfo::new(id, "netsim", format!("Impair {} → {}", cfg.listen, cfg.target)).with("listen", &cfg.listen).with("target", &cfg.target);
+    let mut info = JobInfo::new(id, "netsim", format!("Impair {} → {}", cfg.listen, cfg.target)).with("listen", &cfg.listen).with("target", &cfg.target);
+    if cfg.protocol == RelayProtocol::Tcp {
+        info = info.with("protocol", "tcp");
+    }
     let seed = cfg.seed.unwrap_or_else(rand::random);
-    let relay = Relay::new(local, target, cfg.profile, seed);
+    let relay = Relay::new(local, target, cfg.protocol, cfg.profile, seed);
     hub.insert(id, &relay);
     let jobs_cl = jobs.clone();
 
@@ -705,7 +835,7 @@ pub async fn start_proxy(host: Host, jobs: JobRegistry, hub: RelayHub, cfg: Prox
         };
         guard.watch(reporter.abort_handle());
         // One name for every screen relay: the same seed gives the same drops in any job.
-        let error = relay.clone().serve(host.clone(), id, "relay".into(), downstream, upstream).await;
+        let error = relay.clone().run(host.clone(), id, "relay".into(), opened).await;
         drop(guard);
         host.emit("job://ended", serde_json::json!({ "job_id": id, "kind": "netsim", "error": error }));
         jobs_cl.finish(id);
@@ -732,7 +862,7 @@ mod tests {
     }
 
     fn start_relay(host: Host, jobs: JobRegistry, listen: String, target: String, profile: ImpairProfile) -> impl std::future::Future<Output = EngineResult<JobInfo>> {
-        start_proxy(host, jobs, RelayHub::new(), ProxyConfig { listen, target, profile, seed: Some(1) })
+        start_proxy(host, jobs, RelayHub::new(), ProxyConfig { listen, target, profile, seed: Some(1), protocol: RelayProtocol::Udp })
     }
 
     /// A throttled packet takes fewer draws than a sent one; the packets after
@@ -790,7 +920,7 @@ mod tests {
         let target = UdpSocket::bind("127.0.0.1:0").await.unwrap();
         let (downstream, upstream) = open("127.0.0.1:0".parse().unwrap(), "127.0.0.1:0", target.local_addr().unwrap(), "target").await.unwrap();
         let listen = downstream.local_addr().unwrap();
-        let relay = Relay::new(listen, target.local_addr().unwrap(), ImpairProfile { name: "slow".into(), latency_ms: 300.0, ..calm() }, 1);
+        let relay = Relay::new(listen, target.local_addr().unwrap(), RelayProtocol::Udp, ImpairProfile { name: "slow".into(), latency_ms: 300.0, ..calm() }, 1);
         let serving = tokio::spawn(relay.clone().serve(Host::new(Recorder::new(), Capture::new()), 0, "test".into(), downstream, upstream));
         let client = UdpSocket::bind("127.0.0.1:0").await.unwrap();
         client.send_to(b"one", listen).await.unwrap();
@@ -935,6 +1065,15 @@ mod tests {
         assert_eq!(ImpairProfile { name: "4g".into(), loss: 0.5, ..calm() }.label(), "4g");
         assert_eq!(ImpairProfile { latency_ms: 60.0, jitter_ms: 25.0, loss: 0.02, rate_kbps: 20000.0, ..calm() }.label(), "60 ms ±25 · loss 2% · 20000 kbps");
         assert_eq!(ImpairProfile { offline: true, ..calm() }.label(), "offline");
+        assert_eq!(field(ImpairProfile { reset: 1.5, ..calm() }), Some("reset".into()));
+        // Each protocol reads its own values: a 4G preset on a TCP relay keeps its delay and its rate.
+        let preset = ImpairProfile { latency_ms: 60.0, jitter_ms: 25.0, loss: 0.005, reorder: 0.005, rate_kbps: 20000.0, reset: 0.01, ..calm() };
+        assert_eq!(preset.for_protocol(RelayProtocol::Tcp).label(), "60 ms ±25 · reset 1% · 20000 kbps");
+        assert_eq!(preset.for_protocol(RelayProtocol::Udp).label(), "60 ms ±25 · loss 0.5% · reorder 0.5% · 20000 kbps");
+        // Absent in a document: zero, and nothing written back.
+        let profile: ImpairProfile = serde_json::from_value(serde_json::json!({ "latency_ms": 5 })).unwrap();
+        let written = serde_json::to_value(&profile).unwrap();
+        assert!(profile.reset == 0.0 && written.get("reset").is_none() && written.get("stall").is_none());
     }
 
     #[tokio::test]
@@ -943,7 +1082,7 @@ mod tests {
         let (jobs, hub) = (JobRegistry::new(), RelayHub::new());
         let target = UdpSocket::bind("127.0.0.1:0").await.unwrap();
         let listen_port = UdpSocket::bind("127.0.0.1:0").await.unwrap().local_addr().unwrap().port();
-        let cfg = ProxyConfig { listen: format!("127.0.0.1:{listen_port}"), target: target.local_addr().unwrap().to_string(), profile: ImpairProfile { name: "lan".into(), ..calm() }, seed: Some(3) };
+        let cfg = ProxyConfig { listen: format!("127.0.0.1:{listen_port}"), target: target.local_addr().unwrap().to_string(), profile: ImpairProfile { name: "lan".into(), ..calm() }, seed: Some(3), protocol: RelayProtocol::Udp };
         let job = start_proxy(host, jobs.clone(), hub.clone(), cfg).await.unwrap();
         let relay: SocketAddr = format!("127.0.0.1:{listen_port}").parse().unwrap();
         let client = UdpSocket::bind("127.0.0.1:0").await.unwrap();

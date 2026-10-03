@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { api, EV, type ImpairProfile, type JobInfo, type ProxyStat } from "../lib/api";
+import { api, EV, type ImpairProfile, type JobInfo, type ProxyStat, type RelayProtocol } from "../lib/api";
 import { useStore } from "../lib/store";
 import { useT, type TKey } from "../lib/i18n";
 import { useFieldIds, useJobStream } from "../lib/hooks";
 import { fmtBytes, fmtNum } from "../lib/format";
-import { fullProfile, impairNotation, IMPAIR_PRESETS, presetOf, type ImpairPreset } from "../lib/impairments";
+import { forProtocol, fullProfile, impairNotation, IMPAIR_PRESETS, presetOf, type ImpairPreset } from "../lib/impairments";
 import { ImpairProfileFields } from "../components/ImpairProfileFields";
 
 /** How long after the last change a running relay is told the new profile. */
@@ -15,6 +15,7 @@ export function NetsimView() {
   const t = useT();
   const fid = useFieldIds();
 
+  const [protocol, setProtocol] = useState<RelayProtocol>("udp");
   const [listen, setListen] = useState("0.0.0.0:9010");
   const [target, setTarget] = useState("127.0.0.1:9000");
   const [profile, setProfile] = useState<ImpairProfile>(() => fullProfile({ latency_ms: 40, jitter_ms: 15, loss: 0.02, duplicate: 0, corrupt: 0 }));
@@ -36,7 +37,7 @@ export function NetsimView() {
       applied.current = profile;
       api.netsimSetProfile(job.id, profile).then(
         // The preset's key, worded when the line is shown: the console re-renders in another language.
-        () => pushLog("info", "netsim", "log.netsimProfile", { profile: presetOf(profile) ?? impairNotation(profile) }),
+        () => pushLog("info", "netsim", "log.netsimProfile", { profile: presetOf(profile, job.params?.protocol === "tcp" ? "tcp" : "udp") ?? impairNotation(forProtocol(profile, job.params?.protocol === "tcp" ? "tcp" : "udp")) }),
         (error) => pushError("netsim", error),
       );
     }, APPLY_AFTER_MS);
@@ -47,7 +48,7 @@ export function NetsimView() {
     if (job) { stopJob(job.id); setJob(null); return; }
     try {
       setStat(null);
-      const started = await api.netsimStart({ listen, target, profile });
+      const started = await api.netsimStart({ listen, target, profile, protocol });
       applied.current = profile;
       setJob(started);
       const full = fullProfile(profile);
@@ -70,7 +71,14 @@ export function NetsimView() {
         <div className="panel">
           <p className="section-label">{t("ns.relay")}</p>
           <div className="field">
-            <label htmlFor={fid("listen")} data-tip={t("ns.howToBody", { listen: listen.replace("0.0.0.0", "127.0.0.1"), target })}>{t("ns.listen")}</label>
+            <label htmlFor={fid("protocol")} data-tip={t("ns.protocolHint")}>{t("ns.protocol")}</label>
+            <select id={fid("protocol")} value={protocol} onChange={(e) => setProtocol(e.target.value as RelayProtocol)} disabled={!!job}>
+              <option value="udp">UDP</option>
+              <option value="tcp">TCP</option>
+            </select>
+          </div>
+          <div className="field">
+            <label htmlFor={fid("listen")} data-tip={t(protocol === "tcp" ? "ns.howToBodyTcp" : "ns.howToBody", { listen: listen.replace("0.0.0.0", "127.0.0.1"), target })}>{t("ns.listen")}</label>
             <input id={fid("listen")} value={listen} onChange={(e) => setListen(e.target.value)} disabled={!!job} />
           </div>
           <div className="field">
@@ -78,8 +86,8 @@ export function NetsimView() {
             <input id={fid("target")} value={target} onChange={(e) => setTarget(e.target.value)} disabled={!!job} />
           </div>
 
-          <p className="section-label" style={{ marginTop: 20 }} data-tip={t("ns.profileHint")}>{t("ns.profile")}</p>
-          <ImpairProfileFields profile={profile} onChange={setProfile} />
+          <p className="section-label" style={{ marginTop: 20 }} data-tip={t(protocol === "tcp" ? "ns.profileHintTcp" : "ns.profileHint")}>{t("ns.profile")}</p>
+          <ImpairProfileFields profile={profile} onChange={setProfile} protocol={protocol} />
 
           <div className="btn-row">
             <button className={job ? "danger" : "primary"} onClick={toggle}>
@@ -91,7 +99,15 @@ export function NetsimView() {
         <div className="panel">
           <p className="section-label">{t("ns.live")}</p>
           {job && shownProfile && <p className="impair-now" role="status">{t("ns.now", { profile: shownProfile })}</p>}
-          <div className="metrics">
+          {(job?.params?.protocol ?? protocol) === "tcp" ? <div className="metrics">
+            <div className="metric"><div className="k">{t("ns.connections")}</div><div className="v">{fmtNum(stat?.connections ?? 0)}</div></div>
+            <div className="metric"><div className="k" data-tip={t("ns.chunksHint")}>{t("ns.received")}</div><div className="v">{fmtNum(stat?.received ?? 0)}</div></div>
+            <div className="metric"><div className="k" data-tip={t("ns.chunksHint")}>{t("ns.forwarded")}</div><div className="v accent">{fmtNum(stat?.forwarded ?? 0)}</div></div>
+            <div className="metric"><div className="k">{t("ns.resets")}</div><div className="v red">{fmtNum(stat?.reset ?? 0)}</div></div>
+            <div className="metric"><div className="k">{t("ns.stalled")}</div><div className="v amber">{fmtNum(stat?.stalled ?? 0)}</div></div>
+            <div className="metric"><div className="k" data-tip={t("ns.heldHint")}>{t("ns.held")}</div><div className="v amber">{fmtNum(stat?.throttled ?? 0)}</div></div>
+            <div className="metric"><div className="k">{t("common.volume")}</div><div className="v">{fmtBytes(stat?.bytes ?? 0)}</div></div>
+          </div> : <div className="metrics">
             <div className="metric"><div className="k">{t("ns.received")}</div><div className="v">{fmtNum(stat?.received ?? 0)}</div></div>
             <div className="metric"><div className="k">{t("ns.forwarded")}</div><div className="v accent">{fmtNum(stat?.forwarded ?? 0)}</div></div>
             <div className="metric"><div className="k">{t("ns.dropped")}</div><div className="v red">{fmtNum(stat?.dropped ?? 0)}</div></div>
@@ -100,7 +116,7 @@ export function NetsimView() {
             <div className="metric"><div className="k">{t("ns.corrupted")}</div><div className="v amber">{fmtNum(stat?.corrupted ?? 0)}</div></div>
             <div className="metric"><div className="k">{t("ns.reordered")}</div><div className="v amber">{fmtNum(stat?.reordered ?? 0)}</div></div>
             <div className="metric"><div className="k">{t("common.volume")}</div><div className="v">{fmtBytes(stat?.bytes ?? 0)}</div></div>
-          </div>
+          </div>}
         </div>
       </div>
     </div>
