@@ -24,6 +24,9 @@ Docker image — with the interface in a browser.
 - **Safe defaults.** Installers are unsigned until signing is set up (§6) and say so on
   the release page; the server listens on loopback unless given a token, and the image
   runs without privileges (§7).
+- **Two platforms.** Windows (x64) and Linux (x86_64 packages; the image for amd64 and
+  arm64) are built, toured and released. macOS, iOS and Android are not: nothing is
+  built for them and nothing claims they work (README, *Platforms*).
 
 ## 2. The local loop
 
@@ -377,7 +380,7 @@ health check). Ctrl+C or SIGTERM closes every page's connection, stops every job
 | --- | --- | --- |
 | `--network host` (Linux hosts) | Everything: OSC/UDP/TCP/HTTP/MQTT to the LAN, listening ports, broadcast, multicast, discovery | — |
 | Bridge (default), ports published | Unicast to reachable hosts; listeners on published ports (`-p 9000:9000/udp`) | Broadcast and multicast across the bridge; replies to unpublished ports |
-| Docker Desktop (Windows/macOS) | Unicast and published listeners | Host networking to the physical LAN — use the desktop app there |
+| Docker Desktop (Windows/macOS) | Unicast and published listeners | Host networking to the physical LAN — on Windows use the desktop app; macOS has none |
 
 ### Image
 

@@ -80,6 +80,8 @@ src/                      React UI
   lib/experimentData.ts   template suggestions, upstream variables, JSON paths
   lib/experimentText.ts   what the editor writes about a node: summaries, previews, glyphs (pure)
   lib/experimentWires.ts  wire geometry: paths, ports, the node nearest a point (pure)
+  lib/experimentClipboard.ts  several nodes: copy, paste (new ids, references, free ports), remove, move, frame (pure)
+  lib/clipboardSink.ts    the hidden field Ctrl+C/Ctrl+V pass through (WebKitGTK sends no paste to a button)
   lib/useExperiment*.ts   the editor's hooks: Run (run, stop, timeline), NodeTests (Send now,
                           preview), Canvas (drag, pan, wires), Shortcuts, Fullscreen
   components/Experiment*.tsx  the editor's parts: Toolbar, Canvas(+Node, Tools), Properties,

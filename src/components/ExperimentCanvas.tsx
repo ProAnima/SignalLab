@@ -12,7 +12,7 @@ import { ExperimentCanvasNode } from "./ExperimentCanvasNode";
  * ＋ and ×), the wire being drawn, and the nodes. What the pointer does is
  * `useExperimentCanvas`'s; this only draws.
  */
-export function ExperimentCanvas({ doc, scrollRef, zoom, width, height, busy, events, selected, invalidNode, linkStart, linkPoint, controls, onSelect, onEdit }: {
+export function ExperimentCanvas({ doc, scrollRef, zoom, width, height, busy, events, selection, invalidNode, linkStart, linkPoint, controls, onEdit }: {
   doc: Experiment;
   /** The scroll area, which `useExperimentViewport` measures and moves. */
   scrollRef: RefObject<HTMLDivElement | null>;
@@ -23,16 +23,17 @@ export function ExperimentCanvas({ doc, scrollRef, zoom, width, height, busy, ev
   busy: boolean;
   /** The steps of the current or last run, which colour nodes and wires. */
   events: ExperimentStep[];
-  selected: string | null;
+  /** Every selected node. */
+  selection: string[];
   invalidNode: string | null;
   linkStart: Anchor | null;
   linkPoint: { x: number; y: number } | null;
   controls: CanvasControls;
-  onSelect: (id: string) => void;
   onEdit: (id: string) => void;
 }) {
   const t = useT();
-  const { selectedWire, hoverWire, hover, selectWire, removeWire, openMenu, surface } = controls;
+  const { selectedWire, hoverWire, hover, selectWire, removeWire, openMenu, surface, band } = controls;
+  const chosen = useMemo(() => new Set(selection), [selection]);
   const nodeStates = useMemo(() => new Map(events.map((event) => [event.node_id, event.state])), [events]);
   const missing = useMemo(() => missingOutputs(doc), [doc]);
   const detached = useMemo(() => unreachableNodes(doc), [doc]);
@@ -71,8 +72,10 @@ export function ExperimentCanvas({ doc, scrollRef, zoom, width, height, busy, ev
               onClick={() => removeWire({ from: edge.from, port: p, to: edge.to })}>×</button>}
           </span>;
         })}
-        {doc.nodes.map((node) => <ExperimentCanvasNode key={node.id} node={node} selected={selected === node.id} state={nodeStates.get(node.id)}
-          detached={detached.has(node.id)} invalid={invalidNode === node.id} missing={missing} linkStart={linkStart} controls={controls} onSelect={onSelect} onEdit={onEdit} />)}
+        {doc.nodes.map((node) => <ExperimentCanvasNode key={node.id} node={node} selected={chosen.has(node.id)} state={nodeStates.get(node.id)}
+          detached={detached.has(node.id)} invalid={invalidNode === node.id} missing={missing} linkStart={linkStart} controls={controls} onEdit={onEdit} />)}
+        {band && <div className="experiment-band" aria-hidden="true" style={{ left: Math.min(band.a.x, band.b.x), top: Math.min(band.a.y, band.b.y),
+          width: Math.abs(band.b.x - band.a.x), height: Math.abs(band.b.y - band.a.y) }} />}
       </div>
     </div>
   </div>;

@@ -75,8 +75,19 @@ export function createNodeIn(doc: Experiment, type: NodeType, x: number, y: numb
   return node;
 }
 
-/** The port of `host:port`, or none. */
-const addressPort = (address: string) => { const port = Number(address.slice(address.lastIndexOf(":") + 1)); return Number.isInteger(port) && port > 0 ? [port] : []; };
+/** The port of `host:port`, or none (a parameter, say). */
+export const addressPort = (address: string) => { const port = Number(address.slice(address.lastIndexOf(":") + 1)); return Number.isInteger(port) && port > 0 ? [port] : []; };
+
+/** The ports a node's run opens: a relay, a wait, a reply, an emulator. */
+export function nodePorts(node: ExperimentNode): number[] {
+  switch (node.type) {
+    case "impairment": return addressPort(node.listen);
+    case "wait_osc": case "wait_udp": case "wait_http": return addressPort(node.bind);
+    case "osc": case "udp": return node.reply ? addressPort(node.reply.bind) : [];
+    case "emulator": return addressPort(node.emulator.bind);
+    default: return [];
+  }
+}
 
 /**
  * A loopback port, from 9010 up, that no socket of the document's run takes —
@@ -84,15 +95,7 @@ const addressPort = (address: string) => { const port = Number(address.slice(add
  * own target: a relay listening there would forward to itself).
  */
 export function freeRelayPort(doc: Experiment, avoid: string[] = []): number {
-  const taken = new Set([...avoid.flatMap(addressPort), ...doc.nodes.flatMap((node) => {
-    switch (node.type) {
-      case "impairment": return addressPort(node.listen);
-      case "wait_osc": case "wait_udp": case "wait_http": return addressPort(node.bind);
-      case "osc": case "udp": return node.reply ? addressPort(node.reply.bind) : [];
-      case "emulator": return addressPort(node.emulator.bind);
-      default: return [];
-    }
-  })]);
+  const taken = new Set([...avoid.flatMap(addressPort), ...doc.nodes.flatMap(nodePorts)]);
   let port = 9010;
   while (taken.has(port)) port += 1;
   return port;

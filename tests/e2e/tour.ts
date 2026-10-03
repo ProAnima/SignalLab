@@ -17,7 +17,7 @@ import { inspectArm, inspectCheck } from "./steps/inspector";
 import { broadcast, http, mqtt, netsimCheck, netsimStart, osc, oscStop, scan, storm } from "./steps/tools";
 import { library, signals } from "./steps/signals";
 import { emulatorMqtt, emulators } from "./steps/emulators";
-import { experimentAuth, experimentEmulator, experimentExport, experimentFaults, experimentHttp, experimentLoop, experimentOsc, experimentParallel, experimentRepeat } from "./steps/experiment";
+import { experimentAuth, experimentEmulator, experimentExport, experimentFaults, experimentHttp, experimentLoop, experimentOsc, experimentParallel, experimentRepeat, experimentSelection } from "./steps/experiment";
 import { layout } from "./steps/layout";
 import { experimentWs, websocket } from "./steps/websocket";
 import { feedback } from "./steps/about";
@@ -28,7 +28,7 @@ export type { Check };
 
 const STEPS: Record<string, (expect: Expect, args: StepArgs) => Promise<Record<string, unknown> | void>> = {
   shell, inspectArm, osc, signals, oscStop, mqtt, broadcast, netsimStart, netsimCheck, storm, scan, http, websocket,
-  library, emulators, emulatorMqtt, experimentHttp, experimentOsc, experimentRepeat, experimentLoop, experimentParallel, experimentEmulator, experimentFaults, experimentAuth, experimentWs, experimentExport, layout,
+  library, emulators, emulatorMqtt, experimentHttp, experimentOsc, experimentRepeat, experimentLoop, experimentParallel, experimentEmulator, experimentFaults, experimentAuth, experimentWs, experimentSelection, experimentExport, layout,
   inspectCheck, feedback, russian, cleanup,
 };
 

@@ -22,8 +22,8 @@ The interface is a dark instrument panel and ships **bilingual (English /
 Russian)**; it picks the language from the OS on first run and remembers the
 choice. See [Interface & localization](#interface--localization).
 
-> Windows is the first-class target; Android/iOS run as companions
-> (see [Mobile](#mobile-androidios)).
+> Runs on **Windows and Linux** — no macOS, iOS or Android builds (see
+> [Platforms](#platforms)).
 
 ---
 
@@ -138,8 +138,15 @@ screen you used last.
 
 Use **Nodes** to find an existing node by type, URL, payload, or ID and jump to it.
 **Arrange** places the graph from left to right; **Fit graph** shows its full extent.
-Duplicate creates an unconnected copy with independent parameters. Drafts are
-autosaved even while connections are incomplete.
+Select several nodes with `Shift`+click (or `Ctrl`+click), a frame drawn with
+`Shift` on the empty canvas, or `Ctrl+A`; dragging one of them moves them all.
+Duplicate (`Ctrl+D`) copies the selection with the wires between its nodes; Copy
+and Paste (`Ctrl+C`, `Ctrl+V`) do the same through the clipboard, into another
+experiment too. A copy's wiring to the rest of the graph is left to you; a copy
+that names another copied node (a WebSocket send, a Change impairment) names the
+copy, and a copied Emulator or Impairment listens on the next free port. Start
+and End are one of a kind and are not copied. Drafts are autosaved even while
+connections are incomplete.
 
 | Shortcut | Action |
 | --- | --- |
@@ -149,13 +156,17 @@ autosaved even while connections are incomplete.
 | `Ctrl+Enter` | Send the selected action node on its own |
 | `{{` or `Ctrl+Space` in a field | Suggest parameters, variables and generators |
 | `Ctrl+Z` / `Ctrl+Shift+Z` (also `Ctrl+Y`) | Undo / redo |
-| `Ctrl+D` | Duplicate selected action or check |
+| `Shift`/`Ctrl` + click | Add a node to the selection, or take it out |
+| `Shift` + drag on empty canvas | Select the nodes a frame touches |
+| `Ctrl+A` | Select every node |
+| `Ctrl+C` / `Ctrl+X` / `Ctrl+V` | Copy / cut / paste the selected nodes and the wires between them |
+| `Ctrl+D` | Duplicate the selected nodes |
 | `Ctrl+F` | Find and reveal a node |
 | `Ctrl+0` / `Ctrl+1` | Fit graph / actual size |
 | `Ctrl` + wheel | Zoom around the pointer |
-| Arrow keys on a focused node | Move by 5 px; hold `Shift` for 20 px |
-| `Delete` | Remove the selected action or check |
-| `Escape` | Leave a node's form for the canvas; close the active popup/connection; leave fullscreen/focus mode |
+| Arrow keys on a focused node | Move the selected nodes by 5 px; hold `Shift` for 20 px |
+| `Delete` | Remove the selected nodes (Start and End stay) |
+| `Escape` | Leave a node's form for the canvas; close the active popup/connection; drop a selection of several; leave fullscreen/focus mode |
 
 Text fields retain their native editing shortcuts. A node drag or field-edit
 session is one undo action. Up to 100 actions are kept for the current app
@@ -422,7 +433,7 @@ Then open `http://<host>:1430` and sign in with the token. The same as a Compose
 | --- | --- |
 | `--network host` (Linux) | everything: OSC/UDP/TCP/HTTP/MQTT to the LAN, listening ports, **broadcast, multicast, discovery** |
 | bridge with published ports | unicast, and listeners on published ports — no broadcast or multicast |
-| Docker Desktop (Windows/macOS) | unicast only — use the desktop app on those systems |
+| Docker Desktop (Windows/macOS) | unicast only — on Windows use the desktop app; macOS has none ([Platforms](#platforms)) |
 
 **Without Docker** (from a checkout): `npm run build`, then
 `cargo run --release -p signal-lab-server` — it serves `dist/` on
@@ -508,32 +519,18 @@ password for it.
 
 ---
 
-## Mobile (Android/iOS)
+## Platforms
 
-Mobile targets are companions — great for the **OSC sender/monitor/generator**,
-the **HTTP** tools and the **Inspector**. Raw traffic **storms**, **port scans**
-and **CIDR sweeps** are constrained by the iOS/Android network sandbox and should
-be run from the desktop build. Broadcast and multicast additionally need the
-local-network permission (iOS 14+ prompts for it; Android needs a held multicast
-lock for some devices), so treat them as desktop-first too.
+| | Released, toured end to end, supported |
+| --- | --- |
+| **Windows** 10/11, x64 | The desktop app (setup `.exe`, `.msi`) with `signallab` |
+| **Linux**, x86_64 | The desktop app (`.deb`, `.rpm`, AppImage; WebKitGTK 4.1) with `signallab` |
+| **Linux**, amd64 and arm64 | The server: the image `ghcr.io/proanima/signallab`, or `deploy/install.sh` |
 
-Initialize the mobile projects once:
-
-```bash
-npm run tauri android init
-npm run tauri ios init      # macOS only
-```
-
-Then run on a device/emulator:
-
-```bash
-npm run tauri android dev
-npm run tauri ios dev
-```
-
-Android needs the Android SDK/NDK + `ANDROID_HOME`; iOS needs Xcode. Because the
-generators use UDP, allow the app through the device firewall / local-network
-permission prompt.
+From a checkout the server also builds and runs on Windows (the tour runs it there).
+**Not built and not supported:** macOS, iOS and Android. Docker Desktop on a Mac
+runs the server image with unicast only (the table under
+[Run as a server](#run-as-a-server-browser-docker)); there is no desktop app for it.
 
 ---
 

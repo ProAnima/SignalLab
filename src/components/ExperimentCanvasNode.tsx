@@ -8,10 +8,11 @@ import { useT } from "../lib/i18n";
 const STATE_GLYPH: Record<string, string> = { running: "●", passed: "✓", retry: "↻", repeating: "⟳" };
 
 /**
- * One node on the canvas: its body (select, drag, double-click to edit), its
- * badges and the state of the run, its input and its outputs.
+ * One node on the canvas: its body (select — with Shift or Ctrl, one more —,
+ * drag, double-click to edit), its badges and the state of the run, its input
+ * and its outputs.
  */
-export function ExperimentCanvasNode({ node, selected, state, detached, invalid, missing, linkStart, controls, onSelect, onEdit }: {
+export function ExperimentCanvasNode({ node, selected, state, detached, invalid, missing, linkStart, controls, onEdit }: {
   node: ExperimentNode;
   selected: boolean;
   /** Where the run is with this node, if it got there. */
@@ -24,12 +25,11 @@ export function ExperimentCanvasNode({ node, selected, state, detached, invalid,
   missing: Set<string>;
   linkStart: Anchor | null;
   controls: CanvasControls;
-  onSelect: (id: string) => void;
   /** Open the node's fields and put the cursor in the first. */
   onEdit: (id: string) => void;
 }) {
   const t = useT();
-  const { endLink, onNodeDown, onNodeMove, endDrag, onPortDown, onPortMove, onPortUp, onPortCancel, onPortClick } = controls;
+  const { endLink, onNodeDown, onNodeMove, endDrag, onNodeClick, onNodeFocus, onPortDown, onPortMove, onPortUp, onPortCancel, onPortClick } = controls;
   const label = nodeLabel(node.type, t);
   const summary = nodeSummary(node, t);
   return <div data-node={node.id} data-group={NODE_CATALOG[node.type].group}
@@ -37,8 +37,8 @@ export function ExperimentCanvasNode({ node, selected, state, detached, invalid,
     style={{ left: node.x, top: node.y, width: NODE_W, height: NODE_H }}>
     <button className="experiment-node-body" data-node-id={node.id} data-tip={`${label} — ${summary}${detached ? `\n${t("exp.detachedHint")}` : ""}`}
       onPointerDown={(event) => onNodeDown(event, node)} onPointerMove={(event) => onNodeMove(event, node)} onPointerUp={endDrag} onPointerCancel={endDrag}
-      onFocus={() => { if (!linkStart) onSelect(node.id); }} onClick={() => { if (linkStart) endLink(node.id); else onSelect(node.id); }}
-      onDoubleClick={() => onEdit(node.id)}
+      onFocus={() => onNodeFocus(node)} onClick={(event) => onNodeClick(event, node)}
+      onDoubleClick={() => onEdit(node.id)} aria-pressed={selected}
       aria-label={`${label}: ${summary}`}>
       <div className="experiment-node-header">
         <span className="experiment-node-type">{label}</span>

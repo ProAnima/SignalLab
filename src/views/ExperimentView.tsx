@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useImperativeHandle, useRef, useState, type CSSProperties, type Ref } from "react";
 import type { Experiment, ExperimentNode, SignalBody } from "../lib/api";
-import { addAfter, addBranch, anchorAfter, arrangeNodes, createNode, createNodeIn, duplicateNode, placeAfter, removeNode, NODE_HEIGHT as NODE_H, type Anchor, type NodeType, type Port } from "../lib/experimentGraph";
+import { addAfter, addBranch, anchorAfter, arrangeNodes, createNode, createNodeIn, placeAfter, NODE_HEIGHT as NODE_H, type Anchor, type NodeType, type Port } from "../lib/experimentGraph";
+import { clipText, copyOf, freshCopy, moveNodes, placeCopy, readClip, removeNodes } from "../lib/experimentClipboard";
+import { copyNow } from "../lib/clipboardSink";
 import { useExperimentDocument } from "../lib/useExperimentDocument";
 import { useExperimentViewport } from "../lib/useExperimentViewport";
 import { useExperimentRun } from "../lib/useExperimentRun";
@@ -53,7 +55,15 @@ export function ExperimentView({ active, focusMode, setFocusMode, onShowFrame, o
   const t = useT();
   const { pushLog } = useStore();
   const { document: doc, history, dispatch, save: saveDocument, replace, saveState, validationError, profileIssues, revalidate, error: documentError } = useExperimentDocument();
-  const [selected, setSelected] = useState<string | null>(null);
+  // Every selected node in the order it was picked; the last one is the node
+  // the properties show and that A and Ctrl+Enter act on. A node an undo took
+  // away drops out of it.
+  const [picked, setPicked] = useState<string[]>([]);
+  const selection = doc ? picked.filter((id) => doc.nodes.some((node) => node.id === id)) : [];
+  const selected = selection[selection.length - 1] ?? null;
+  const setSelected = useCallback((id: string | null) => setPicked(id ? [id] : []), []);
+  const toggleSelected = (id: string) => setPicked((prior) => prior.includes(id) ? prior.filter((item) => item !== id) : [...prior, id]);
+  const selectMany = (ids: string[]) => setPicked((prior) => [...prior.filter((id) => !ids.includes(id)), ...ids]);
   // The output a wire is being drawn from, and where its loose end is.
   const [linkStart, setLinkStart] = useState<Anchor | null>(null);
   const [linkPoint, setLinkPoint] = useState<{ x: number; y: number } | null>(null);
@@ -124,7 +134,7 @@ export function ExperimentView({ active, focusMode, setFocusMode, onShowFrame, o
     onLaunch: () => { cancelLink(); setTimelineOpen(true); },
   });
   const { fullscreen, toggleFullscreen, exitFullscreen } = useExperimentFullscreen(focusMode, setFocusMode, setProblem);
-  const canvas = useExperimentCanvas({ doc, busy, zoom, scrollRef, selected, setSelected, linkStart, setLinkStart, setLinkPoint, cancelLink, setMenu, edit, commitEdit, patchNode, setProblem });
+  const canvas = useExperimentCanvas({ doc, busy, zoom, scrollRef, selected, selection, setSelected, toggleSelected, selectMany, linkStart, setLinkStart, setLinkPoint, cancelLink, setMenu, edit, commitEdit, setProblem });
   const selectedNode = doc?.nodes.find((node) => node.id === selected) ?? null;
   const { tests, sending, preview, sendNode, reset: resetTests } = useExperimentNodeTests({ doc, selectedNode, busy, knownVars, setKnownVars, secretsVersion });
 
@@ -140,19 +150,43 @@ export function ExperimentView({ active, focusMode, setFocusMode, onShowFrame, o
     focusFieldOf.current = id; pendingReveal.current = id;
   };
 
+  /** Every selected node but Start and End, in one step of the history. */
   const removeSelected = () => {
-    if (!selected || busy) return;
-    edit((current) => removeNode(current, selected));
+    if (!selection.length || busy) return;
+    const ids = selection;
+    commitEdit();
+    edit((current) => removeNodes(current, ids));
     setSelected(null);
   };
 
-  const duplicateSelected = () => {
-    if (!doc || !selected || busy) return;
-    const copy = duplicateNode(doc, selected);
-    if (!copy) return;
-    edit((current) => ({ ...current, nodes: [...current.nodes, copy] }));
-    setSelected(copy.id); reveal(copy);
+  /** Copies added beside where they came from, selected, and in view: Duplicate and Paste. */
+  const addCopies = (clip: ReturnType<typeof copyOf>) => {
+    if (!doc || !clip || busy) return false;
+    const copy = freshCopy(doc, clip);
+    commitEdit();
+    edit((current) => placeCopy(current, copy));
+    setPicked(copy.nodes.map((node) => node.id));
+    pendingReveal.current = copy.nodes[0].id;
+    return true;
   };
+  /** The selection, with the wires between its nodes. */
+  const duplicateSelected = () => { if (doc) addCopies(copyOf(doc, selection)); };
+  /** The selection as clipboard text; none when only Start and End are selected. */
+  const copySelection = (): string | null => {
+    const clip = doc ? copyOf(doc, selection) : null;
+    return clip ? clipText(clip) : null;
+  };
+  const cutSelection = (): string | null => {
+    if (busy) return null;
+    const text = copySelection();
+    if (text) removeSelected();
+    return text;
+  };
+  /** Nodes copied from this or another experiment; text that is not is left alone. */
+  const pasteText = (text: string): boolean => addCopies(readClip(text));
+  const copyFromPanel = () => { const text = copySelection(); if (text) copyNow(text); };
+  const moveSelection = (dx: number, dy: number) => edit((current) => moveNodes(current, selection, dx, dy));
+  const selectAll = () => { if (doc) setPicked(doc.nodes.map((node) => node.id)); };
 
   const arrange = () => {
     if (!doc || busy) return;
@@ -238,12 +272,13 @@ export function ExperimentView({ active, focusMode, setFocusMode, onShowFrame, o
   }));
 
   useExperimentShortcuts({
-    active, busy, doc, selected, selectedNode, selectedWire: canvas.selectedWire,
+    active, busy, doc, selected, selectionCount: selection.length, selectedNode, selectedWire: canvas.selectedWire,
     menuOpen: !!menu, linking: !!linkStart, fullscreen, focusMode,
     closeMenu: () => setMenu(null), cancelLink, dropWire: () => canvas.setWire(null), exitFullscreen, setFocusMode,
     restore, duplicateSelected, openFinder: () => setFinderOpen(true), fit, zoomAt,
     sendNode, removeWire: canvas.removeWire, removeSelected, openAddMenu: canvas.openAddMenu,
-    editGroup, patchNode, commitEdit,
+    selectAll, clearSelection: () => setSelected(null), moveSelection, copySelection, cutSelection, pasteText,
+    editGroup, commitEdit,
   });
 
   const openDocument = (document: Experiment) => {
@@ -278,14 +313,14 @@ export function ExperimentView({ active, focusMode, setFocusMode, onShowFrame, o
       <div className="experiment-left">
         <ExperimentCanvasTools busy={busy} canUndo={history.past.length > 0} canRedo={history.future.length > 0} nodeCount={doc.nodes.length} linking={!!linkStart} zoom={zoom}
           onRestore={restore} onFind={() => setFinderOpen(true)} onCancelLink={cancelLink} onArrange={arrange} onZoom={zoomAt} onFit={() => fit(doc.nodes)} />
-        <ExperimentCanvas doc={doc} scrollRef={scrollRef} zoom={zoom} width={canvasWidth} height={canvasHeight} busy={busy} events={events} selected={selected}
-          invalidNode={problemNodeId} linkStart={linkStart} linkPoint={linkPoint} controls={canvas} onSelect={setSelected}
+        <ExperimentCanvas doc={doc} scrollRef={scrollRef} zoom={zoom} width={canvasWidth} height={canvasHeight} busy={busy} events={events} selection={selection}
+          invalidNode={problemNodeId} linkStart={linkStart} linkPoint={linkPoint} controls={canvas}
           onEdit={(id) => { setPropertiesOpen(true); focusFieldOf.current = id; setSelected(id); }} />
       </div>
-      {propertiesOpen && <ExperimentProperties panelRef={propertiesRef} doc={doc} node={selectedNode} wire={canvas.selectedWire} busy={busy}
+      {propertiesOpen && <ExperimentProperties panelRef={propertiesRef} doc={doc} node={selectedNode} count={selection.length} wire={canvas.selectedWire} busy={busy}
         problemNodeId={problemNodeId} validationError={validationError} storedSecrets={storedSecrets} preview={preview}
         test={selectedNode ? tests[selectedNode.id] : undefined} sending={sending} onSend={sendNode} onExtract={extractPicked} onShowEmulator={onShowEmulator}
-        onPatch={patchNode} onEdit={edit} onAddNext={canvas.openAddMenu} onDuplicate={duplicateSelected} onDelete={removeSelected}
+        onPatch={patchNode} onEdit={edit} onAddNext={canvas.openAddMenu} onCopy={copyFromPanel} onDuplicate={duplicateSelected} onDelete={removeSelected}
         onRemoveWire={canvas.removeWire} onLeave={focusNode} />}
     </div>
     <ExperimentTimeline doc={doc} events={events} outcome={outcome} running={!!job} reportPath={reportPath} lastRun={lastRun} lastSeed={lastSeed} busy={busy}

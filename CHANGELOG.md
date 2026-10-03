@@ -12,6 +12,14 @@ release notes — so what is written here is what users read. See
 
 ### Added
 
+- **Several nodes at once in the experiment editor.** `Shift` or `Ctrl` and a click
+  adds a node to the selection, `Shift` and a drag on the empty canvas selects with a
+  frame, `Ctrl+A` selects everything. The selection moves, duplicates (`Ctrl+D`) and
+  deletes together, each one step to undo, and `Ctrl+C`, `Ctrl+X`, `Ctrl+V` copy, cut
+  and paste it with the wires between its nodes — into another experiment or window
+  too. A pasted node that names another copied node names the copy; a copied Emulator
+  or Impairment listens on the next free port.
+
 - **Updates.** The desktop app finds a newer version among the releases published on
   GitHub — once a day, or *Check for updates* in About — says what is new in it and
   installs it when asked: what is pending is saved, running jobs stop, the download's

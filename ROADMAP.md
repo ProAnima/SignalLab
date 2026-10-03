@@ -27,6 +27,7 @@ This decides what we build and what we leave to others:
 
 - **Direct instruments:** OSC sender/monitor/generator, MQTT client, broadcast/multicast/sweep and discovery responder, HTTP request and concurrent burst (at a rate, with percentiles), UDP impairment relay, UDP/TCP storm, TCP scanner, Inspector capture bus, Signals library with `Ctrl+K`.
 - **Experiment editor:** versioned JSON documents, templates, import/export, grouped undo/redo, autosave, search, arrange/fit, focus and fullscreen modes, 900×600 layout.
+- **Selection:** several nodes at once — `Shift`/`Ctrl`+click, a `Shift` frame, `Ctrl+A` — moved, duplicated, deleted together, and copied and pasted with their wires through the clipboard, into another experiment too.
 - **Node creation:** `A` adds after the selected node and focuses its main field; drag a wire from an output onto a node to connect or onto empty canvas to create the next node — an output may have several wires, which run in parallel; the ＋ on a wire inserts into that wire; saved Signals appear in the add menu as prefilled nodes; OSC and HTTP screens have *Add to experiment*.
 - **Nodes:** Start/End, HTTP, OSC, UDP, TCP, MQTT publish, Log, Delay, HTTP status/body/header/latency checks, status branch, parallel branch and join.
 - **Feedback:** per-node *Send now* (`Ctrl+Enter`) with formatted response, canvas markers for unwired outputs and unreachable nodes, validation that names and reveals the node, timeline with step highlighting, JSON run reports.
@@ -40,7 +41,6 @@ This decides what we build and what we leave to others:
 - The impairment relay is UDP only; impairing a TCP stream (latency, throttling, reset, half-open) is still to come.
 - The HTTP burst runs at one fixed rate or as fast as its workers go; ramps, steps and spikes, thresholds and an HTTP node under load are milestone 7.
 - The Inspector ring truncates payloads at 1 KiB and holds 8192 frames: good for looking, not for replay.
-- Remaining editor work: multi-selection and copy/paste.
 
 ## Delivery order
 

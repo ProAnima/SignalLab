@@ -1,35 +1,48 @@
 import { useEffect, useRef, useState, type MouseEvent, type PointerEvent, type RefObject } from "react";
 import type { Experiment, ExperimentNode } from "./api";
 import { anchorAfter, connect, disconnect, isWired, placeAfter, portOf, NODE_HEIGHT as NODE_H, NODE_WIDTH as NODE_W, type Anchor, type Port } from "./experimentGraph";
+import { dragNodes, nodesIn } from "./experimentClipboard";
 import { nearestNode, sameWire, type Wire } from "./experimentWires";
 import type { Failure } from "./errors";
+
+/** Keep the pointer's moves coming here; a pointer a script made up (the tour) has nothing to capture. */
+function capture(target: Element, pointerId: number) {
+  try { target.setPointerCapture(pointerId); } catch { /* not an active pointer */ }
+}
 
 /** Where the add menu opens (screen) and where its node goes (graph). `branch`: the node goes on a new wire of the anchor's output (parallel work), not into its flow. */
 export type Menu = { screenX: number; screenY: number; x: number; y: number; anchor?: Anchor; branch?: boolean };
 type Point = { x: number; y: number };
 
 /**
- * What the pointer does on the canvas: drag nodes, pan, pick wires, draw new
- * ones from an output, and open the add menu where the next node should go.
- * Zoom and scrolling are `useExperimentViewport`'s; selection and the wire
- * being drawn belong to the editor, which other panels read too.
+ * What the pointer does on the canvas: select and drag nodes (one, or several
+ * together), pan, select with a frame, pick wires, draw new ones from an
+ * output, and open the add menu where the next node should go. Zoom and
+ * scrolling are `useExperimentViewport`'s; the selection and the wire being
+ * drawn belong to the editor, which other panels read too.
  */
-export function useExperimentCanvas({ doc, busy, zoom, scrollRef, selected, setSelected, linkStart, setLinkStart, setLinkPoint, cancelLink, setMenu, edit, commitEdit, patchNode, setProblem }: {
+export function useExperimentCanvas({ doc, busy, zoom, scrollRef, selected, selection, setSelected, toggleSelected, selectMany, linkStart, setLinkStart, setLinkPoint, cancelLink, setMenu, edit, commitEdit, setProblem }: {
   doc: Experiment | null;
   busy: boolean;
   zoom: number;
   scrollRef: RefObject<HTMLDivElement | null>;
+  /** The node the properties show: the last one selected. */
   selected: string | null;
+  /** Every selected node, `selected` last. */
+  selection: string[];
   setSelected: (id: string | null) => void;
+  /** Shift or Ctrl and a click: in the selection, or out of it. */
+  toggleSelected: (id: string) => void;
+  /** A frame drawn with Shift: what it touches joins the selection. */
+  selectMany: (ids: string[]) => void;
   /** The output a wire is being drawn from, by click or by drag. */
   linkStart: Anchor | null;
   setLinkStart: (anchor: Anchor | null) => void;
   setLinkPoint: (point: Point | null) => void;
   cancelLink: () => void;
   setMenu: (menu: Menu | null) => void;
-  edit: (update: (current: Experiment) => Experiment) => void;
+  edit: (update: (current: Experiment) => Experiment, group?: string | null) => void;
   commitEdit: () => void;
-  patchNode: (id: string, change: Partial<ExperimentNode>, group?: string | null) => void;
   setProblem: (failure: Failure | null) => void;
 }) {
   // A wire picked on the canvas; a node and a wire are never both selected.
@@ -44,9 +57,20 @@ export function useExperimentCanvas({ doc, busy, zoom, scrollRef, selected, setS
     else hoverTimer.current = window.setTimeout(() => setHoverWire(null), 180);
   };
   const suppressPortClick = useRef(false);
-  const drag = useRef<{ id: string; x: number; y: number; clientX: number; clientY: number; group: string } | null>(null);
+  // A drag moves every node in `start` (one, or the whole selection); `collapse`:
+  // a click on one of several selected nodes, without moving, selects it alone.
+  const drag = useRef<{ node: string; start: Map<string, { x: number; y: number }>; clientX: number; clientY: number; group: string; moved: boolean; collapse: boolean } | null>(null);
+  // The click that ends a drag, or follows a Shift/Ctrl press that already toggled,
+  // does nothing more. It comes at once; a click later than this is a new one (a drag
+  // let go outside the window sends none, and must not swallow the next).
+  const suppressNodeClick = useRef(0);
+  const swallowNextClick = () => { suppressNodeClick.current = performance.now() + 300; };
+  const clickSwallowed = () => performance.now() < suppressNodeClick.current;
   const pan = useRef<{ clientX: number; clientY: number; left: number; top: number; moved: boolean } | null>(null);
   const portDrag = useRef<{ anchor: Anchor; clientX: number; clientY: number; moved: boolean } | null>(null);
+  // A selection frame drawn with Shift on the empty canvas, in graph units.
+  const bandStart = useRef<Point | null>(null);
+  const [band, setBand] = useState<{ a: Point; b: Point } | null>(null);
 
   // Selecting a node lets go of a wire.
   useEffect(() => { if (selected) setWire(null); }, [selected]);
@@ -111,7 +135,7 @@ export function useExperimentCanvas({ doc, busy, zoom, scrollRef, selected, setS
   const onPortDown = (event: PointerEvent<HTMLButtonElement>, anchor: Anchor) => {
     if (busy || event.button !== 0) return;
     event.stopPropagation();
-    event.currentTarget.setPointerCapture(event.pointerId);
+    capture(event.currentTarget, event.pointerId);
     portDrag.current = { anchor, clientX: event.clientX, clientY: event.clientY, moved: false };
   };
   const onPortMove = (event: PointerEvent<HTMLButtonElement>) => {
@@ -159,22 +183,52 @@ export function useExperimentCanvas({ doc, busy, zoom, scrollRef, selected, setS
     setWire(null); setHoverWire(null);
   };
 
+  const modified = (event: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean }) => event.shiftKey || event.ctrlKey || event.metaKey;
+
+  // Pointer down on a node: with Shift or Ctrl it joins or leaves the
+  // selection; on one of several selected nodes it starts dragging them all;
+  // otherwise it selects that node alone and starts dragging it.
   const onNodeDown = (event: PointerEvent<HTMLButtonElement>, node: ExperimentNode) => {
-    if (busy || event.button !== 0 || linkStart) return;
-    drag.current = { id: node.id, x: node.x, y: node.y, clientX: event.clientX, clientY: event.clientY, group: `drag-${crypto.randomUUID()}` };
-    event.currentTarget.setPointerCapture(event.pointerId);
-    setSelected(node.id);
+    if (busy || event.button !== 0 || linkStart || !doc) return;
+    suppressNodeClick.current = 0;
+    if (modified(event)) { swallowNextClick(); toggleSelected(node.id); return; }
+    const together = selection.length > 1 && selection.includes(node.id) ? selection : [node.id];
+    if (together.length === 1) setSelected(node.id);
+    const start = new Map(doc.nodes.filter((item) => together.includes(item.id)).map((item) => [item.id, { x: item.x, y: item.y }]));
+    drag.current = { node: node.id, start, clientX: event.clientX, clientY: event.clientY, group: `drag-${crypto.randomUUID()}`, moved: false, collapse: together.length > 1 };
+    capture(event.currentTarget, event.pointerId);
   };
   const onNodeMove = (event: PointerEvent<HTMLButtonElement>, node: ExperimentNode) => {
     const d = drag.current;
-    if (!d || d.id !== node.id) return;
-    const x = Math.max(12, Math.round(d.x + (event.clientX - d.clientX) / zoom));
-    const y = Math.max(12, Math.round(d.y + (event.clientY - d.clientY) / zoom));
-    if (x !== node.x || y !== node.y) patchNode(node.id, { x, y }, d.group);
+    if (!d || d.node !== node.id) return;
+    if (!d.moved && Math.hypot(event.clientX - d.clientX, event.clientY - d.clientY) < 3) return;
+    d.moved = true;
+    const dx = (event.clientX - d.clientX) / zoom;
+    const dy = (event.clientY - d.clientY) / zoom;
+    edit((current) => dragNodes(current, d.start, dx, dy), d.group);
   };
-  const endDrag = () => { drag.current = null; commitEdit(); };
+  const endDrag = () => {
+    const d = drag.current;
+    drag.current = null;
+    commitEdit();
+    if (!d) return;
+    if (d.moved) swallowNextClick();
+    else if (d.collapse) setSelected(d.node);
+  };
+  /** A click (or Enter, Space) on a node: ends a wire being drawn, or selects — with Shift or Ctrl, toggles. */
+  const onNodeClick = (event: MouseEvent<HTMLButtonElement>, node: ExperimentNode) => {
+    if (linkStart) { endLink(node.id); return; }
+    if (clickSwallowed()) { suppressNodeClick.current = 0; return; }
+    if (modified(event)) toggleSelected(node.id);
+    else if (!selection.includes(node.id)) setSelected(node.id);
+  };
+  /** Tab onto a node selects it; a press that is selecting or dragging already has. */
+  const onNodeFocus = (node: ExperimentNode) => {
+    if (linkStart || drag.current || clickSwallowed() || selection.includes(node.id)) return;
+    setSelected(node.id);
+  };
 
-  /** The empty canvas: drag to pan, double-click to add a node there, click to drop the selection. */
+  /** The empty canvas: drag to pan, Shift and drag to select with a frame, double-click to add a node there, click to drop the selection. */
   const surface = {
     onDoubleClick: (event: MouseEvent<HTMLDivElement>) => {
       if (event.target !== event.currentTarget) return;
@@ -183,30 +237,43 @@ export function useExperimentCanvas({ doc, busy, zoom, scrollRef, selected, setS
     },
     onPointerDown: (event: PointerEvent<HTMLDivElement>) => {
       if (event.target !== event.currentTarget) return;
+      capture(event.currentTarget, event.pointerId);
+      if (event.shiftKey && !linkStart && !busy) {
+        const point = graphPoint(event.clientX, event.clientY);
+        bandStart.current = point;
+        setBand({ a: point, b: point });
+        return;
+      }
       const scroll = scrollRef.current!;
       pan.current = { clientX: event.clientX, clientY: event.clientY, left: scroll.scrollLeft, top: scroll.scrollTop, moved: false };
-      event.currentTarget.setPointerCapture(event.pointerId);
       if (!linkStart) { setSelected(null); setWire(null); }
     },
     onPointerMove: (event: PointerEvent<HTMLDivElement>) => {
+      if (bandStart.current) { setBand({ a: bandStart.current, b: graphPoint(event.clientX, event.clientY) }); return; }
       if (linkStart && !portDrag.current) setLinkPoint(graphPoint(event.clientX, event.clientY));
       const p = pan.current; if (!p) return;
       if (!p.moved && Math.hypot(event.clientX - p.clientX, event.clientY - p.clientY) < 4) return;
       p.moved = true; const scroll = scrollRef.current!; scroll.scrollLeft = p.left - (event.clientX - p.clientX); scroll.scrollTop = p.top - (event.clientY - p.clientY);
     },
     onPointerUp: (event: PointerEvent<HTMLDivElement>) => {
+      const start = bandStart.current;
+      if (start) {
+        bandStart.current = null; setBand(null);
+        if (doc) selectMany(nodesIn(doc.nodes, start, graphPoint(event.clientX, event.clientY)));
+        return;
+      }
       const p = pan.current; pan.current = null;
       // Click-to-link, then a click on empty canvas: the next node goes right there.
       if (p && !p.moved && linkStart) { const point = graphPoint(event.clientX, event.clientY); openMenu(event.clientX, event.clientY, point.x, point.y - NODE_H / 2, linkStart, true); }
     },
-    onPointerCancel: () => { pan.current = null; },
+    onPointerCancel: () => { pan.current = null; bandStart.current = null; setBand(null); },
   };
 
   return {
-    selectedWire, setWire, selectWire, removeWire, hoverWire, hover, drag,
+    selectedWire, setWire, selectWire, removeWire, hoverWire, hover, drag, band,
     openMenu, openAddMenu, endLink,
     onPortDown, onPortMove, onPortUp, onPortCancel, onPortClick,
-    onNodeDown, onNodeMove, endDrag, surface,
+    onNodeDown, onNodeMove, endDrag, onNodeClick, onNodeFocus, surface,
   };
 }
 

@@ -17,14 +17,18 @@ import { TemplateSuggestions, type TemplateSuggestion } from "./TemplateField";
 
 /**
  * The properties pane: the selected node's fields, its preview, Send now,
- * its wires and actions — or the selected wire.
+ * its wires and actions — or, with several selected, what can be done to them
+ * together — or the selected wire.
  */
-export function ExperimentProperties({ panelRef, doc, node, wire, busy, problemNodeId, validationError, storedSecrets, preview, test, sending,
-  onSend, onExtract, onShowEmulator, onPatch, onEdit, onAddNext, onDuplicate, onDelete, onRemoveWire, onLeave }: {
+export function ExperimentProperties({ panelRef, doc, node, count, wire, busy, problemNodeId, validationError, storedSecrets, preview, test, sending,
+  onSend, onExtract, onShowEmulator, onPatch, onEdit, onAddNext, onCopy, onDuplicate, onDelete, onRemoveWire, onLeave }: {
   /** The pane, where a new node's first field is found and focused. */
   panelRef: RefObject<HTMLElement | null>;
   doc: Experiment;
+  /** The last node selected. */
   node: ExperimentNode | null;
+  /** How many nodes are selected. */
+  count: number;
   wire: Wire | null;
   busy: boolean;
   /** The node the validation failure is about, if any. */
@@ -42,6 +46,8 @@ export function ExperimentProperties({ panelRef, doc, node, wire, busy, problemN
   onPatch: (id: string, change: Partial<ExperimentNode>) => void;
   onEdit: (update: (current: Experiment) => Experiment) => void;
   onAddNext: () => void;
+  /** The selection to the clipboard, to paste here or into another experiment. */
+  onCopy: () => void;
   onDuplicate: () => void;
   onDelete: () => void;
   /** Removes the selected wire. */
@@ -73,7 +79,14 @@ export function ExperimentProperties({ panelRef, doc, node, wire, busy, problemN
       if (event.key === "Escape" && node && editable(event.target)) { event.preventDefault(); onLeave(node.id); }
     }}>
     <div className="section-label">{t("exp.properties")}</div>
-    {node ? <><h2 data-tip={t(nodeHelp(node.type))}>{label(node.type)}</h2>
+    {count > 1 ? <>
+      <h2 data-tip={t("exp.selectionHint")}>{t("exp.selectedCount", { n: count })}</h2>
+      <div className="experiment-node-actions">
+        <button className="ghost sm" data-tip={`${t("exp.copy")} · Ctrl+C`} onClick={onCopy}>{t("exp.copy")}</button>
+        <button className="ghost sm" data-tip={`${t("exp.duplicate")} · Ctrl+D`} disabled={busy} onClick={onDuplicate}>{t("exp.duplicate")}</button>
+        <button className="ghost sm experiment-delete" data-tip={`${t("exp.deleteSelected")} · Delete`} disabled={busy} onClick={onDelete}>{t("exp.deleteSelected")}</button>
+      </div>
+    </> : node ? <><h2 data-tip={t(nodeHelp(node.type))}>{label(node.type)}</h2>
       {/* What stops this node from running, next to the fields it is about. */}
       {problemNodeId === node.id && <ErrorMessage className="experiment-node-problem" error={validationError} />}
       <fieldset disabled={busy}>
@@ -89,11 +102,11 @@ export function ExperimentProperties({ panelRef, doc, node, wire, busy, problemN
         <button className="ghost sm" data-tip={t("exp.routeThroughHint")} onClick={() => onEdit((current) => routeThroughImpairment(current, node.id)?.doc ?? current)}>⚡ {t("exp.routeThrough")}</button>
       </div>}
       {node.type !== "end" && <div className="experiment-node-actions"><button className="ghost sm" data-tip={`${t("exp.addAfter")} · A`} onClick={onAddNext}>＋ {t("exp.addNext")}</button>
-        {node.type !== "start" && <><button className="ghost sm" data-tip={`${t("exp.duplicate")} · Ctrl+D`} onClick={onDuplicate}>{t("exp.duplicate")}</button><button className="ghost sm experiment-delete" data-tip={`${t("exp.delete")} · Delete`} onClick={onDelete}>{t("exp.delete")}</button></>}</div>}
+        {node.type !== "start" && <><button className="ghost sm" data-tip={`${t("exp.copy")} · Ctrl+C`} onClick={onCopy}>{t("exp.copy")}</button><button className="ghost sm" data-tip={`${t("exp.duplicate")} · Ctrl+D`} onClick={onDuplicate}>{t("exp.duplicate")}</button><button className="ghost sm experiment-delete" data-tip={`${t("exp.delete")} · Delete`} onClick={onDelete}>{t("exp.delete")}</button></>}</div>}
     </fieldset></> : wire ? <>
       <h2>{t("exp.wire")}</h2>
       <p className="experiment-wire-name">{wireName(doc.nodes, wire, t)}</p>
       <div className="experiment-node-actions"><button className="ghost sm experiment-delete" data-tip={`${t("exp.removeWire")} · Delete`} disabled={busy} onClick={() => onRemoveWire()}>{t("exp.removeWire")}</button></div>
-    </> : <p className="experiment-empty">{t("exp.selectNode")}</p>}
+    </> : <p className="experiment-empty" data-tip={t("exp.selectionHint")}>{t("exp.selectNode")}</p>}
   </aside>;
 }

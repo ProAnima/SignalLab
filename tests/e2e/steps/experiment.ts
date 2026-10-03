@@ -157,6 +157,113 @@ export async function experimentLoop(expect: Expect, args: StepArgs) {
   expect("what follows Done reads the last answer", rows.some((row) => row.includes(`127.0.0.1:${args.device} is ready`)), rows.join(" | "));
 }
 
+/**
+ * Several nodes at once: Shift and a click, a frame drawn with Shift, Ctrl+A;
+ * Copy and Paste through the clipboard (the page's own events: a key press, the
+ * hidden field it goes through, the paste a person's Ctrl+V makes there),
+ * Duplicate, a drag of the group, Delete, Escape — each undone, so the template
+ * is as it was.
+ */
+export async function experimentSelection(expect: Expect) {
+  const editor = await openTemplate("exp.templateHttp");
+  const count = () => editor.querySelectorAll(".experiment-node").length;
+  const wires = () => editor.querySelectorAll(".experiment-wires path.experiment-wire-hit").length;
+  const chosen = () => [...editor.querySelectorAll(".experiment-node.selected .experiment-node-type")].map(textOf);
+  const ctrl = (code: string) => key(document.activeElement ?? document.body, { key: code.slice(3).toLowerCase(), code, ctrlKey: true });
+  const before = { nodes: count(), wires: wires() };
+  const http = T("exp.node.http");
+
+  await selectNode(editor, "exp.node.http");
+  const next = [...editor.querySelectorAll<HTMLButtonElement>(".experiment-node-body")]
+    .find((body) => body.dataset.nodeId && !chosen().includes(textOf(body.querySelector(".experiment-node-type"))) && ![T("exp.node.start"), T("exp.node.end")].includes(textOf(body.querySelector(".experiment-node-type"))))!;
+  next.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, shiftKey: true }));
+  await until("two nodes selected", () => chosen().length === 2);
+  const properties = editor.querySelector<HTMLElement>(".experiment-properties")!;
+  expect("Shift and a click select a second node", chosen().includes(http) && chosen().length === 2, chosen().join(", "));
+  expect("…and the properties say how many", textOf(properties.querySelector("h2")) === T("exp.selectedCount", { n: 2 }), textOf(properties.querySelector("h2")));
+  const nameless = unnamed(properties);
+  expect("…with Copy, Duplicate and Delete, each named", !!hasButton(properties, T("exp.copy")) && !!hasButton(properties, T("exp.duplicate")) && !!hasButton(properties, T("exp.deleteSelected")) && !nameless.length, nameless.join(" | "));
+
+  ctrl("KeyC");
+  const sink = document.querySelector<HTMLTextAreaElement>(".clipboard-sink");
+  const copied = sink?.value ?? "";
+  let clip: { nodes?: unknown[]; edges?: unknown[] } = {};
+  try { clip = JSON.parse(copied); } catch { /* reported below */ }
+  expect("Ctrl+C puts the two nodes and the wire between them on the clipboard", clip.nodes?.length === 2 && clip.edges?.length === 1, copied.slice(0, 120));
+  await until("the focus back from the clipboard field", () => document.activeElement !== sink);
+
+  ctrl("KeyV");
+  expect("Ctrl+V takes what the system pastes", document.activeElement === sink);
+  const data = new DataTransfer();
+  data.setData("text/plain", copied);
+  sink!.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }));
+  await until("the pasted nodes", () => count() === before.nodes + 2);
+  expect("Ctrl+V adds the copies with their wire, selected", wires() === before.wires + 1 && chosen().length === 2, `${count()} nodes, ${wires()} wires, ${chosen().join(", ")}`);
+  ctrl("KeyZ");
+  await until("the paste undone", () => count() === before.nodes);
+  expect("one Ctrl+Z takes the paste back", wires() === before.wires && chosen().length === 0);
+
+  ctrl("KeyA");
+  await until("everything selected", () => chosen().length === before.nodes);
+  ctrl("KeyD");
+  await until("the duplicates", () => count() > before.nodes);
+  expect("Ctrl+A, Ctrl+D: all but Start and End duplicated", count() === before.nodes * 2 - 2, `${count()} nodes`);
+  ctrl("KeyZ");
+  await until("the duplicates undone", () => count() === before.nodes);
+
+  // A click on the empty canvas drops the selection; Shift and a drag there draw a
+  // frame from above-left of the HTTP node to past the next one, which selects both.
+  const surface = editor.querySelector<HTMLElement>(".experiment-canvas")!;
+  const nextName = textOf(next.querySelector(".experiment-node-type"));
+  const nodeOf = (name: string) => [...editor.querySelectorAll<HTMLElement>(".experiment-node")].find((node) => textOf(node.querySelector(".experiment-node-type")) === name)!;
+  const pointer = (target: HTMLElement, kind: string, x: number, y: number, shiftKey = false) => target.dispatchEvent(new PointerEvent(kind,
+    { bubbles: true, cancelable: true, pointerId: 9, pointerType: "mouse", button: 0, buttons: kind === "pointerup" ? 0 : 1, clientX: x, clientY: y, shiftKey }));
+  nodeOf(http).scrollIntoView({ block: "center", inline: "center" });
+  const a = nodeOf(http).getBoundingClientRect();
+  const b = nodeOf(nextName).getBoundingClientRect();
+  const from = { x: Math.min(a.left, b.left) - 14, y: Math.min(a.top, b.top) - 14 };
+  const to = { x: Math.max(a.right, b.right) + 6, y: Math.max(a.bottom, b.bottom) + 6 };
+  pointer(surface, "pointerdown", from.x, from.y);
+  pointer(surface, "pointerup", from.x, from.y);
+  await until("nothing selected", () => chosen().length === 0);
+  pointer(surface, "pointerdown", from.x, from.y, true);
+  pointer(surface, "pointermove", (from.x + to.x) / 2, (from.y + to.y) / 2, true);
+  await until("the frame drawn", () => editor.querySelector(".experiment-band"));
+  pointer(surface, "pointermove", to.x, to.y, true);
+  pointer(surface, "pointerup", to.x, to.y, true);
+  await until("the framed nodes selected", () => chosen().length >= 2);
+  expect("Shift and a drag on the canvas select what the frame touches", chosen().length === 2 && chosen().includes(http) && chosen().includes(nextName) && !editor.querySelector(".experiment-band"), chosen().join(", "));
+
+  // A drag of one of them moves both; one undo puts both back.
+  const left = (name: string) => Number.parseFloat(nodeOf(name).style.left);
+  const start = { http: left(http), next: left(nextName) };
+  const handle = nodeOf(http).querySelector<HTMLElement>(".experiment-node-body")!;
+  const grip = handle.getBoundingClientRect();
+  pointer(handle, "pointerdown", grip.left + 20, grip.top + 20);
+  pointer(handle, "pointermove", grip.left + 80, grip.top + 20);
+  pointer(handle, "pointerup", grip.left + 80, grip.top + 20);
+  // A browser follows a drag with a click on the node; it must not undo the group.
+  handle.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+  await until("the group moved", () => left(http) > start.http);
+  const moved = { http: left(http) - start.http, next: left(nextName) - start.next };
+  expect("dragging one selected node moves the group", moved.http > 0 && moved.http === moved.next && chosen().length === 2, JSON.stringify(moved));
+  ctrl("KeyZ");
+  await until("the drag undone", () => left(http) === start.http);
+  expect("…and one Ctrl+Z puts it back", left(nextName) === start.next);
+
+  key(document.activeElement ?? document.body, { key: "Delete", code: "Delete" });
+  await until("the group deleted", () => count() === before.nodes - 2);
+  expect("Delete removes the group and joins the flow around it", editor.querySelectorAll(".experiment-wires path.experiment-wire-hit").length >= 1, `${count()} nodes`);
+  ctrl("KeyZ");
+  await until("the delete undone", () => count() === before.nodes && wires() === before.wires);
+
+  ctrl("KeyA");
+  await until("all selected again", () => chosen().length === before.nodes);
+  key(document.activeElement ?? document.body, { key: "Escape", code: "Escape" });
+  await until("Escape drops a group", () => chosen().length === 0);
+  expect("the template is as it was", count() === before.nodes && wires() === before.wires);
+}
+
 export async function experimentParallel(expect: Expect, args: StepArgs) {
   const editor = await openTemplate("exp.templateParallel");
   const properties = await selectNode(editor, "exp.node.http");

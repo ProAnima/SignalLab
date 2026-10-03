@@ -345,6 +345,7 @@ function plan(ports, fixtures, mode, dataDir, { feedbackHere }) {
     { name: "experimentFaults" },
     { name: "experimentAuth", args: { port: ports.http }, before: mark, after: (expect) => expect("the run's Digest request was answered and checked", counts.digestAnswered >= 2, `${counts.digestAnswered} answered`) },
     { name: "experimentWs", args: { port: ports.ws }, after: (expect) => expect("the echo service saw the run's ping", counts.wsMessages.some((text) => text.startsWith('{"type":"ping"')), counts.wsMessages.join(" | ")) },
+    { name: "experimentSelection" },
     // The layout step works on the parallel flows this one leaves open.
     { name: "experimentParallel", args: { port: ports.http } },
     { name: "experimentExport", args: { mode, dataDir } },

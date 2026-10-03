@@ -3,6 +3,10 @@
 .experiment-node { position: absolute; border-radius: var(--radius-sm); border: 1px solid var(--border-strong); background: var(--surface-2); box-shadow: var(--shadow-sm); touch-action: none; cursor: grab; }
 .experiment-node:active { cursor: grabbing; }
 .experiment-node.selected { border-color: var(--accent); box-shadow: var(--ring), var(--shadow-md); z-index: 1; }
+/* The frame Shift and a drag draw on the empty canvas: what it touches is selected. */
+.experiment-band { position: absolute; border: 1px dashed var(--accent); background: var(--accent-soft); border-radius: 4px; pointer-events: none; z-index: 2; }
+/* The editor's Copy and Paste pass through it (lib/clipboardSink.ts): there, never seen. */
+.clipboard-sink { position: fixed; left: -10000px; top: 0; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
 .experiment-node.running { border-color: var(--cyan); }
 .experiment-node.passed { border-color: var(--accent-deep); }
 .experiment-node.failed { border-color: var(--red); }
