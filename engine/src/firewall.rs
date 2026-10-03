@@ -12,7 +12,9 @@
 //! read (`applies: false`): ufw and firewalld work by port, which the server's
 //! install script and docs/delivery.md cover.
 
-use std::path::{Path, PathBuf};
+#[cfg(any(windows, test))]
+use std::path::Path;
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
@@ -49,7 +51,11 @@ pub fn this_program() -> PathBuf {
     std::env::current_exe().unwrap_or_default()
 }
 
+// What the firewall reports, and how it is judged: read only on Windows; the
+// tests judge reports on every system.
+
 /// One inbound rule, as the firewall reports it.
+#[cfg(any(windows, test))]
 #[derive(Debug, Deserialize)]
 struct Rule {
     enabled: bool,
@@ -60,6 +66,7 @@ struct Rule {
     protocol: i64,
 }
 
+#[cfg(any(windows, test))]
 #[derive(Debug, Deserialize)]
 struct Report {
     current: i64,
@@ -69,9 +76,11 @@ struct Report {
     rules: Vec<Rule>,
 }
 
+#[cfg(any(windows, test))]
 const PROFILES: [(i64, &str); 3] = [(1, "domain"), (2, "private"), (4, "public")];
 
 /// The status from what the firewall reported: the active profiles, and the rules for the program.
+#[cfg(any(windows, test))]
 fn judge(program: &Path, report: Report) -> FirewallStatus {
     let current = report.current;
     let covers = |rule: &Rule| rule.enabled && rule.profiles & current != 0 && matches!(rule.protocol, 17 | 256);

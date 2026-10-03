@@ -110,6 +110,8 @@ The tag starts `.github/workflows/release.yml`:
 3. **Build** — in parallel, Tauri builds and uploads to the draft:
    - Windows x64: `*-setup.exe` (NSIS) and `*.msi` (WiX);
    - Linux x64: `.deb`, `.rpm`, `.AppImage`.
+   - each with its updater signature (`.sig`), and `latest.json`, which the installed
+     apps read (§4, *Updates*);
    - next to them, the command line: `signallab-X.Y.Z-windows-x64.zip` and
      `signallab-X.Y.Z-linux-x64.tar.gz` (`node scripts/github-release.mjs upload`);
 4. **Checksums** — `SHA256SUMS.txt` over every asset, uploaded with them.
@@ -178,6 +180,31 @@ Until the installers are signed (§6) SmartScreen warns about an unknown publish
 **Versions.** Semantic versioning. Pre-releases (`-rc.N`) for builds handed out for
 testing. The document format version (`experiment.rs`) is independent of the app version.
 
+### Updates
+
+The desktop app updates itself from the **published** releases only: it reads
+`releases/latest/download/latest.json`, which GitHub resolves to the newest release that
+is neither a draft nor a pre-release — so a draft, a pre-release or a commit is never
+offered. It looks once a day (*Check once a day* in About, on by default) and when asked
+(*Check for updates*), says what is new (the release's notes), and installs only when a
+person clicks *Install and restart*: every pending write is made (`src/lib/flush.ts`),
+running jobs are stopped, the download's signature is checked against the public key in
+`tauri.conf.json` (`plugins.updater.pubkey`), and the app starts again as the new
+version. Windows installs with the setup in its passive mode (`/UPDATE`: the old version
+is not uninstalled first, so PATH and firewall rules stay), Linux replaces the AppImage
+or runs `dpkg -i` / `rpm -U` for a `.deb` / `.rpm` install. Debug builds and the
+end-to-end tour (`SIGNALLAB_NO_UPDATE_CHECK`) never look on their own. A server updates
+with its image (`docker compose pull && docker compose up -d`).
+
+**The signing key.** Only the release workflow signs, with the secrets
+`TAURI_SIGNING_PRIVATE_KEY` (the private key file's content) and
+`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`; it merges `src-tauri/tauri.updater.conf.json`
+(`createUpdaterArtifacts`) into the build, so an everyday `npm run tauri build` needs no
+key. Without the secrets a release build fails rather than ship something the apps could
+not verify. The private key never goes into the repository; losing it means the apps in
+the field cannot take another update (a new key needs a new install), so keep a copy
+somewhere safe. `npx tauri signer sign` with the key signs a file by hand.
+
 ## 5. Status
 
 | Piece | State |
@@ -190,6 +217,8 @@ testing. The document format version (`experiment.rs`) is independent of the app
 | Server image on GHCR, smoke-tested in CI for x64 and arm64 (§7) | Done — D4; first image with the next release |
 | Branded installers, unattended switches (§4) | Done |
 | Server in one command: `deploy/install.sh`, a token made on first start (§7) | Done — tested by `scripts/install-test.mjs` |
+| Updates of the desktop app from published releases, signed (§4) | Done — needs the two signing secrets on GitHub |
+| Updates and feedback through the studio's hub ([hub.md](hub.md)) | Done — the hub (`ProAnima/pas-Hub`) is deployed on its VDS by hand |
 | Code signing (§6) | Declared |
 
 ## 6. Code signing (declared)

@@ -87,7 +87,7 @@
             "schema": {
               "type": "string",
               "enum": [
-                "app_info", "get_host_info", "firewall_status", "firewall_allow",
+                "app_info", "get_host_info", "firewall_status", "firewall_allow", "feedback_send",
                 "jobs_list", "job_stop", "jobs_stop_all",
                 "experiment_load", "experiment_save", "experiment_parse", "experiment_export", "experiment_validate",
                 "experiment_resolve", "experiment_send_node", "experiment_start",
@@ -121,7 +121,8 @@
           }
         },
         "x-signallab-commands": {
-          "app_info": { "arguments": {}, "returns": "{version, mode, secrets_writable, data_dir}" },
+          "app_info": { "arguments": {}, "returns": "{version, mode, secrets_writable, data_dir, os, arch}" },
+          "feedback_send": { "arguments": { "form": "{message, email?, meta: {version, os, arch, mode, lang, screen}, screenshots: [{name, data (base64)}], logs: [{name, text}]} — at most 6 screenshots of 8 MB, 15 MB in all" }, "returns": "{id} — the studio's hub (docs/hub.md) mailed it to the developers; its refusals are feedback.*, the network's transport.*" },
           "firewall_status": { "arguments": {}, "returns": "{applies, program, enabled, networks, allowed, blocked, rules} — whether the firewall lets other machines reach this program (Windows: per program)" },
           "firewall_allow": { "arguments": { "public": "boolean — on public networks too" }, "returns": "the new firewall_status; the desktop app only (firewall.server on a server), after the system's administrator prompt (firewall.declined when refused)" },
           "get_host_info": { "arguments": {}, "returns": "host name and network interfaces" },

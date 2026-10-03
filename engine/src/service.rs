@@ -78,6 +78,9 @@ pub struct AppInfo {
     pub secrets_writable: bool,
     /// Where files are written; on a server this is a folder on that machine.
     pub data_dir: String,
+    /// The operating system and processor the engine runs on: `windows`, `x86_64`.
+    pub os: &'static str,
+    pub arch: &'static str,
 }
 
 /// Everything a command can reach. One per process.
@@ -176,6 +179,8 @@ impl Service {
             mode: self.mode,
             secrets_writable: self.secrets.writable(),
             data_dir: paths::data_dir().display().to_string(),
+            os: std::env::consts::OS,
+            arch: std::env::consts::ARCH,
         }
     }
 
@@ -186,6 +191,11 @@ impl Service {
         let store = self.secrets.as_ref();
         match command {
             "app_info" => reply(self.info()),
+            // To the studio's hub, which mails it to the developers (docs/hub.md).
+            "feedback_send" => {
+                let a = args!(command, value, { form: crate::feedback::Form });
+                reply(crate::feedback::send(a.form).await?)
+            }
             // Whether the firewall lets other machines reach this program (Windows: per program).
             "firewall_status" => reply(firewall::status(firewall_programs()).await?),
             // Asked by a person: the system shows its own administrator prompt. Not on a server,

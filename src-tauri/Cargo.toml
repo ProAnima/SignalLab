@@ -21,3 +21,6 @@ signal-lab-engine.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 tauri = { version = "2", features = [] }
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
+tauri-plugin-opener = "2"

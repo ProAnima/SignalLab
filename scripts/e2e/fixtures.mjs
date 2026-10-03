@@ -318,6 +318,8 @@ export async function startFixtures({ pongPort }) {
     pings: 0, statusPolls: 0, mqttConnections: 0, mqttPublishes: 0, mqttTopics: new Set(), mqttSubscriptions: [],
     wsUpgrades: [], wsMessages: [], wsCloses: [],
     digestChallenges: 0, digestAnswered: 0, me: [],
+    // What the hub's stand-in was sent (the app's SIGNALLAB_HUB_URL points here).
+    feedback: [],
   };
   const nonces = new Set();
 
@@ -338,6 +340,26 @@ export async function startFixtures({ pongPort }) {
           nonces.add(nonce);
           response.writeHead(401, { "www-authenticate": `Digest realm="${DIGEST.realm}", nonce="${nonce}", qop="auth", algorithm=SHA-256, opaque="tour"` }).end();
         }
+        return;
+      }
+      // The studio's hub, Signal Lab's feedback: multipart in, an id out — or its refusal, in its shape.
+      if (request.url === "/v1/signal-lab/feedback" && request.method === "POST") {
+        const json = { "content-type": "application/json" };
+        new Request("http://fixture/feedback", { method: "POST", headers: { "content-type": request.headers["content-type"] ?? "" }, body: Buffer.concat(chunks) })
+          .formData()
+          .then(async (form) => {
+            const files = (field) => Promise.all(form.getAll(field).map(async (file) => ({ name: file.name, bytes: Buffer.from(await file.arrayBuffer()) })));
+            const [screenshots, logs] = [await files("screenshot"), await files("log")];
+            counts.feedback.push({
+              message: form.get("message"),
+              email: form.get("email"),
+              meta: JSON.parse(form.get("meta") ?? "{}"),
+              screenshots: screenshots.map((file) => ({ name: file.name, size: file.bytes.length, png: file.bytes.subarray(0, 8).equals(Buffer.from("89504e470d0a1a0a", "hex")) })),
+              logs: logs.map((file) => ({ name: file.name, text: file.bytes.toString("utf8") })),
+            });
+            response.writeHead(202, json).end(JSON.stringify({ id: `e2e${counts.feedback.length}` }));
+          })
+          .catch((error) => response.writeHead(400, json).end(JSON.stringify({ error: { code: "feedback.invalid", params: {}, detail: String(error) } })));
         return;
       }
       if (request.url === "/login") {

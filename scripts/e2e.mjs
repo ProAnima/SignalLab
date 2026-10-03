@@ -233,19 +233,19 @@ async function webkit({ binary, args = [], url, env = {} }) {
 
 // ---- the targets -----------------------------------------------------------------------
 
-async function launchServer(opts, work) {
+async function launchServer(opts, work, env) {
   if (opts.serverUrl) return { url: opts.serverUrl, dataDir: opts.dataDir ?? "/data", stop: () => {}, output: () => "" };
   const port = await freePort();
   const dataDir = join(work, "data");
   const server = start(join(root, "target", "debug", `signal-lab-server${EXE}`),
-    ["--listen", `127.0.0.1:${port}`, "--ui-dir", join(root, "dist"), "--data-dir", dataDir, "--log", "warn"]);
+    ["--listen", `127.0.0.1:${port}`, "--ui-dir", join(root, "dist"), "--data-dir", dataDir, "--log", "warn"], env);
   const url = `http://127.0.0.1:${port}`;
   await waitFor("the server", async () => (await fetch(`${url}/api/health`, { signal: AbortSignal.timeout(5000) })).ok, 30_000).catch((error) => { throw new Error(`${error.message}\n${server.output()}`); });
   return { url: `${url}/`, dataDir, stop: server.stop, output: server.output };
 }
 
-async function openServer(opts, work) {
-  const server = await launchServer(opts, work);
+async function openServer(opts, work, env) {
+  const server = await launchServer(opts, work, env);
   const browser = process.platform === "linux"
     ? await webkit({ binary: MINIBROWSERS.find((path) => existsSync(path)) ?? fail("MiniBrowser not found"), args: ["--automation"], url: server.url })
     : await chromium(server.url, join(work, "profile"));
@@ -258,12 +258,12 @@ function screenshot(file) {
   spawnSync("powershell", ["-NoProfile", "-NonInteractive", "-Command", script], { stdio: "ignore", timeout: 20_000 });
 }
 
-async function openDesktop(opts, work) {
+async function openDesktop(opts, work, env) {
   const dataDir = join(work, "data");
   const app = join(root, "target", "debug", `signal-lab${EXE}`);
   if (!existsSync(app)) throw new Error(`${app} is not built`);
   if (process.platform === "linux") {
-    const browser = await webkit({ binary: app, env: { TAURI_WEBVIEW_AUTOMATION: "true", SIGNALLAB_DATA_DIR: dataDir } });
+    const browser = await webkit({ binary: app, env: { ...env, TAURI_WEBVIEW_AUTOMATION: "true", SIGNALLAB_DATA_DIR: dataDir } });
     return { page: browser.page, engine: "WebKitGTK (Tauri)", dataDir, stop: browser.stop, output: browser.output };
   }
   // WebView2 reads both from the environment: DevTools on a port, and a profile of its own.
@@ -272,7 +272,7 @@ async function openDesktop(opts, work) {
   rmSync(profile, { recursive: true, force: true });
   // The debug build opens DevTools on this port itself (src-tauri/src/lib.rs): WebView2 does
   // not take WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS everywhere (a CI runner ignored it).
-  const desktop = start(app, [], { SIGNALLAB_E2E_DEVTOOLS_PORT: String(port), WEBVIEW2_USER_DATA_FOLDER: profile, SIGNALLAB_DATA_DIR: dataDir });
+  const desktop = start(app, [], { ...env, SIGNALLAB_E2E_DEVTOOLS_PORT: String(port), WEBVIEW2_USER_DATA_FOLDER: profile, SIGNALLAB_DATA_DIR: dataDir });
   const page = await devtools(port, (address) => /tauri\.localhost|^tauri:/.test(address)).catch((error) => {
     const state = desktop.child.exitCode === null ? "the app is still running" : `the app exited with ${desktop.child.exitCode}`;
     // What the webview's processes were started with: whether the DevTools port reached them.
@@ -290,7 +290,7 @@ async function openDesktop(opts, work) {
 // ---- the tour ---------------------------------------------------------------------------
 
 /** The steps in order, with what each needs and what the runner checks at the far end. */
-function plan(ports, fixtures, mode, dataDir) {
+function plan(ports, fixtures, mode, dataDir, { feedbackHere }) {
   const { counts } = fixtures;
   const at = {};
   const mark = () => { at.udp = counts.udp; at.http = counts.http; at.tcp = counts.tcpBytes; at.pings = counts.pings; at.polls = counts.statusPolls; };
@@ -350,6 +350,18 @@ function plan(ports, fixtures, mode, dataDir) {
     { name: "experimentExport", args: { mode, dataDir } },
     { name: "layout" },
     { name: "inspectCheck", args: { mode, dataDir } },
+    // Sent only where the tour started the app or the server and pointed it at the stand-in.
+    { name: "feedback", args: { mode, dataDir, version: currentVersion(), send: feedbackHere }, after: (expect, data) => {
+      if (!feedbackHere) return;
+      const sent = counts.feedback.at(-1);
+      expect("the stand-in got the message and the address", sent?.message === data.message && sent?.email === "tour@example.com", JSON.stringify(sent?.message));
+      expect("…what the app runs on", sent?.meta.version === currentVersion() && sent?.meta.mode === mode && !!sent?.meta.os, JSON.stringify(sent?.meta));
+      expect("…the screenshot, a PNG", sent?.screenshots.length === 1 && sent.screenshots[0].png, JSON.stringify(sent?.screenshots));
+      const names = sent?.logs.map((log) => log.name).join(",");
+      expect("…the console log and the system, as text", names === "signallab-console.txt,signallab-system.json", names);
+      const text = sent?.logs.map((log) => log.text).join("\n") ?? "";
+      expect("…and nothing of the data folder's path", !text.includes(dataDir), text.slice(0, 300));
+    } },
     { name: "russian" },
     { name: "cleanup" },
   ];
@@ -385,12 +397,14 @@ async function tour(target, opts, source) {
     if (!check.ok) console.log(`  ${line}`);
   };
   try {
-    app = target === "server" ? await openServer(opts, work) : await openDesktop({ ...opts, out }, work);
+    // The feedback form goes to the fixtures' stand-in for the hub, never to the real one; updates are not looked for.
+    const env = { SIGNALLAB_HUB_URL: `http://127.0.0.1:${ports.http}`, SIGNALLAB_NO_UPDATE_CHECK: "1" };
+    app = target === "server" ? await openServer(opts, work, env) : await openDesktop({ ...opts, out }, work, env);
     console.log(`  ${app.engine}`);
     await waitFor("the interface", () => app.page.evaluate("!!document.querySelector('.sidebar .nav-item')"), 30_000);
     if (app.page.inject) await app.page.inject(source);
     else await app.page.evaluate(`${source}\n;true`);
-    const steps = plan(ports, fixtures, target, opts.dataDir ?? app.dataDir);
+    const steps = plan(ports, fixtures, target, opts.dataDir ?? app.dataDir, { feedbackHere: !opts.serverUrl });
     const chosen = opts.steps ? steps.filter((step) => step.name === "shell" || opts.steps.includes(step.name)) : steps;
     for (const [index, step] of chosen.entries()) {
       const at = Date.now();

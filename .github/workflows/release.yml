@@ -1,7 +1,9 @@
 # A version tag — pushed by `npm run release -- X.Y.Z --push` — becomes a draft
-# GitHub release with the Windows and Linux installers and SHA256SUMS.txt.
-# Publishing the draft is a person's decision: review it on the releases page.
-# See docs/delivery.md.
+# GitHub release with the Windows and Linux installers and SHA256SUMS.txt, each
+# installer signed for the app's updater, and latest.json, which the installed
+# apps read once the release is published (releases/latest skips drafts and
+# pre-releases). Publishing the draft is a person's decision: review it on the
+# releases page. See docs/delivery.md.
 name: Release
 
 on:
@@ -96,14 +98,19 @@ jobs:
 
       - run: npm ci --no-audit --no-fund
 
+      # The updater installs only what the private key signed; its public half is in
+      # tauri.conf.json. Without the secrets the build fails rather than ship unsigned.
       - name: Build and upload to the draft
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           releaseId: ${{ needs.draft.outputs.id }}
-          args: --bundles ${{ matrix.bundles }}
-          includeUpdaterJson: false
+          args: --bundles ${{ matrix.bundles }} --config src-tauri/tauri.updater.conf.json
+          includeUpdaterJson: true
+          updaterJsonPreferNsis: true
 
       # The command line for scripts and CI (docs/automation.md), next to the installers.
       - name: signallab, the command line

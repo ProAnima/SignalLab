@@ -2,6 +2,7 @@ import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { api, type Experiment, type ProfileIssue } from "./api";
 import { historyReducer, newHistory } from "./editHistory";
 import type { Failure } from "./errors";
+import { onFlush } from "./flush";
 
 /**
  * Owns the editable document, its history and persistence lifecycle. Failures
@@ -25,6 +26,12 @@ export function useExperimentDocument() {
     queue.current = pending;
     return pending;
   }, []);
+
+  // Before an update restarts the app: the document as it is now, written
+  // after any write still on its way (its debounce may not have fired yet).
+  const latest = useRef(document);
+  latest.current = document;
+  useEffect(() => onFlush(() => latest.current ? save(latest.current) : undefined), [save]);
 
   useEffect(() => {
     let current = true;

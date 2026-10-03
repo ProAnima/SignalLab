@@ -642,12 +642,28 @@ export interface AppInfo {
   secrets_writable: boolean;
   /** Where files are written — on a server, a folder on that machine. */
   data_dir: string;
+  /** Where the engine runs: `windows`, `linux`, `macos`; `x86_64`, `aarch64`. */
+  os: string;
+  arch: string;
+}
+
+/** The feedback form (engine/src/feedback.rs), sent to the studio's hub (docs/hub.md). */
+export interface FeedbackForm {
+  message: string;
+  email?: string;
+  /** What the app says about itself: version, os, arch, mode, lang, screen. */
+  meta: Record<string, string>;
+  /** Images, their bytes base64. */
+  screenshots: { name: string; data: string }[];
+  logs: { name: string; text: string }[];
 }
 
 // ---- command wrappers ----
 
 export const api = {
   appInfo: () => invoke<AppInfo>("app_info"),
+  /** Mailed to the developers by the studio's hub; its id comes back. */
+  feedbackSend: (form: FeedbackForm) => invoke<{ id: string }>("feedback_send", { form }),
   hostInfo: () => invoke<HostInfo>("get_host_info"),
   jobsList: () => invoke<JobInfo[]>("jobs_list"),
   firewallStatus: () => invoke<FirewallStatus>("firewall_status"),

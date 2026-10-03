@@ -6,6 +6,9 @@ import { Palette } from "./components/Palette";
 import { TooltipLayer } from "./components/TooltipLayer";
 import { Splitter } from "./components/Splitter";
 import { FirewallBanner } from "./components/FirewallBanner";
+import { AboutDialog } from "./components/AboutDialog";
+import { FeedbackDialog } from "./components/FeedbackDialog";
+import { UpdatesProvider, useUpdates } from "./lib/updates";
 import { ExperimentView, type ExperimentHandle } from "./views/ExperimentView";
 import { SignalsView } from "./views/SignalsView";
 import { MqttView } from "./views/MqttView";
@@ -91,6 +94,9 @@ function Shell() {
   const [signedIn, setSignedIn] = useState(false);
   useEffect(() => { serverNeedsSignIn().then(setSignedIn); }, []);
   const { t } = useI18n();
+  const updates = useUpdates();
+  // About (with updates) and Feedback: one dialog at a time, over everything.
+  const [dialog, setDialog] = useState<"about" | "feedback" | null>(null);
   // A job as the engine describes it (`job.<kind>` with its values); the English label for a kind without a text.
   const jobLabel = (job: JobInfo) => `job.${job.kind}` in en ? t(`job.${job.kind}`, job.params) : job.label;
   // Reopen on the screen last used: someone who only ever sends OSC lands on OSC.
@@ -222,7 +228,7 @@ function Shell() {
         })}
         <div className="fill" />
         <div className="foot">
-          <span>{t("app.version", { version: __APP_VERSION__ })}</span>
+          <button className="foot-version" onClick={() => setDialog("about")} data-tip={t("about.open")}>{t("app.version", { version: __APP_VERSION__ })}</button>
           <span>{t("app.activeJobs", { n: jobs.length })}</span>
         </div>
       </aside>
@@ -238,6 +244,13 @@ function Shell() {
             {t("app.host")} <b>{host.hostname}</b> · <b>{host.local_ip}</b>
           </div>
         )}
+        {updates.found && updates.state.phase !== "current" && (
+          <button className="update-chip" onClick={() => setDialog("about")} data-tip={t("update.chipHint", { version: updates.found.version })}>
+            {t("update.chip", { version: updates.found.version })}
+          </button>
+        )}
+        <button className="ghost sm header-icon" aria-label={t("feedback.open")} data-tip={t("feedback.open")} onClick={() => setDialog("feedback")}>✉</button>
+        <button className="ghost sm header-icon" aria-label={t("about.open")} data-tip={t("about.open")} onClick={() => setDialog("about")}>?</button>
         <LanguageSwitch />
         {signedIn && <button className="ghost sm" onClick={() => void signOut()}>{t("app.signOut")}</button>}
         <button className="danger sm" data-tip={t("app.stopAllHint")} onClick={stopAll} disabled={jobs.length === 0}>
@@ -341,6 +354,8 @@ function Shell() {
       </section>
 
       <Palette />
+      {dialog === "about" && <AboutDialog onClose={() => setDialog(null)} onFeedback={() => setDialog("feedback")} />}
+      {dialog === "feedback" && <FeedbackDialog onClose={() => setDialog(null)} />}
       <TooltipLayer />
     </div>
   );
@@ -351,7 +366,9 @@ export default function App() {
     <I18nProvider>
       <StoreProvider>
         <EmulatorProvider>
-          <Shell />
+          <UpdatesProvider>
+            <Shell />
+          </UpdatesProvider>
         </EmulatorProvider>
       </StoreProvider>
     </I18nProvider>

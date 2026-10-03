@@ -12,6 +12,25 @@ release notes — so what is written here is what users read. See
 
 ### Added
 
+- **Updates.** The desktop app finds a newer version among the releases published on
+  GitHub — once a day, or *Check for updates* in About — says what is new in it and
+  installs it when asked: what is pending is saved, running jobs stop, the download's
+  signature is checked against the key built into the app, and Signal Lab starts again
+  as the new version (Windows: the setup or the MSI; Linux: the AppImage, `.deb` or
+  `.rpm`). It asks the studio's hub, which offers a release to a share of installs
+  first and can hold it back, and GitHub when the hub cannot be reached; the check
+  tells the hub the version, the system and a random number of this install. Drafts,
+  pre-releases and commits are never offered. A server updates with its image.
+- **About.** Who makes Signal Lab — ProAnimaStudio, Ian Panaev — and how to reach them
+  (info@proanima.net), the version, the source and the license; the **?** in the header.
+- **Write to the developers.** A form (the **✉** in the header, and in About): a
+  message, an address for the answer, screenshots pasted with Ctrl+V, picked or dropped,
+  and the console log and the version and system attached on their own — shown before
+  sending, each removable, with this computer's name, its address and your folders left
+  out. It goes to the studio's hub, which mails it from signal-labs@proanima.net to
+  info@proanima.net; the mailbox's password is on the hub and never in the app — see
+  `docs/hub.md`.
+
 - **Emulators: Signal Lab as the other side.** A new *Emulators* screen plays the API,
   device or service your system talks to. An **HTTP API** answers by routes — method,
   a path with `:name` segments, conditions on headers, query, body or JSON — with

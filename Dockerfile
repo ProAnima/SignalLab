@@ -33,8 +33,8 @@ RUN npm run build
 FROM rust:${RUST_VERSION}-${DEBIAN_RELEASE} AS server
 WORKDIR /src
 # Dependencies first, against placeholder sources, so a change to Signal Lab's
-# own code reuses this layer. The desktop crate only has to exist for Cargo to
-# read the workspace; nothing of it is compiled.
+# own code reuses this layer. The desktop crate only has to exist for Cargo
+# to read the workspace; nothing of it is compiled.
 COPY Cargo.toml Cargo.lock ./
 COPY engine/Cargo.toml engine/
 COPY server/Cargo.toml server/

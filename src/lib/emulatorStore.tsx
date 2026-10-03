@@ -5,6 +5,7 @@ import { useStore, type SaveState } from "./store";
 import { useI18n } from "./i18n";
 import type { Failure } from "./errors";
 import { en } from "./locales/en";
+import { onFlush } from "./flush";
 
 /** Exchanges a running emulator keeps on screen; the engine keeps its own. */
 const SHOWN = 300;
@@ -57,7 +58,7 @@ export function EmulatorProvider({ children }: { children: ReactNode }) {
   const started = useRef(new Map<number, Emulator>());
 
   const write = useCallback((next: StoredEmulator[]) => {
-    api.emulatorsSave({ version: 1, emulators: next }).then(
+    return api.emulatorsSave({ version: 1, emulators: next }).then(
       () => setSaveState("saved"),
       (e) => { setSaveState("error"); pushError("emulators", e); },
     );
@@ -97,6 +98,16 @@ export function EmulatorProvider({ children }: { children: ReactNode }) {
       if (list) write(list);
     }, SAVE_DEBOUNCE_MS);
   }, [write]);
+
+  // Before an update restarts the app: the write waiting for its debounce, now.
+  useEffect(() => onFlush(() => {
+    if (timer.current === null) return;
+    window.clearTimeout(timer.current);
+    timer.current = null;
+    const list = pending.current;
+    pending.current = null;
+    return list ? write(list) : undefined;
+  }), [write]);
 
   // A write still waiting for its debounce is made now, not lost to teardown.
   useEffect(() => () => {

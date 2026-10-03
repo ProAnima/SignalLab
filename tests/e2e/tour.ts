@@ -20,6 +20,7 @@ import { emulatorMqtt, emulators } from "./steps/emulators";
 import { experimentAuth, experimentEmulator, experimentExport, experimentFaults, experimentHttp, experimentLoop, experimentOsc, experimentParallel, experimentRepeat } from "./steps/experiment";
 import { layout } from "./steps/layout";
 import { experimentWs, websocket } from "./steps/websocket";
+import { feedback } from "./steps/about";
 
 export type { Check };
 
@@ -28,7 +29,7 @@ export type { Check };
 const STEPS: Record<string, (expect: Expect, args: StepArgs) => Promise<Record<string, unknown> | void>> = {
   shell, inspectArm, osc, signals, oscStop, mqtt, broadcast, netsimStart, netsimCheck, storm, scan, http, websocket,
   library, emulators, emulatorMqtt, experimentHttp, experimentOsc, experimentRepeat, experimentLoop, experimentParallel, experimentEmulator, experimentFaults, experimentAuth, experimentWs, experimentExport, layout,
-  inspectCheck, russian, cleanup,
+  inspectCheck, feedback, russian, cleanup,
 };
 
 // ---- the runner's side --------------------------------------------------------------

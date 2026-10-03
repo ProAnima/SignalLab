@@ -19,8 +19,11 @@ function files(dir, extensions) {
   });
 }
 
-/** Not addresses anything is sent to: an XML namespace, and a placeholder that shows the format. */
-const NOT_TARGETS = new Set(["www.w3.org", "..."]);
+/**
+ * Not addresses anything is sent to: an XML namespace, a placeholder that
+ * shows the format, and the project's page, which About opens in the browser.
+ */
+const NOT_TARGETS = new Set(["www.w3.org", "...", "github.com"]);
 const LOOPBACK = new Set(["127.0.0.1", "localhost", "[::1]"]);
 
 test("default URLs in the interface and the templates are loopback", () => {

@@ -4,7 +4,8 @@
 [![Rust](https://img.shields.io/badge/engine-Rust-b7410e.svg)](engine)
 [![Tauri 2](https://img.shields.io/badge/shell-Tauri%202-24c8db.svg)](https://tauri.app)
 
-*An open-source tool by [ProAnimaStudio](https://github.com/ProAnima).*
+*An open-source tool by [ProAnimaStudio](https://github.com/ProAnima) — Ian Panaev,
+[info@proanima.net](mailto:info@proanima.net).*
 
 A lightweight, cross-platform simulator and toolbox for **OSC signals, HTTP,
 MQTT, emulated APIs and devices, network impairment, broadcast/discovery,
@@ -490,6 +491,20 @@ the releases page. Publishing builds the server image for x64 and arm64, smoke-t
 it and pushes it to `ghcr.io/proanima/signallab` with an SBOM and signed provenance. Write user-visible changes under *Unreleased* in `CHANGELOG.md`
 as they land — that text is the release notes. Details and the rules the release
 script enforces: [docs/delivery.md](docs/delivery.md).
+
+**Updates.** The desktop app finds a newer *published* release by itself (once a
+day, or *Check for updates* in About — the **?** in the header), shows what is new,
+and installs it when you click *Install and restart*: what is pending is saved, running
+jobs stop, the download's signature is checked against the key built into the app, and
+Signal Lab starts again as the new version. It asks the studio's hub, which offers a
+release to a share of installs first, and GitHub when the hub cannot be reached
+([docs/hub.md](docs/hub.md)). A server updates with its image.
+
+**Write to the developers.** The **✉** in the header (and About) sends the
+developers a message with screenshots — paste them with Ctrl+V — and the logs that
+help, attached on their own and shown before anything is sent. It goes through the
+studio's hub ([docs/hub.md](docs/hub.md)), which mails it on; the app carries no
+password for it.
 
 ---
 

@@ -98,6 +98,25 @@ test("CI runs the one list of checks, and a release runs CI first", () => {
   assert.match(release, /scripts\/version\.mjs check --tag/);
   assert.match(release, /bundles: nsis,msi/);
   assert.match(release, /bundles: deb,rpm,appimage/);
+  // Updates: signed in the release only (local builds need no key), announced by latest.json.
+  assert.match(release, /--config src-tauri\/tauri\.updater\.conf\.json/);
+  assert.match(release, /TAURI_SIGNING_PRIVATE_KEY: \$\{\{ secrets\.TAURI_SIGNING_PRIVATE_KEY \}\}/);
+  assert.match(release, /includeUpdaterJson: true/);
+  assert.equal(JSON.parse(read("src-tauri/tauri.updater.conf.json")).bundle.createUpdaterArtifacts, true);
+  const tauri = JSON.parse(read("src-tauri/tauri.conf.json"));
+  assert.ok(!tauri.bundle.createUpdaterArtifacts, "an everyday build is not signed");
+  const updater = tauri.plugins.updater;
+  assert.match(Buffer.from(updater.pubkey, "base64").toString(), /^untrusted comment: minisign public key/, "the public key, never a private one");
+  // The hub first — the release promoted in the stable channel, to the share of installs it is rolled out
+  // to, or 204: nothing, and the updater looks no further — then GitHub's latest published release when
+  // the hub cannot be reached. The hub is the one engine/src/hub.rs names, where the feedback goes too.
+  const hub = read("engine/src/hub.rs");
+  const constant = (name) => new RegExp(`pub const ${name}: &str = "([^"]+)";`).exec(hub)[1];
+  assert.deepEqual(updater.endpoints, [
+    `${constant("DEFAULT_URL")}/v1/${constant("PROJECT")}/update/{{target}}/{{arch}}/{{current_version}}`,
+    "https://github.com/ProAnima/SignalLab/releases/latest/download/latest.json",
+  ]);
+  assert.ok(updater.endpoints.every((url) => url.startsWith("https://")), "never in the clear");
 });
 
 test("a release's image tags never move backwards", () => {
@@ -134,6 +153,16 @@ test("the image is built with the pinned toolchains and runs without privileges"
   const compose = read("deploy/compose.yaml");
   assert.match(compose, /network_mode: host/);
   assert.match(compose, /SIGNALLAB_TOKEN_FILE: \/run\/secrets\//, "the token comes from a secret file");
+});
+
+test("every workspace member is known to the image build and to the version script", () => {
+  // Or `cargo --locked` cannot read the workspace inside the image, and a release misses a version.
+  const members = JSON.parse(/^members = (\[.*\])$/m.exec(read("Cargo.toml"))[1]);
+  for (const member of members) {
+    assert.match(read("Dockerfile"), new RegExp(`COPY ${member}/Cargo\\.toml ${member}/`), `the Dockerfile copies ${member}/Cargo.toml`);
+    assert.ok(MEMBERS.includes(`${member}/Cargo.toml`), `scripts/version.mjs knows ${member}`);
+  }
+  assert.deepEqual(MEMBERS.map((file) => file.split("/")[0]).sort(), [...members].sort(), "and nothing that is gone");
 });
 
 test("CI smoke-tests the image, and only a published release reaches the registry", () => {

@@ -3,6 +3,7 @@ import {
   type ReactNode,
 } from "react";
 import { localizeSeed, type LibraryState } from "./library";
+import { onFlush } from "./flush";
 import {
   api, on, EV,
   type AppInfo, type JobInfo, type JobEnded, type HostInfo, type MqttBatch, type Signal,
@@ -232,7 +233,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, [pushLog, pushError]);
 
   const writeLibrary = useCallback((next: LibraryState) => {
-    api.signalsSave({ version: 2, signals: next.signals, folders: next.folders }).then(
+    return api.signalsSave({ version: 2, signals: next.signals, folders: next.folders }).then(
       () => setSaveState("saved"),
       (e) => {
         setSaveState("error");
@@ -319,6 +320,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       unlisteners.forEach((u) => u.then((f) => f()));
     };
   }, [pushLog, pushError, refreshJobs, loadLibrary]);
+
+  // Before an update restarts the app: the write waiting for its debounce, now.
+  useEffect(() => onFlush(() => {
+    if (saveTimer.current === null) return;
+    window.clearTimeout(saveTimer.current);
+    saveTimer.current = null;
+    const pending = pendingSave.current;
+    pendingSave.current = null;
+    return pending ? writeLibrary(pending) : undefined;
+  }), [writeLibrary]);
 
   // A debounced write must not be lost to teardown: cancel the timer and do
   // the write now instead of dropping it.

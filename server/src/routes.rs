@@ -49,8 +49,9 @@ pub struct Inner {
 
 pub type AppState = Arc<Inner>;
 
-/// An experiment document is at most 4 MiB; its JSON arguments stay well below this.
-const BODY_LIMIT: usize = 16 * 1024 * 1024;
+/// An experiment document is at most 4 MiB; the largest arguments are the
+/// feedback form's (`feedback_send`): 15 MB of screenshots and logs, base64.
+const BODY_LIMIT: usize = 24 * 1024 * 1024;
 const DOWNLOAD_LIMIT: u64 = 256 * 1024 * 1024;
 /// A wrong token costs this long, which makes guessing slow.
 const WRONG_TOKEN_DELAY: Duration = Duration::from_secs(1);

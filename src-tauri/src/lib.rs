@@ -1,6 +1,10 @@
 //! The desktop shell: a window, and one command that hands everything the
 //! interface asks for to the engine's command table. Events travel back as
-//! Tauri events. All behaviour lives in `signal-lab-engine`.
+//! Tauri events. All behaviour lives in `signal-lab-engine` — except what only
+//! an installed app does: updating itself from the project's GitHub releases
+//! (the updater plugin checks each update's signature against the key in
+//! tauri.conf.json before it installs anything), restarting, and opening a
+//! link in the system's browser or mail program.
 
 use std::sync::Arc;
 
@@ -26,9 +30,20 @@ async fn engine(service: State<'_, Arc<Service>>, command: String, args: Option<
     service.invoke(&command, args.unwrap_or(Value::Null)).await
 }
 
+/// Whether this build looks for updates on its own: a release build, unless
+/// SIGNALLAB_NO_UPDATE_CHECK is set (the end-to-end tour sets it). Asking by
+/// hand, from About, always works.
+#[tauri::command]
+fn update_checks() -> bool {
+    !cfg!(debug_assertions) && std::env::var_os("SIGNALLAB_NO_UPDATE_CHECK").is_none()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let host = Host::new(Arc::new(TauriEvents(app.handle().clone())), Capture::new());
             // The service starts the Inspector's pump, which needs the runtime.
@@ -48,7 +63,7 @@ pub fn run() {
             window.build()?;
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![engine])
+        .invoke_handler(tauri::generate_handler![engine, update_checks])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

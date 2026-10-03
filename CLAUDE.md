@@ -97,6 +97,10 @@ src/                      React UI
   lib/websocket.ts        subprotocol lists, JSON of a message (pure); views/WsView.tsx the screen,
                           components/ExperimentWsFields.tsx the four nodes' fields
   components/ImpairProfileFields.tsx  a profile's preset chips and values: the Impairment screen and the fault nodes
+  lib/updates.tsx         the desktop app's updates (UpdatesProvider): look daily, install when asked
+  lib/flush.ts            debounced writes made now (library, emulators, experiment) before an update restarts
+  lib/feedback.ts         the feedback form's limits, screenshots, attached logs scrubbed (pure)
+  components/AboutDialog.tsx, FeedbackDialog.tsx   the header's ? and ✉
 engine/src/               signal-lab-engine — no Tauri, no window
   service.rs              THE command table: Service::invoke(name, json) for both front doors
   host.rs                 Host = EventSink + capture bus; Recorder for tests
@@ -148,6 +152,8 @@ engine/src/               signal-lab-engine — no Tauri, no window
   emulator_run.rs         a run's emulators and HTTP listeners, opened before the first step
   emulator_files.rs       the emulator library (emulators.json) and its starter set
   firewall.rs             Windows Firewall per program: status (COM, any language), allow (UAC)
+  feedback.rs             feedback_send: the form to the studio's hub, its limits checked first
+  hub.rs                  where the hub is (SIGNALLAB_HUB_URL) and Signal Lab's project on it (docs/hub.md)
 engine/tests/burst.rs     the HTTP burst against loopback: closed, paced, missed, stopped
 engine/tests/websocket.rs the screen's job, a run's connect/send/wait/close, server closes, failed upgrades
 engine/tests/http_auth.rs Basic/Bearer/Digest checked by the server's own hashing, a burst's one challenge, jars
@@ -287,6 +293,28 @@ src/components/FirewallBanner.tsx  the desktop app's firewall notice, with Allow
   URL and headers are templates, unlike waits' binds); the other three name it by
   id (`ws.connection_unknown`, `ws.not_connected`). wss:// uses reqwest's TLS
   stack (native-tls), so it trusts what https:// does.
+- **Updates come only from published, signed releases.** The updater plugin
+  asks the studio's hub first (`/v1/signal-lab/update/…`: the release its stable
+  channel offers this install, or `204` — then it looks no further, so a pause
+  or a partial rollout holds), and GitHub's `releases/latest/download/latest.json`
+  only when the hub cannot be reached (docs/hub.md); `tests/delivery.test.mjs`
+  ties that list to `engine/src/hub.rs`. Either way it installs nothing whose
+  signature fails against `plugins.updater.pubkey`; only the release workflow
+  signs (`tauri.updater.conf.json` + the two `TAURI_SIGNING_*` secrets), so local
+  builds need no key. The check carries `X-Install-Id`, a random UUID kept with
+  the app's settings (`installId`), and the *Check once a day* tip says so.
+  Installing is a person's click: `flushAll`, jobs stopped, then the installer.
+  Debug builds and the tour (`SIGNALLAB_NO_UPDATE_CHECK`) never look on their own.
+- **The app carries no secret for feedback.** `feedback_send` posts to the
+  studio's hub (`hub::endpoint("feedback")`; `SIGNALLAB_HUB_URL`, default
+  hub.proanima.net), which alone holds the mailbox's password and fixes the
+  recipient; never put an SMTP password (encrypted or not) into the app or the
+  repository. The engine maps the hub's codes through `feedback::refusal`
+  (literals, so the error scan sees them) and checks the hub's limits first
+  (they are its `src/feedback/form.rs`: change both; `src/lib/feedback.ts`
+  follows the engine's, a test says so), and attached logs leave out the host
+  name, its address and the user's folders (`scrub`). The tour sends to a
+  fixture, never to the real hub.
 - **Long-running work is a job.** Register it with `JobRegistry` so the console
   strip can list and stop it, and call `finish(id)` when it ends on its own.
 - **Modules never call the Inspector directly** — publish a normalized `Frame`

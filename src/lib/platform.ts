@@ -1,9 +1,14 @@
+import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { relaunch } from "@tauri-apps/plugin-process";
+import { check, type DownloadEvent } from "@tauri-apps/plugin-updater";
 import { isDesktop } from "./transport";
 
 /**
  * What differs between the desktop app and a browser, in one place: the
- * window, files the engine wrote, and signing out. Screens ask here instead of
+ * window, files the engine wrote, links that leave the app, signing out, and
+ * updating — which only an installed app does. Screens ask here instead of
  * checking where they run.
  */
 
@@ -86,6 +91,102 @@ export async function copyText(text: string): Promise<boolean> {
   }
   area.remove();
   return copied;
+}
+
+/**
+ * A web page or a mail address, in the system's browser or mail program. The
+ * desktop app may open only the project's pages and its address
+ * (src-tauri/capabilities/default.json); a browser opens a page in a new tab.
+ */
+export async function openExternal(url: string): Promise<void> {
+  if (isDesktop) return openUrl(url);
+  if (url.startsWith("mailto:")) window.location.href = url;
+  else window.open(url, "_blank", "noopener,noreferrer");
+}
+
+// ---- updates: the desktop app only ------------------------------------------------
+
+/** A newer release, found and ready to install. */
+export interface FoundUpdate {
+  version: string;
+  /** When it was published, ISO 8601. */
+  date?: string;
+  /** Its release notes (the CHANGELOG section). */
+  notes?: string;
+  /**
+   * Download it — its signature checked against the app's key before anything
+   * runs — and install it. On Windows the installer takes over and restarts the
+   * app, so this does not return there; elsewhere `restartApp` follows.
+   */
+  install: (progress: (received: number, total: number | undefined) => void) => Promise<void>;
+}
+
+/** Whether this build looks for updates on its own (a release build, not the tour's). */
+export async function updateChecksEnabled(): Promise<boolean> {
+  if (!isDesktop) return false;
+  try {
+    return await tauriInvoke<boolean>("update_checks");
+  } catch {
+    return false;
+  }
+}
+
+const INSTALL_ID = "signal-lab.installId";
+
+/**
+ * This install's random number, which the update check gives the hub so that a
+ * release can reach a share of installs first (the same ones, as the share
+ * grows). Made once and kept with the app's other settings; it says nothing
+ * about the person or the computer. Where nothing can be kept there is none,
+ * and the hub offers only a release that reaches everyone.
+ */
+function installId(): string | null {
+  try {
+    const kept = localStorage.getItem(INSTALL_ID);
+    if (kept && /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(kept)) return kept;
+    // A version 4 UUID, from the platform's random numbers.
+    const bytes = crypto.getRandomValues(new Uint8Array(16));
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    const hex = [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+    const made = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+    localStorage.setItem(INSTALL_ID, made);
+    return made;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The newest published release offered to this app, if it is newer; never in a
+ * browser. The hub answers first (`plugins.updater.endpoints`): what its stable
+ * channel offers this install, or nothing; GitHub's latest release only when
+ * the hub cannot be reached.
+ */
+export async function findUpdate(): Promise<FoundUpdate | null> {
+  if (!isDesktop) return null;
+  const id = installId();
+  const update = await check({ timeout: 30_000, headers: id ? { "X-Install-Id": id } : undefined });
+  if (!update) return null;
+  return {
+    version: update.version,
+    date: update.date ?? undefined,
+    notes: update.body ?? undefined,
+    install: async (progress) => {
+      let received = 0;
+      let total: number | undefined;
+      await update.downloadAndInstall((event: DownloadEvent) => {
+        if (event.event === "Started") total = event.data.contentLength ?? undefined;
+        if (event.event === "Progress") received += event.data.chunkLength;
+        progress(received, total);
+      });
+    },
+  };
+}
+
+/** Start the app again, the installed version. */
+export async function restartApp(): Promise<void> {
+  if (isDesktop) await relaunch();
 }
 
 /** Whether the server serving this page asks for a token. */
