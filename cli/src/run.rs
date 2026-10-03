@@ -76,7 +76,10 @@ pub struct Ended {
 
 /// What became of one experiment (one combination of the matrix).
 pub struct Record {
+    /// `file [name=value, …]`: the file and its combination, as people read it.
     pub label: String,
+    /// The file (or template) as it was given.
+    pub file: String,
     /// The values of the matrix it ran with; empty without one.
     pub matrix: Combination,
     pub document: Experiment,
@@ -268,10 +271,13 @@ fn prepare(experiments: &Experiments) -> Result<Vec<Prepared>, (String, Failure)
         }
         inputs.push(input);
     }
-    let named: Vec<&String> = params.iter().map(|(name, _)| name).chain(matrixed.iter()).collect();
-    if let Some(name) = named.iter().find(|name| !inputs.iter().any(|input| input.document.params.iter().any(|param| &param.name == **name))) {
-        let label = if inputs.len() == 1 { inputs[0].label.clone() } else { String::new() };
-        return Err((label, Failure::invalid(EngineError::new("run.override_unknown").with("name", name))));
+    let unknown = |name: &String| !inputs.iter().any(|input| input.document.params.iter().any(|param| &param.name == name));
+    let label = || if inputs.len() == 1 { inputs[0].label.clone() } else { String::new() };
+    if let Some((name, _)) = params.iter().find(|(name, _)| unknown(name)) {
+        return Err((label(), Failure::invalid(EngineError::new("run.override_unknown").with("name", name))));
+    }
+    if let Some(name) = matrixed.iter().find(|name| unknown(name)) {
+        return Err((label(), Failure::invalid(EngineError::new("cli.matrix_unknown").with("name", name))));
     }
     let mut prepared = Vec::new();
     for input in inputs {
@@ -305,6 +311,7 @@ fn about(label: &str) -> String {
 struct Printer<'a> {
     ctx: &'a Ctx,
     label: &'a str,
+    file: &'a str,
     combination: &'a Combination,
     document: &'a Experiment,
     first_ts: Option<u64>,
@@ -312,9 +319,10 @@ struct Printer<'a> {
 }
 
 impl<'a> Printer<'a> {
-    fn new(ctx: &'a Ctx, label: &'a str, combination: &'a Combination, document: &'a Experiment) -> Self {
+    fn new(ctx: &'a Ctx, prepared: &'a Prepared) -> Self {
+        let document = &prepared.input.document;
         let width = document.nodes.iter().map(|node| node_label(&ctx.texts, document, &node.id).chars().count()).max().unwrap_or(0);
-        Printer { ctx, label, combination, document, first_ts: None, width }
+        Printer { ctx, label: &prepared.input.label, file: &prepared.file, combination: &prepared.combination, document, first_ts: None, width }
     }
 
     fn line(&mut self, kind: &str, value: &Value) {
@@ -323,10 +331,7 @@ impl<'a> Printer<'a> {
             if let Value::Object(map) = &mut value {
                 map.insert("type".into(), kind.into());
                 if kind != "step" {
-                    map.insert("file".into(), self.label.into());
-                    if !self.combination.is_empty() {
-                        map.insert("matrix".into(), matrix_value(self.combination));
-                    }
+                    about_json(map, self.file, self.combination);
                 }
             }
             println!("{value}");
@@ -367,6 +372,21 @@ impl<'a> Printer<'a> {
 /// A combination as JSON: `{"name": "value", …}`.
 fn matrix_value(combination: &Combination) -> Value {
     Value::Object(combination.iter().map(|(name, value)| (name.clone(), Value::String(value.clone()))).collect())
+}
+
+/// What a JSON line is about: `file` as it was given, and `matrix`, its combination, when there is one.
+fn about_json(map: &mut serde_json::Map<String, Value>, file: &str, combination: &Combination) {
+    map.insert("file".into(), file.into());
+    if !combination.is_empty() {
+        map.insert("matrix".into(), matrix_value(combination));
+    }
+}
+
+/// A run --fail-fast never started: a skipped suite of the JUnit report.
+pub struct NotStarted {
+    pub file: String,
+    pub matrix: Combination,
+    pub document: Experiment,
 }
 
 /// How a run is named in its summary: the experiment, and its combination.
@@ -437,22 +457,24 @@ pub async fn run(ctx: &Ctx, args: RunArgs) -> Exit {
     let count = prepared.len();
     let mut records = Vec::new();
     let mut worst = Exit::Passed;
-    for (index, Prepared { input, file, overrides, combination }) in prepared.into_iter().enumerate() {
-        let options = RunOptions { overrides, seed: args.seed, limit: args.timeout.map(Duration::from_secs) };
+    let mut queue = prepared.into_iter().enumerate();
+    for (index, prepared) in queue.by_ref() {
+        let options = RunOptions { overrides: prepared.overrides.clone(), seed: args.seed, limit: args.timeout.map(Duration::from_secs) };
         let outcome = {
-            let mut printer = Printer::new(ctx, &input.label, &combination, &input.document);
-            engine.run(input.document.clone(), options, &mut |kind, value| printer.line(kind, value)).await
+            let mut printer = Printer::new(ctx, &prepared);
+            engine.run(prepared.input.document.clone(), options, &mut |kind, value| printer.line(kind, value)).await
         };
         let outcome = outcome.and_then(|value| {
             serde_json::from_value::<Ended>(value).map_err(|error| Failure::environment(EngineError::new("cli.server_reply").with("url", "").with("status", 200).because(error)))
         });
-        let mut record = Record { label: input.label, matrix: combination, document: input.document, outcome, report: None };
+        let Prepared { input, file, combination, .. } = prepared;
+        let mut record = Record { label: input.label, file, matrix: combination, document: input.document, outcome, report: None };
         if let Ok(ended) = &record.outcome {
             summarize(ctx, &record, ended, engine.remote());
             if let Some(report) = &ended.report_path {
                 record.report = engine.keeps_reports().then(|| report.clone());
                 if let Some(target) = &args.report {
-                    let target = report_target(target, index, count, &file);
+                    let target = report_target(target, index, count, &record.file);
                     match engine.copy_report(report, &target).await {
                         Ok(()) => record.report = Some(target.display().to_string()),
                         Err(failure) => worst = worst.max(failure.report(ctx, "")),
@@ -464,7 +486,11 @@ pub async fn run(ctx: &Ctx, args: RunArgs) -> Exit {
             }
         } else if let Err(failure) = &record.outcome {
             if ctx.json {
-                println!("{}", json!({ "type": "error", "file": record.label, "error": failure.error, "exit_code": failure.exit.code() }));
+                let mut line = json!({ "type": "error", "error": failure.error, "exit_code": failure.exit.code() });
+                if let Value::Object(map) = &mut line {
+                    about_json(map, &record.file, &record.matrix);
+                }
+                println!("{line}");
             } else {
                 for line in failure.lines(ctx, &format!("✖ {}", about(&record.label))) {
                     eprintln!("{line}");
@@ -478,13 +504,14 @@ pub async fn run(ctx: &Ctx, args: RunArgs) -> Exit {
             break;
         }
     }
+    let skipped: Vec<NotStarted> = queue.map(|(_, prepared)| NotStarted { file: prepared.file, matrix: prepared.combination, document: prepared.input.document }).collect();
     let not_started = count - records.len();
     if not_started > 0 {
         ctx.say(&ctx.texts.t("cli.notStarted", &params! { "n" => not_started }));
     }
 
     if let Some(path) = &args.junit {
-        let xml = junit::write(&ctx.texts, &records, engine.remote());
+        let xml = junit::write(&ctx.texts, &records, &skipped, engine.remote());
         let written = path
             .parent()
             .filter(|parent| !parent.as_os_str().is_empty())
@@ -600,13 +627,16 @@ pub async fn validate(ctx: &Ctx, args: ValidateArgs) -> Exit {
     };
     let texts = &ctx.texts;
     let mut worst = Exit::Passed;
-    for Prepared { input, overrides, .. } in &prepared {
+    for Prepared { input, overrides, file, combination } in &prepared {
         let result = engine.validate(&input.document, overrides).await;
         if ctx.json {
-            let line = match &result {
-                Ok(issues) => json!({ "file": input.label, "experiment": input.document.name, "valid": true, "profile_issues": issues }),
-                Err(failure) => json!({ "file": input.label, "experiment": input.document.name, "valid": false, "error": failure.error, "exit_code": failure.exit.code() }),
+            let mut line = match &result {
+                Ok(issues) => json!({ "experiment": input.document.name, "valid": true, "profile_issues": issues }),
+                Err(failure) => json!({ "experiment": input.document.name, "valid": false, "error": failure.error, "exit_code": failure.exit.code() }),
             };
+            if let Value::Object(map) = &mut line {
+                about_json(map, file, combination);
+            }
             println!("{line}");
         }
         match result {
@@ -708,7 +738,7 @@ mod tests {
         let (_, failure) = prepare(&given(&["device=a"], &["device=b"])).err().unwrap();
         assert_eq!(failure.error.code, "cli.matrix_conflict", "a name set twice is refused");
         let (_, failure) = prepare(&given(&["nobody=a,b"], &[])).err().unwrap();
-        assert_eq!((failure.error.code.as_str(), failure.error.params["name"].as_str()), ("run.override_unknown", "nobody"));
+        assert_eq!((failure.error.code.as_str(), failure.error.params["name"].as_str()), ("cli.matrix_unknown", "nobody"), "said as the matrix's, not --param's");
     }
 
     #[test]

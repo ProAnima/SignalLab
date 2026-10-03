@@ -50,6 +50,10 @@ test("Route through impairment: a relay in front of the node, the node pointed a
   assert.deepEqual(next.edges.map((edge) => [edge.from, edge.to]).sort(), [[start.id, relay.id], [relay.id, udp.id], [udp.id, end.id]].sort());
   const again = routeThroughImpairment(next, udp.id).relay;
   assert.notEqual(again.listen, relay.listen, "a second relay takes another port");
+  // Nor a port a wait or an emulator listens on, nor the node's own target.
+  const crowded = { ...doc, nodes: [...doc.nodes.map((node) => node.id === udp.id ? { ...node, target: "127.0.0.1:9010" } : node),
+    { ...createNode("wait_udp", 0, 0), bind: "127.0.0.1:9011" }, { ...createNode("emulator", 0, 0), emulator: { ...createNode("emulator", 0, 0).emulator, bind: "127.0.0.1:9012" } }] };
+  assert.equal(routeThroughImpairment(crowded, udp.id).relay.listen, "127.0.0.1:9013");
   assert.equal(routeThroughImpairment(doc, start.id), null, "only OSC and UDP nodes");
   assert.deepEqual(validPortsFor("impairment"), ["next"]);
 

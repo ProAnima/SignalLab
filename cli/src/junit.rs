@@ -3,14 +3,15 @@
 //! that ran — its time from its own steps, a `<failure>` with the message in
 //! the reader's language and the technical detail — and a `<skipped>` case for
 //! a node the run never reached (the other side of a branch). An experiment
-//! that could not start is a suite with one `<error>` case.
+//! that could not start is a suite with one `<error>` case; one --fail-fast
+//! never started, a suite with one `<skipped>` case.
 
 use std::collections::HashMap;
 use std::fmt::Write as _;
 
 use crate::fail::Exit;
 use crate::i18n::Texts;
-use crate::run::{node_label, step_text, Ended, Record, Step};
+use crate::run::{node_label, step_text, Ended, NotStarted, Record, Step};
 
 /// Text for an XML attribute or element: escaped, and without the control
 /// characters XML 1.0 cannot carry at all.
@@ -85,8 +86,23 @@ fn cases(ended: &Ended) -> Vec<Case<'_>> {
     order
 }
 
-/// The XML for every experiment of a `signallab run`.
-pub fn write(texts: &Texts, records: &[Record], remote: bool) -> String {
+/// The suite's `<properties>`: the file as given, and the combination's values.
+fn properties_of(file: &str, matrix: &[(String, String)]) -> Vec<(String, String)> {
+    let mut properties = vec![("file".to_string(), file.to_string())];
+    properties.extend(matrix.iter().map(|(param, value)| (format!("param.{param}"), value.clone())));
+    properties
+}
+
+fn write_properties(suites: &mut String, properties: Vec<(String, String)>) {
+    suites.push_str("    <properties>\n");
+    for (key, value) in properties {
+        let _ = writeln!(suites, "      <property name=\"{}\" value=\"{}\" />", escape(&key), escape(&value));
+    }
+    suites.push_str("    </properties>\n");
+}
+
+/// The XML for every experiment of a `signallab run`, and those it did not start.
+pub fn write(texts: &Texts, records: &[Record], not_started: &[NotStarted], remote: bool) -> String {
     let wording: &[&str] = if remote { &["cli.serverErr.", "cli.err."] } else { &["cli.err."] };
     let mut suites = String::new();
     let (mut total, mut failures, mut errors, mut time) = (0usize, 0usize, 0usize, 0u64);
@@ -99,8 +115,7 @@ pub fn write(texts: &Texts, records: &[Record], remote: bool) -> String {
             },
             &record.matrix,
         ));
-        let mut properties = vec![("file".to_string(), record.label.clone())];
-        properties.extend(record.matrix.iter().map(|(param, value)| (format!("param.{param}"), value.clone())));
+        let mut properties = properties_of(&record.file, &record.matrix);
         let mut body = String::new();
         let (mut tests, mut failed, mut broken, mut skipped, mut suite_time, mut stamp) = (0usize, 0usize, 0usize, 0usize, 0u64, None);
         match &record.outcome {
@@ -208,14 +223,23 @@ pub fn write(texts: &Texts, records: &[Record], remote: bool) -> String {
             "  <testsuite name=\"{name}\" tests=\"{tests}\" failures=\"{failed}\" errors=\"{broken}\" skipped=\"{skipped}\" time=\"{}\"{stamp}>",
             seconds(suite_time)
         );
-        suites.push_str("    <properties>\n");
-        for (key, value) in properties {
-            let _ = writeln!(suites, "      <property name=\"{}\" value=\"{}\" />", escape(&key), escape(&value));
-        }
-        suites.push_str("    </properties>\n");
+        write_properties(&mut suites, properties);
         suites.push_str(&body);
         suites.push_str("  </testsuite>\n");
         debug_assert!(record.exit() != Exit::Passed || failed + broken == 0, "a passed run has no failures");
+    }
+    // Not started (--fail-fast): there, and said why, so a report reads as the whole matrix.
+    for skipped in not_started {
+        let name = escape(&crate::run::run_name(&skipped.document.name, &skipped.matrix));
+        total += 1;
+        let _ = writeln!(suites, "  <testsuite name=\"{name}\" tests=\"1\" failures=\"0\" errors=\"0\" skipped=\"1\" time=\"0.000\">");
+        write_properties(&mut suites, properties_of(&skipped.file, &skipped.matrix));
+        let _ = writeln!(
+            suites,
+            "    <testcase name=\"{}\" classname=\"{name}\" time=\"0.000\">\n      <skipped message=\"{}\" />\n    </testcase>\n  </testsuite>",
+            escape(&texts.plain("cli.junitStart")),
+            escape(&texts.plain("cli.junitNotStarted"))
+        );
     }
     format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<testsuites name=\"Signal Lab\" tests=\"{total}\" failures=\"{failures}\" errors=\"{errors}\" time=\"{}\">\n{suites}</testsuites>\n",
@@ -270,10 +294,10 @@ mod tests {
             report_error: None,
         };
         let records = vec![
-            Record { label: "a.json".into(), matrix: Vec::new(), document: doc.clone(), outcome: Ok(ended), report: Some("runs/r.json".into()) },
-            Record { label: "b.json".into(), matrix: Vec::new(), document: doc.clone(), outcome: Err(Failure::invalid(EngineError::new("run.override_unknown").with("name", "x"))), report: None },
+            Record { label: "a.json".into(), file: "a.json".into(), matrix: Vec::new(), document: doc.clone(), outcome: Ok(ended), report: Some("runs/r.json".into()) },
+            Record { label: "b.json".into(), file: "b.json".into(), matrix: Vec::new(), document: doc.clone(), outcome: Err(Failure::invalid(EngineError::new("run.override_unknown").with("name", "x"))), report: None },
         ];
-        let xml = write(&texts, &records, false);
+        let xml = write(&texts, &records, &[], false);
         assert!(xml.starts_with("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<testsuites name=\"Signal Lab\""));
         let skipped = doc.nodes.len() - 2;
         assert!(xml.contains(&format!("<testsuite name=\"Status &lt;branch&gt;\" tests=\"{}\" failures=\"1\" errors=\"0\" skipped=\"{skipped}\" time=\"0.250\" timestamp=\"2026-09-21T14:13:20\">", doc.nodes.len())), "{xml}");
@@ -286,5 +310,13 @@ mod tests {
         assert!(xml.contains("<error message=") && xml.contains("type=\"run.override_unknown\""), "an experiment that could not start is an error");
         let total = doc.nodes.len() + 1;
         assert!(xml.contains(&format!("<testsuites name=\"Signal Lab\" tests=\"{total}\" failures=\"1\" errors=\"1\"")), "{xml}");
+
+        // --fail-fast stopped before the next combination: it is in the report, skipped.
+        let skipped = [NotStarted { file: "c.json".into(), matrix: vec![("host".into(), "b".into())], document: doc.clone() }];
+        let xml = write(&texts, &records[..1], &skipped, false);
+        assert!(xml.contains(&format!("<testsuite name=\"{} [host=b]\" tests=\"1\" failures=\"0\" errors=\"0\" skipped=\"1\"", escape(&doc.name))), "{xml}");
+        assert!(xml.contains("<property name=\"file\" value=\"c.json\" />") && xml.contains("<property name=\"param.host\" value=\"b\" />"), "{xml}");
+        assert!(xml.contains(&format!("<skipped message=\"{}\" />", escape(&texts.plain("cli.junitNotStarted")))), "{xml}");
+        assert!(xml.contains(&format!("<testsuites name=\"Signal Lab\" tests=\"{}\"", doc.nodes.len() + 1)), "{xml}");
     }
 }

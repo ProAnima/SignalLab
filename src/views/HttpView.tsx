@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api, EV, type CookieInfo, type HttpAuth, type HttpResponse, type JobInfo, type BurstProgress, type Signal, type SignalBody } from "../lib/api";
 import { HttpAuthFields } from "../components/HttpAuthFields";
 import { SaveSignal, saveShortcut } from "../components/SaveSignal";
@@ -10,6 +10,7 @@ import { useFieldIds, useJobStream, usePersistentState, useSeries } from "../lib
 import { fmtBytes, fmtNum, fmtRate, fmtTime, latencyParts, prettyJson, statusClass } from "../lib/format";
 import { Scope } from "../components/Scope";
 import { MockThis } from "../components/MockThis";
+import { HTTP_COOKIES_KEY } from "../lib/signals";
 
 const METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
 
@@ -33,7 +34,7 @@ export function HttpView({ onToExperiment, load, onShowSignal, onShowEmulator }:
   /** Open the emulator Mock this put a route into. */
   onShowEmulator?: (id: string) => void;
 }) {
-  const { pushLog, pushError, refreshJobs, stopJob, jobGone } = useStore();
+  const { pushLog, pushError, refreshJobs, stopJob, jobGone, library, info } = useStore();
   const t = useT();
   const fid = useFieldIds();
 
@@ -46,15 +47,28 @@ export function HttpView({ onToExperiment, load, onShowSignal, onShowEmulator }:
   const [timeout, setTimeoutMs] = usePersistentState("signal-lab.http.timeout", 10000);
   // Credentials stay in memory only: a password is never written to the browser's storage.
   const [auth, setAuth] = useState<HttpAuth>({ scheme: "none" });
-  const [keepCookies, setKeepCookies] = usePersistentState("signal-lab.http.cookies", true);
+  const [keepCookies, setKeepCookies] = usePersistentState(HTTP_COOKIES_KEY, true);
   const [cookies, setCookies] = useState<CookieInfo[]>([]);
   const refreshCookies = () => { api.httpCookies().then(setCookies).catch(() => {}); };
   useEffect(refreshCookies, []);
   // The library signal this request is saved as, if any.
   const [signalId, setSignalId] = usePersistentState<string | null>("signal-lab.http.signal", null, (value) => value === null || typeof value === "string");
 
+  // Credentials are not kept in the browser, so a request bound to a signal takes
+  // them back from it when the library arrives — else Save would write them away.
+  const authRestored = useRef(false);
+  useEffect(() => {
+    if (authRestored.current || !signalId) return;
+    const bound = library.find((signal) => signal.id === signalId);
+    if (!bound) return;
+    authRestored.current = true;
+    const saved = bound.body.transport === "http" ? bound.body.request.auth : undefined;
+    if (saved && saved.scheme !== "none") setAuth((current) => current.scheme === "none" ? saved : current);
+  }, [library, signalId]);
+
   useEffect(() => {
     if (load?.signal.body.transport !== "http") return;
+    authRestored.current = true;
     const request = load.signal.body.request;
     setMethod(request.method); setUrl(request.url); setHeaders(request.headers.map(([name, value]) => [name, value]));
     setBody(request.body ?? ""); setTimeoutMs(request.timeout_ms); setAuth(request.auth ?? { scheme: "none" }); setSignalId(load.signal.id);
@@ -130,6 +144,8 @@ export function HttpView({ onToExperiment, load, onShowSignal, onShowEmulator }:
     setProg(p);
     // The last report rates the whole burst; the chart keeps the windows.
     if (!p.done) pushRps(p.rps);
+    // What the burst's answers set is in the jar now.
+    else refreshCookies();
   });
 
   useEffect(() => {
@@ -292,7 +308,7 @@ export function HttpView({ onToExperiment, load, onShowSignal, onShowEmulator }:
 
       <div className="panel" style={{ marginTop: 16 }}>
         <div className="row" style={{ alignItems: "center", marginBottom: 8 }}>
-          <p className="section-label" style={{ margin: 0 }} data-tip={t("http.cookiesHint")}>{t("http.cookies", { n: cookies.length })}</p>
+          <p className="section-label" style={{ margin: 0 }} data-tip={t(info?.mode === "server" ? "http.cookiesHintServer" : "http.cookiesHint")}>{t("http.cookies", { n: cookies.length })}</p>
           <span style={{ flex: 1 }} />
           <button className="ghost sm" style={{ flex: "0 0 auto" }} disabled={!cookies.length}
             onClick={() => { api.httpCookiesClear().then(refreshCookies).catch((e) => pushError("http", e)); }}>{t("common.clear")}</button>

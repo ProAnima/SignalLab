@@ -67,6 +67,18 @@ export function splitBroker(broker: string): { host: string; port: number } {
 /** What a fired signal did, as a console line: its text key and values (the signal's name is added). */
 export interface Fired { key: TKey; params: Record<string, string | number> }
 
+/** Where the HTTP screen keeps its *Keep cookies* (on unless turned off). */
+export const HTTP_COOKIES_KEY = "signal-lab.http.cookies";
+
+function httpKeepsCookies(): boolean {
+  try {
+    const raw = localStorage.getItem(HTTP_COOKIES_KEY);
+    return raw === null || JSON.parse(raw) !== false;
+  } catch {
+    return true;
+  }
+}
+
 export async function fireSignal(s: Signal, liveMqttJobId?: number | null): Promise<Fired> {
   const b = s.body;
   switch (b.transport) {
@@ -92,7 +104,8 @@ export async function fireSignal(s: Signal, liveMqttJobId?: number | null): Prom
       return { key: "log.firedUdp", params: { target: b.target, bytes: r.bytes } };
     }
     case "http": {
-      const r = await api.httpRequest(b.request);
+      // With the HTTP screen's jar while it keeps cookies, as its own Send: the same request, the same bytes.
+      const r = await api.httpRequest(b.request, httpKeepsCookies());
       // A refused connection is a successful command with a failed request; the
       // library should treat it as a failure, the way a person would.
       if (r.error) throw responseFailure(r, b.request.url);

@@ -174,12 +174,35 @@ async fn every_tool_works_for_a_client_here() {
         assert!(!failed && data["status"] == 200, "{text}");
         let (text, _, failed) = client.call("send_http", json!({ "method": "GET", "url": format!("http://{http}/"), "auth": { "scheme": "kerberos" } }));
         assert!(failed, "an unknown scheme is refused: {text}");
+        // A 401 Digest cannot answer says why, not only the status.
+        let basic_only = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let asks = basic_only.local_addr().unwrap();
+        std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            let (mut stream, _) = basic_only.accept().unwrap();
+            let mut head = Vec::new();
+            let mut byte = [0u8; 1];
+            while !head.ends_with(b"\r\n\r\n") && stream.read(&mut byte).unwrap_or(0) == 1 {
+                head.push(byte[0]);
+            }
+            let _ = stream.write_all(b"HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm=\"lab\"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+        });
+        let (text, data, failed) = client.call("send_http", json!({ "method": "GET", "url": format!("http://{asks}/"), "auth": { "scheme": "digest", "username": "u", "password": "p" } }));
+        assert!(!failed && data["status"] == 401 && data["digest"]["error"]["code"] == "http.digest_not_offered", "{text}");
+        assert!(text.contains("Digest not answered: The server answered 401 without asking for Digest"), "{text}");
         let (text, _, failed) = client.call("send_mqtt", json!({ "broker": mqtt, "topic": "lab/model", "payload": "1" }));
         assert!(!failed && text.contains("lab/model"), "{text}");
         let (text, data, failed) = client.call("send_ws", json!({ "url": format!("ws://{ws}/"), "text": "{\"q\":1}", "expect": "echo", "protocols": ["lab.v1"] }));
         assert!(!failed && data["reply"]["text"] == "echo {\"q\":1}" && data["handshake"]["protocol"] == "lab.v1" && text.contains("subprotocol lab.v1"), "{text}");
         let (text, data, failed) = client.call("send_ws", json!({ "url": format!("ws://{ws}/"), "text": "x", "expect": "never", "timeout_ms": 200 }));
         assert!(failed && data["error"]["code"] == "wait.timeout", "{text}");
+        // What the schema says, checked: one of expect or expect_regex, a wait of at most two minutes.
+        let (text, data, failed) = client.call("send_ws", json!({ "url": format!("ws://{ws}/"), "text": "x", "expect": "a", "expect_regex": "b" }));
+        assert!(failed && data["error"]["code"] == "mcp.arguments" && text.contains("not both"), "{text}");
+        for timeout in [0, 120_001] {
+            let (text, data, failed) = client.call("send_ws", json!({ "url": format!("ws://{ws}/"), "text": "x", "wait": true, "timeout_ms": timeout }));
+            assert!(failed && data["error"]["code"] == "mcp.arguments" && text.contains("120000"), "{timeout}: {text}");
+        }
         let (text, data, failed) = client.call("send_osc", json!({ "target": "127.0.0.1", "address": "/x" }));
         assert!(failed && data["error"]["code"] == "transport.target_invalid", "{text}");
 

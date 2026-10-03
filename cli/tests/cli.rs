@@ -382,7 +382,7 @@ fn a_matrix_runs_every_combination_reports_each_and_stops_early_when_told() {
     let ended: Vec<&Value> = lines.iter().filter(|line| line["type"] == "ended").collect();
     assert_eq!(ended.len(), 4);
     assert_eq!((ended[1]["matrix"]["word"].as_str(), ended[1]["matrix"]["n"].as_str()), (Some("hi"), Some("3")), "{}", ended[1]);
-    assert!(ended[1]["file"].as_str().unwrap().ends_with("matrixed.json [word=hi, n=3]"), "{}", ended[1]["file"]);
+    assert_eq!(ended[1]["file"].as_str(), Some(file.as_str()), "the file as given; its values are in matrix");
     let summary = lines.iter().find(|line| line["type"] == "summary").unwrap();
     assert_eq!((summary["total"].as_u64(), summary["passed"].as_u64(), summary["not_started"].as_u64()), (Some(4), Some(4), Some(0)));
     let xml = std::fs::read_to_string(&junit).unwrap();
@@ -391,18 +391,23 @@ fn a_matrix_runs_every_combination_reports_each_and_stops_early_when_told() {
     assert_eq!(std::fs::read_dir(&reports).unwrap().count(), 4, "a report per run");
 
     // n=2 fails its check: the run says which combination, and --fail-fast stops there.
-    let failing = signallab(&["run", &file, "--matrix", "n=1,2,3", "--fail-fast"]);
+    let failing = signallab(&["run", &file, "--matrix", "n=1,2,3", "--fail-fast", "--junit", junit.to_str().unwrap()]);
     assert_eq!(code(&failing), 1, "{}", out(&failing));
     assert_eq!(arrived(&socket), ["x 1", "x 2"], "the third is not started");
     assert!(out(&failing).contains("✖ Matrixed [n=2]"), "{}", out(&failing));
     assert!(err(&failing).contains("1 run not started"), "{}", err(&failing));
+    let xml = std::fs::read_to_string(&junit).unwrap();
+    assert_eq!(xml.matches("<testsuite ").count(), 3, "the one not started is there too: {xml}");
+    assert!(xml.contains("name=\"Matrixed [n=3]\" tests=\"1\" failures=\"0\" errors=\"0\" skipped=\"1\""), "{xml}");
     let through = signallab(&["run", &file, "--matrix", "n=1,2,3"]);
     assert_eq!(code(&through), 1);
     assert_eq!(arrived(&socket).len(), 3, "without --fail-fast every one runs");
-    assert!(out(&through).contains("3 experiments: 2 passed, 1 failed"), "{}", out(&through));
+    assert!(out(&through).contains("3 runs: 2 passed, 1 failed"), "{}", out(&through));
 
     // Wrong before anything is sent: an unknown name, a name set twice, too many.
-    assert_eq!(code(&signallab(&["run", &file, "--matrix", "nobody=a,b"])), 2);
+    let nobody = signallab(&["run", &file, "--matrix", "nobody=a,b"]);
+    assert_eq!(code(&nobody), 2);
+    assert!(err(&nobody).contains("--matrix nobody"), "{}", err(&nobody));
     assert_eq!(code(&signallab(&["run", &file, "--matrix", "n=1", "--param", "n=2"])), 2);
     let wide = format!("n={}", (0..300).map(|i| i.to_string()).collect::<Vec<_>>().join(","));
     let too_many = signallab(&["validate", &file, "--matrix", &wide]);

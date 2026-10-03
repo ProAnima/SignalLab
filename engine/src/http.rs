@@ -11,7 +11,7 @@ use crate::host::Host;
 
 use super::cookies::CookieJar;
 use super::error::{EngineError, EngineResult, Field};
-use super::http_auth::{self, Auth, DigestMemory};
+use super::http_auth::{self, Answering, Auth, DigestMemory};
 use super::latency::{LatencyHistogram, Percentiles};
 use super::inspect::{self, Frame, Gate};
 use super::jobs::{now_ms, JobInfo, JobRegistry, TaskGuard};
@@ -68,22 +68,44 @@ pub struct DigestOutcome {
 
 const MAX_BODY_PREVIEW: usize = 256 * 1024;
 
-fn build_client(timeout_ms: u64, jar: Option<Arc<CookieJar>>) -> EngineResult<reqwest::Client> {
+/// Redirects followed, as reqwest's own default.
+const MAX_REDIRECTS: usize = 10;
+
+/// A client for `req`: a Digest request follows its redirects itself, so the
+/// URL that asks is the one answered.
+fn build_client(req: &HttpRequest, jar: Option<Arc<CookieJar>>) -> EngineResult<reqwest::Client> {
     let mut builder = reqwest::Client::builder()
-        .timeout(Duration::from_millis(timeout_ms.max(1)))
+        .timeout(Duration::from_millis(req.timeout_ms.max(1)))
         .danger_accept_invalid_certs(false)
         .user_agent("SignalLab/0.1");
+    if matches!(req.auth, Auth::Digest { .. }) {
+        builder = builder.redirect(reqwest::redirect::Policy::none());
+    }
     if let Some(jar) = jar {
         builder = builder.cookie_provider(jar);
     }
     builder.build().map_err(|e| EngineError::new("http.client_failed").because(transport::chain(&e)))
 }
 
+/// What one exchange sends: `req` as written, or a hop of it after a redirect.
+struct Outgoing<'a> {
+    method: String,
+    url: &'a str,
+    headers: &'a [(String, String)],
+    body: Option<&'a str>,
+}
+
+impl<'a> Outgoing<'a> {
+    fn of(req: &'a HttpRequest) -> Self {
+        Outgoing { method: req.method.to_uppercase(), url: &req.url, headers: &req.headers, body: req.body.as_deref() }
+    }
+}
+
 /// The request as reqwest sends it, with `authorization` when there is one.
-fn builder(client: &reqwest::Client, req: &HttpRequest, authorization: Option<&str>) -> reqwest::RequestBuilder {
-    let method = reqwest::Method::from_bytes(req.method.to_uppercase().as_bytes()).unwrap_or(reqwest::Method::GET);
-    let mut builder = client.request(method, &req.url);
-    for (k, v) in &req.headers {
+fn builder(client: &reqwest::Client, out: &Outgoing<'_>, authorization: Option<&str>) -> reqwest::RequestBuilder {
+    let method = reqwest::Method::from_bytes(out.method.as_bytes()).unwrap_or(reqwest::Method::GET);
+    let mut builder = client.request(method, out.url);
+    for (k, v) in out.headers {
         if !k.trim().is_empty() {
             builder = builder.header(k, v);
         }
@@ -91,24 +113,25 @@ fn builder(client: &reqwest::Client, req: &HttpRequest, authorization: Option<&s
     if let Some(authorization) = authorization {
         builder = builder.header(reqwest::header::AUTHORIZATION, authorization);
     }
-    if let Some(b) = &req.body {
+    if let Some(b) = out.body {
         if !b.is_empty() {
-            builder = builder.body(b.clone());
+            builder = builder.body(b.to_string());
         }
     }
     builder
 }
 
 /// One exchange: sent, the answer read (or the failure classified).
-async fn exchange(client: &reqwest::Client, req: &HttpRequest, authorization: Option<&str>) -> HttpResponse {
+async fn exchange(client: &reqwest::Client, out: &Outgoing<'_>, authorization: Option<&str>) -> HttpResponse {
     let start = Instant::now();
-    match builder(client, req, authorization).send().await {
+    match builder(client, out, authorization).send().await {
         Ok(resp) => {
             let status = resp.status();
+            // A value that is not ASCII (a filename in UTF-8, Latin-1) is shown as near as it reads.
             let headers: Vec<(String, String)> = resp
                 .headers()
                 .iter()
-                .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
+                .map(|(k, v)| (k.to_string(), String::from_utf8_lossy(v.as_bytes()).into_owned()))
                 .collect();
             let full = resp.bytes().await.unwrap_or_default();
             let latency_ms = start.elapsed().as_secs_f64() * 1000.0;
@@ -146,51 +169,133 @@ async fn exchange(client: &reqwest::Client, req: &HttpRequest, authorization: Op
 }
 
 /// The request target a Digest answer hashes: the URL's path and query.
-fn request_target(url: &str) -> String {
-    match reqwest::Url::parse(url) {
-        Ok(url) => match url.query() {
-            Some(query) => format!("{}?{query}", url.path()),
-            None => url.path().to_string(),
-        },
-        Err(_) => "/".into(),
+fn request_target(url: &reqwest::Url) -> String {
+    match url.query() {
+        Some(query) => format!("{}?{query}", url.path()),
+        None => url.path().to_string(),
     }
 }
 
-/// Send `req` with its authentication. Digest answers the server's 401
-/// challenge and sends again — or, when `memory` holds a challenge from an
-/// earlier request, answers it at once; a stale or new challenge is answered
-/// once more. The latency is all of it: what a client waits.
+/// Send `req` with its authentication. The latency is all of it: what a client waits.
 async fn execute(client: &reqwest::Client, req: &HttpRequest, memory: &DigestMemory) -> HttpResponse {
+    let out = Outgoing::of(req);
     match &req.auth {
-        Auth::None => exchange(client, req, None).await,
-        Auth::Basic { username, password } => exchange(client, req, Some(&http_auth::basic(username, password))).await,
-        Auth::Bearer { token } => exchange(client, req, Some(&format!("Bearer {token}"))).await,
-        Auth::Digest { username, password } => {
-            let method = req.method.to_uppercase();
-            let uri = request_target(&req.url);
-            let body = req.body.as_deref().unwrap_or_default().as_bytes();
-            let answer = |challenge: &http_auth::Challenge, nc: u32| http_auth::authorization(challenge, username, password, &method, &uri, nc, &http_auth::cnonce(), body);
-            let remembered = memory.next().map(|(challenge, nc)| answer(&challenge, nc));
-            let first = exchange(client, req, remembered.as_deref()).await;
-            if first.status != 401 {
-                let digest = remembered.is_some().then_some(DigestOutcome { challenged: false, error: None });
-                return HttpResponse { digest, ..first };
-            }
-            let offered = first.headers.iter().filter(|(name, _)| name.eq_ignore_ascii_case("www-authenticate")).map(|(_, value)| value.as_str());
+        Auth::None => exchange(client, &out, None).await,
+        Auth::Basic { username, password } => exchange(client, &out, Some(&http_auth::basic(username, password))).await,
+        Auth::Bearer { token } => exchange(client, &out, Some(&format!("Bearer {token}"))).await,
+        Auth::Digest { username, password } => digest(client, req, username, password, memory).await,
+    }
+}
+
+/// A Digest request. The 401's challenge is answered and the request sent
+/// again — or, when `memory` holds what this origin asked an earlier request,
+/// answered at once; a stale or new challenge is answered once more. Redirects
+/// are followed here, as reqwest follows them, so the URL that asks is the one
+/// answered, with its own path and the method that reached it; a challenge
+/// from another origin than the request's is not answered (`answerable`).
+async fn digest(client: &reqwest::Client, req: &HttpRequest, username: &str, password: &str, memory: &DigestMemory) -> HttpResponse {
+    let Ok(origin) = reqwest::Url::parse(&req.url) else {
+        // reqwest says what is wrong with the URL.
+        return exchange(client, &Outgoing::of(req), None).await;
+    };
+    let mut url = origin.clone();
+    let mut method = req.method.to_uppercase();
+    let mut headers = req.headers.clone();
+    let mut body = req.body.clone();
+    let mut latency_ms = 0.0;
+    let mut outcome: Option<DigestOutcome> = None;
+    for _ in 0..=MAX_REDIRECTS {
+        let here = url.origin().ascii_serialization();
+        let answerable_here = answerable(&origin, &url);
+        let uri = request_target(&url);
+        let target = url.to_string();
+        let out = Outgoing { method: method.clone(), url: &target, headers: &headers, body: body.as_deref() };
+        let answer = |answering: &Answering| answering.header(username, password, &method, &uri, body.as_deref().unwrap_or_default().as_bytes());
+        let early = if answerable_here { memory.next(&here) } else { None };
+        let mut response = exchange(client, &out, early.as_ref().map(answer).as_deref()).await;
+        latency_ms += response.latency_ms;
+        if early.is_some() {
+            outcome.get_or_insert(DigestOutcome { challenged: false, error: None });
+        }
+        if response.status == 401 {
+            let offered = response.headers.iter().filter(|(name, _)| name.eq_ignore_ascii_case("www-authenticate")).map(|(_, value)| value.as_str());
+            let refused = |error: EngineError| Some(DigestOutcome { challenged: false, error: Some(error) });
             match http_auth::digest_challenge(offered) {
-                Ok(Some(challenge)) => {
-                    let nc = memory.remember(challenge.clone());
-                    let second = exchange(client, req, Some(&answer(&challenge, nc))).await;
-                    if second.status == 401 {
-                        memory.forget();
-                    }
-                    HttpResponse { latency_ms: first.latency_ms + second.latency_ms, digest: Some(DigestOutcome { challenged: true, error: None }), ..second }
+                Ok(Some(_)) if !answerable_here => {
+                    return HttpResponse { latency_ms, digest: refused(EngineError::new("http.digest_other_origin").with("origin", &here)), ..response };
                 }
-                Ok(None) => HttpResponse { digest: Some(DigestOutcome { challenged: false, error: Some(EngineError::new("http.digest_not_offered")) }), ..first },
-                Err(error) => HttpResponse { digest: Some(DigestOutcome { challenged: false, error: Some(error) }), ..first },
+                Ok(Some(challenge)) => {
+                    let answering = memory.remember(&here, challenge);
+                    let second = exchange(client, &out, Some(&answer(&answering))).await;
+                    latency_ms += second.latency_ms;
+                    if second.status == 401 {
+                        memory.forget(&here, &answering.challenge.nonce);
+                    }
+                    outcome = Some(DigestOutcome { challenged: true, error: None });
+                    response = second;
+                }
+                Ok(None) => return HttpResponse { latency_ms, digest: refused(EngineError::new("http.digest_not_offered")), ..response },
+                Err(error) => return HttpResponse { latency_ms, digest: refused(error), ..response },
             }
         }
+        let Some(next) = redirect(&response, &url) else {
+            return HttpResponse { latency_ms, digest: outcome, ..response };
+        };
+        // 301, 302 and 303 go on as GET without a body (HEAD stays HEAD); 307 and 308 as they were.
+        if matches!(response.status, 301..=303) {
+            if method != "HEAD" {
+                method = "GET".into();
+            }
+            body = None;
+            headers.retain(|(name, _)| !["content-type", "content-length", "content-encoding", "transfer-encoding"].iter().any(|kept| name.trim().eq_ignore_ascii_case(kept)));
+        }
+        // Credentials and cookies typed for one host never go on to another.
+        if next.host_str() != url.host_str() || next.port_or_known_default() != url.port_or_known_default() {
+            headers.retain(|(name, _)| !["authorization", "cookie", "cookie2", "proxy-authorization", "www-authenticate"].iter().any(|kept| name.trim().eq_ignore_ascii_case(kept)));
+        }
+        // Where it came from, as reqwest says it — never from HTTPS to plain HTTP.
+        headers.retain(|(name, _)| !name.trim().eq_ignore_ascii_case("referer"));
+        if !(url.scheme() == "https" && next.scheme() == "http") {
+            let mut referer = url.clone();
+            let _ = referer.set_username("");
+            let _ = referer.set_password(None);
+            referer.set_fragment(None);
+            headers.push(("Referer".into(), referer.to_string()));
+        }
+        url = next;
     }
+    HttpResponse {
+        ok: false,
+        status: 0,
+        status_text: String::new(),
+        latency_ms,
+        headers: Vec::new(),
+        body: String::new(),
+        body_bytes: 0,
+        truncated: false,
+        error: Some(format!("error following redirect for url ({url}): too many redirects")),
+        cause: Some(Cause::Failed),
+        digest: outcome,
+    }
+}
+
+/// Whether a challenge from `here` is answered for a request to `requested`:
+/// the same origin, or the same host moved from http:// to https:// on the
+/// default ports — the credentials then go to the host they were typed for,
+/// over TLS.
+fn answerable(requested: &reqwest::Url, here: &reqwest::Url) -> bool {
+    requested.origin() == here.origin()
+        || (requested.scheme() == "http" && here.scheme() == "https" && requested.host_str() == here.host_str() && requested.port().is_none() && here.port().is_none())
+}
+
+/// Where a redirect response sends the request next, if it is one with a `Location`.
+fn redirect(response: &HttpResponse, from: &reqwest::Url) -> Option<reqwest::Url> {
+    if !matches!(response.status, 301 | 302 | 303 | 307 | 308) {
+        return None;
+    }
+    let location = response.headers.iter().find(|(name, _)| name.eq_ignore_ascii_case("location"))?;
+    let next = from.join(&location.1).ok()?;
+    matches!(next.scheme(), "http" | "https").then_some(next)
 }
 
 /// Response body kept in a capture frame's detail pane.
@@ -238,7 +343,7 @@ fn exchange_frame(req: &HttpRequest, resp: &HttpResponse, job_id: Option<u64>) -
 /// A failure to connect or to get an answer is in the response (`error`,
 /// `cause`); the error is only for a client that could not be built.
 pub async fn request_once(host: Host, req: HttpRequest, jar: Option<Arc<CookieJar>>) -> EngineResult<HttpResponse> {
-    let client = build_client(req.timeout_ms, jar)?;
+    let client = build_client(&req, jar)?;
     let resp = execute(&client, &req, &DigestMemory::default()).await;
     if inspect::armed(&host) {
         inspect::publish(&host, exchange_frame(&req, &resp, None));
@@ -372,7 +477,7 @@ pub async fn start_burst(
     jar: Option<Arc<CookieJar>>,
 ) -> EngineResult<JobInfo> {
     check_burst(&cfg)?;
-    let client = build_client(cfg.request.timeout_ms, jar.filter(|_| cfg.cookies))?;
+    let client = build_client(&cfg.request, jar.filter(|_| cfg.cookies))?;
     let concurrency = cfg.concurrency.clamp(1, MAX_CONCURRENCY);
 
     let id = jobs.next_id();
@@ -536,6 +641,16 @@ mod tests {
             rate,
             cookies: false,
         }
+    }
+
+    #[test]
+    fn a_digest_challenge_is_answered_only_where_the_credentials_belong() {
+        let url = |text: &str| reqwest::Url::parse(text).unwrap();
+        assert!(answerable(&url("http://lab.test/a"), &url("http://lab.test/b?x=1")));
+        assert!(answerable(&url("http://lab.test/a"), &url("https://lab.test/a")), "the same host, moved to TLS");
+        assert!(!answerable(&url("https://lab.test/a"), &url("http://lab.test/a")), "never down to plain HTTP");
+        assert!(!answerable(&url("http://lab.test:8080/"), &url("https://lab.test:8443/")), "other ports: another service");
+        assert!(!answerable(&url("http://lab.test/"), &url("http://api.lab.test/")), "another host");
     }
 
     #[test]

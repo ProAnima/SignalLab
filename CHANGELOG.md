@@ -29,8 +29,7 @@ release notes — so what is written here is what users read. See
   *Wait for HTTP request* waits for a request to it (or to a listener of the run that
   answers 204) by method, path and conditions, so an experiment proves that the system
   under test called it, and with what. An OSC or UDP emulator shares its port with the
-  run's waits. The template *Retry a flaky API* shows it end to end. Experiment files are
-  now version 6; older ones open as before.
+  run's waits. The template *Retry a flaky API* shows it end to end (document version 6).
 - **Emulators everywhere.** `signallab emulate <file|name>` runs emulators from a file or
   the app's library until Ctrl+C or `--for`, printing every request and the counts at the
   end (`--json` for one object per line, `--server` to run them on a lab server);
@@ -55,7 +54,7 @@ release notes — so what is written here is what users read. See
   the run's emulators down and brings it back. The relay's decisions come from the run's
   seed — the same seed drops the same packets — each phase is counted in the report, and
   a run that ends in any way closes its relays. Templates *Fault phases* and *Dependency
-  outage* show both. Experiment files are now version 7; run reports version 4.
+  outage* show both (document version 7; run reports version 4).
 - **More ways a network fails.** The impairment relay adds bursts of loss, reordering, a
   bandwidth limit and *offline*, has presets (*LAN*, *Busy Wi-Fi*, *4G*, *Satellite*,
   *Intermittent*, *Offline*), takes edits while it runs without dropping its port, and
@@ -72,26 +71,33 @@ release notes — so what is written here is what users read. See
   send or a wait opens the connection its connect node describes. The template *WebSocket
   echo*; `signallab send ws <url> --text … --expect …` and the assistant's `send_ws`;
   the API's `ws_connect`, `ws_send`, `ws_close`, `ws_exchange`. Experiment files are now
-  version 8.
+  version 8 — this release's last; files of every earlier version open as before.
 - **A parameter matrix for the command line.** `signallab run` and `validate` take
   `--matrix NAME=V1,V2` (repeat for more names: every combination runs) and
   `--matrix-file` (axes, or a list of combinations), and `--fail-fast` stops at the
   first run that does not pass. Each combination is a run of its own — named with its
   values, a JUnit suite with `param.NAME` properties, a report of its own, a `matrix`
-  object in `--json` — all checked before the first sends anything, here or on a
-  server. The GitHub Action has `matrix`, `matrix-file` and `fail-fast` inputs.
+  object next to the `file` it came from in `--json` — all checked before the first
+  sends anything, here or on a server. A value given twice runs once, at most 256 runs
+  start from one command, and a run `--fail-fast` never started is a skipped suite of
+  the JUnit report. The GitHub Action has `matrix`, `matrix-file` and `fail-fast` inputs.
 - **HTTP authentication and cookies.** A request — on the HTTP screen, in an experiment's
   HTTP node, in a burst, from `signallab send http` (`-u name:password`, `--digest`,
   `--bearer`) and the assistant's `send_http` — authenticates with **Basic**, **Bearer**
   or **Digest**: the server's 401 challenge is answered (RFC 7616: MD5 and SHA-256, their
   `-sess` variants, `qop=auth` and `auth-int`) and the request sent again; a burst
-  answers one challenge for all its requests and a stale nonce once more. The
-  credentials go only into the request: nothing in the Inspector, a step or a report
-  shows them, and a node's password can be `{{secret.NAME}}`. A **cookie jar** sends back
-  what servers set with Set-Cookie, as a browser does (domain, path, Secure, expiry): the
-  HTTP screen keeps one, listed and cleared there (*Keep cookies*), and every run keeps
-  its own (*Keep cookies between requests* in the Parameters panel). Files from before
-  version 8 open with the run's jar off, so they run as they did.
+  answers one challenge for all its requests — in parallel too, never sending a count
+  twice — and a stale nonce once more. Behind a redirect the URL that asks is the one
+  answered; a challenge from another origin is not. The credentials go only into the
+  request: nothing in the Inspector, a step or a report shows them, a node's password
+  can be `{{secret.NAME}}`, and a secret is masked in Basic's base64 too. A request
+  saved as a signal keeps its credentials — the Signals screen shows and edits them, and
+  the HTTP screen takes them back from it after a restart. A **cookie jar**
+  sends back what servers set with Set-Cookie, as a browser does (domain, path, Secure,
+  expiry): the HTTP screen keeps one, listed and cleared there (*Keep cookies*; the
+  library's HTTP signals use it too, and on a server every page shares it), and every
+  run keeps its own (*Keep cookies between requests* in the Parameters panel). Files
+  from before version 8 open with the run's jar off, so they run as they did.
 - **Load at a rate, read in percentiles.** The HTTP screen's burst can start requests on
   a schedule of its own — *Rate, req/s*, 0.1 to 100 000 — instead of each worker sending
   again on its answer. A request that finds every worker busy is skipped and counted as
@@ -178,7 +184,7 @@ release notes — so what is written here is what users read. See
   maximum, until an exit condition holds (checked after each iteration, so the
   body can set what it tests); *Done* follows, or *Limit* when the iterations ran
   out first. The wire back is drawn over the body. New template *Poll until
-  ready*. Experiment files are now version 5; older ones open as before.
+  ready* (document version 5).
 - **Every screen checked end to end.** `npm run e2e` walks every tab of the real
   app — the desktop app and the server in a browser, on Windows (WebView2, Edge)
   and Linux (WebKitGTK) — sending real traffic to loopback stand-ins and checking
@@ -194,7 +200,7 @@ release notes — so what is written here is what users read. See
   answers the sender is heard too — and the reply is a variable for later steps.
   Every step that sends or listens can retry, with the same or a doubling pause;
   each failed attempt and its reason are in the timeline, and Stop ends a pause.
-  Experiment files are now version 4; older ones open as before.
+  (Document version 4.)
 - **Parallel work from any output.** Drag several wires out of one output —
   Start included — and their nodes run at the same time, each branch with its
   own copy of the variables. A Join waits for every wire into it; End completes

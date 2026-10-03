@@ -273,6 +273,10 @@ a browser. Desktop-only abilities are not guessed: `app_info` reports the mode,
 whether secrets can be written and where the data folder is, and `src/lib/platform.ts`
 covers fullscreen and downloads for both.
 
+One server is one engine: every page signed in to it sees the same jobs, the same
+signal library and the same HTTP cookie jar (the HTTP screen's *Keep cookies*) — people
+who share a server share those. A run keeps a jar of its own.
+
 ### HTTP API
 
 | Route | |
@@ -444,13 +448,17 @@ OSC (monitor, sender, arguments, Enter, generator, *Wait for this*), Signals
 *Wait for this*, clear), Broadcast and discovery (a probe and its answer, a
 beacon), the impairment relay (20 datagrams through it), Storm (UDP and TCP,
 counted at the sink), the scanner, HTTP (GET, POST, headers, raw, a burst of 40
-with its percentiles, 20 more at a rate),
+with its percentiles, 20 more at a rate, Digest answered and checked by the
+fixture's own hashing, the cookie jar set, sent back and cleared), WebSocket
+(headers and subprotocols at the far end, text and bytes echoed, a JSON message
+read formatted, both frames of an exchange in the Inspector, the close frame),
 the library (*Save…* from HTTP into a new folder, `Ctrl+S` after a change, the
 chip that opens it in Signals, a new folder renamed at once, a signal dragged
 into it, `F2`, closing and opening a folder, *Open in HTTP*, a folder removed with
 its contents moving up — and the file on disk: version 2, the empty folder kept),
 experiments (templates, *Send now*, runs, the add menu and undo, a reply
-matched and its frame in the Inspector, Repeat, Loop, parallel flows, export,
+matched and its frame in the Inspector, Repeat, Loop, the emulator node, fault
+phases, an HTTP node with Digest, the WebSocket echo template, parallel flows, export,
 a wire picked and deleted, a hovered wire's ×, undo, and every pane handle by
 pointer and keyboard),
 the Inspector (protocols, filters, a frame and its bytes, *Save as signal*,

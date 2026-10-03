@@ -75,9 +75,24 @@ export function createNodeIn(doc: Experiment, type: NodeType, x: number, y: numb
   return node;
 }
 
-/** A loopback port no Impairment of the document listens on yet, from 9010 up. */
-function freeRelayPort(doc: Experiment): number {
-  const taken = new Set(doc.nodes.flatMap((node) => node.type === "impairment" ? [Number(node.listen.slice(node.listen.lastIndexOf(":") + 1))] : []));
+/** The port of `host:port`, or none. */
+const addressPort = (address: string) => { const port = Number(address.slice(address.lastIndexOf(":") + 1)); return Number.isInteger(port) && port > 0 ? [port] : []; };
+
+/**
+ * A loopback port, from 9010 up, that no socket of the document's run takes —
+ * a relay, a wait, a reply, an emulator — and that is not `avoid` (the node's
+ * own target: a relay listening there would forward to itself).
+ */
+export function freeRelayPort(doc: Experiment, avoid: string[] = []): number {
+  const taken = new Set([...avoid.flatMap(addressPort), ...doc.nodes.flatMap((node) => {
+    switch (node.type) {
+      case "impairment": return addressPort(node.listen);
+      case "wait_osc": case "wait_udp": case "wait_http": return addressPort(node.bind);
+      case "osc": case "udp": return node.reply ? addressPort(node.reply.bind) : [];
+      case "emulator": return addressPort(node.emulator.bind);
+      default: return [];
+    }
+  })]);
   let port = 9010;
   while (taken.has(port)) port += 1;
   return port;
@@ -92,7 +107,7 @@ function freeRelayPort(doc: Experiment): number {
 export function routeThroughImpairment(doc: Experiment, nodeId: string): { doc: Experiment; relay: ExperimentNode } | null {
   const node = doc.nodes.find((candidate) => candidate.id === nodeId);
   if (!node || (node.type !== "osc" && node.type !== "udp")) return null;
-  const listen = `127.0.0.1:${freeRelayPort(doc)}`;
+  const listen = `127.0.0.1:${freeRelayPort(doc, [node.target])}`;
   const relay: ExperimentNode = { ...createNode("impairment", node.x, Math.max(12, node.y - STEP_Y)), type: "impairment", listen, target: node.target, profile: presetProfile("lan") };
   const incoming = doc.edges.filter((edge) => edge.to === nodeId);
   const edges = [

@@ -22,6 +22,7 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::{HeaderName, HeaderValue};
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::tungstenite::protocol::{CloseFrame, WebSocketConfig};
+use tokio_tungstenite::tungstenite::error::ProtocolError;
 use tokio_tungstenite::tungstenite::{Error as WsError, Message};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
@@ -34,8 +35,14 @@ use super::listen::{Inbox, WaitOutcome};
 use super::matching::{self, Datagram, Matcher, UdpMatcher, UdpMode};
 use super::transport::{self, Cause};
 
-/// The largest message received or sent; a server streaming more is closed with 1009.
+/// The largest message received or sent; a server sending more loses the connection
+/// (`ws.message_too_large`).
 pub const MAX_MESSAGE: usize = 16 << 20;
+/// A write that takes longer — the peer stopped reading, its window is full — ends
+/// the connection instead of stalling it, and every step waiting on it, forever.
+const WRITE_TIMEOUT: Duration = Duration::from_secs(10);
+/// Hex a screen message carries of a binary one.
+const SHOWN_HEX: usize = 4096;
 /// A close frame's reason: 125 bytes less the two of the code.
 pub const MAX_CLOSE_REASON: usize = 123;
 /// How long a close handshake may take before the line is just dropped.
@@ -226,7 +233,30 @@ fn ws_failure(error: WsError, url: &str) -> EngineError {
             }
         }
         WsError::Capacity(error) => EngineError::new("ws.message_too_large").with("max", MAX_MESSAGE).because(error),
+        WsError::Protocol(ProtocolError::SecWebSocketSubProtocolError(error)) => EngineError::new("ws.subprotocol_refused").with("url", url).because(error),
         other => EngineError::new("ws.handshake_failed").with("url", url).because(other),
+    }
+}
+
+/// A close frame's reason fits it: at most `MAX_CLOSE_REASON` bytes.
+pub fn check_reason(reason: &str) -> EngineResult<()> {
+    if reason.len() > MAX_CLOSE_REASON {
+        return Err(EngineError::new("node.too_long").with("max", MAX_CLOSE_REASON).in_field(Field::new("reason")));
+    }
+    Ok(())
+}
+
+/// What broke an open connection: the network's cause, a reset without a
+/// close frame, a message over the limit, or the server breaking the protocol
+/// — never "the upgrade failed", which it did not.
+fn stream_failure(error: WsError, url: &str) -> EngineError {
+    match error {
+        WsError::Io(error) => transport::of_io(&error).error(url).because(error),
+        WsError::Tls(error) => Cause::Tls.error(url).because(error),
+        WsError::ConnectionClosed | WsError::AlreadyClosed => Cause::Reset.error(url),
+        WsError::Protocol(ProtocolError::ResetWithoutClosingHandshake) => Cause::Reset.error(url),
+        WsError::Capacity(error) => EngineError::new("ws.message_too_large").with("max", MAX_MESSAGE).because(error),
+        other => EngineError::new("ws.protocol_error").with("url", url).because(other),
     }
 }
 
@@ -244,6 +274,9 @@ pub async fn dial(cfg: &WsConfig) -> EngineResult<(Stream, Handshake)> {
         request.headers_mut().append(header, value);
     }
     let protocols: Vec<&str> = cfg.protocols.iter().map(|protocol| protocol.trim()).filter(|protocol| !protocol.is_empty()).collect();
+    if let Some(protocol) = protocols.iter().find(|protocol| !protocol_valid(protocol)) {
+        return Err(EngineError::new("ws.protocol_invalid").with("value", protocol).in_field(Field::new("protocols")));
+    }
     if !protocols.is_empty() {
         let offered = HeaderValue::from_str(&protocols.join(", ")).map_err(|_| EngineError::new("ws.header_invalid").with("name", "Sec-WebSocket-Protocol"))?;
         request.headers_mut().insert("Sec-WebSocket-Protocol", offered);
@@ -283,8 +316,16 @@ pub async fn dial(cfg: &WsConfig) -> EngineResult<(Stream, Handshake)> {
 }
 
 enum Command {
-    Send(Outgoing, oneshot::Sender<EngineResult<usize>>),
+    Send(Outgoing, oneshot::Sender<EngineResult<Sent>>),
     Close(u16, String, oneshot::Sender<Closed>),
+}
+
+/// A message on the wire: its size, and when it was written — what a wait for
+/// its answer counts from, so nothing read before it is taken for the answer.
+#[derive(Clone, Copy, Debug)]
+pub struct Sent {
+    pub bytes: usize,
+    pub at: Instant,
 }
 
 #[derive(Default)]
@@ -371,7 +412,7 @@ impl Connection {
         Arc::new(Connection { handshake, peer, commands, state })
     }
 
-    pub async fn send(&self, message: Outgoing) -> EngineResult<usize> {
+    pub async fn send(&self, message: Outgoing) -> EngineResult<Sent> {
         let (ack, answer) = oneshot::channel();
         self.commands.send(Command::Send(message, ack)).map_err(|_| self.gone())?;
         answer.await.map_err(|_| self.gone())?
@@ -430,38 +471,9 @@ async fn own(mut socket: Stream, mut commands: mpsc::UnboundedReceiver<Command>,
     let (ended, ack) = loop {
         let deadline = closing.as_ref().map(|(_, _, deadline)| *deadline);
         tokio::select! {
-            command = commands.recv(), if closing.is_none() => match command {
-                Some(Command::Send(message, ack)) => {
-                    let (kind, bytes, frame) = match message {
-                        Outgoing::Text(text) => (Kind::Text, text.as_bytes().to_vec(), Message::Text(text.into())),
-                        Outgoing::Binary(bytes) => (Kind::Binary, bytes.clone(), Message::Binary(bytes.into())),
-                    };
-                    match socket.send(frame).await {
-                        Ok(()) => {
-                            state.sent.fetch_add(1, Ordering::Relaxed);
-                            reporter.message("tx", kind, &bytes);
-                            sink.sent(kind, &bytes);
-                            let _ = ack.send(Ok(bytes.len()));
-                        }
-                        Err(error) => {
-                            let error = ws_failure(error, &url);
-                            let _ = ack.send(Err(error.clone()));
-                            break (Closed { code: 1006, reason: String::new(), by: By::Lost, error: Some(error) }, None);
-                        }
-                    }
-                }
-                Some(Command::Close(code, reason, ack)) => {
-                    reporter.control("tx", close_summary(code, &reason));
-                    let _ = socket.send(close_frame(code, &reason)).await;
-                    closing = Some((Closed { code, reason, by: By::Client, error: None }, Some(ack), tokio::time::Instant::now() + CLOSE_GRACE));
-                }
-                // Every handle is gone: the run ended, the job stopped. Say goodbye.
-                None => {
-                    reporter.control("tx", close_summary(1000, ""));
-                    let _ = socket.send(close_frame(1000, "")).await;
-                    closing = Some((Closed { code: 1000, reason: String::new(), by: By::Client, error: None }, None, tokio::time::Instant::now() + CLOSE_GRACE));
-                }
-            },
+            // What has arrived is taken before a command: a greeting already
+            // there is stamped before the send it might be mistaken to answer.
+            biased;
             incoming = socket.next() => match incoming {
                 Some(Ok(Message::Text(text))) => {
                     let bytes = text.as_bytes().to_vec();
@@ -494,8 +506,49 @@ async fn own(mut socket: Stream, mut commands: mpsc::UnboundedReceiver<Command>,
                 },
                 Some(Err(error)) => break match closing.take() {
                     Some((closed, ack, _)) => (closed, ack),
-                    None => (Closed { code: 1006, reason: String::new(), by: By::Lost, error: Some(ws_failure(error, &url)) }, None),
+                    None => (Closed { code: 1006, reason: String::new(), by: By::Lost, error: Some(stream_failure(error, &url)) }, None),
                 },
+            },
+            command = commands.recv(), if closing.is_none() => match command {
+                Some(Command::Send(message, ack)) => {
+                    let (kind, bytes, frame) = match message {
+                        Outgoing::Text(text) => (Kind::Text, text.as_bytes().to_vec(), Message::Text(text.into())),
+                        Outgoing::Binary(bytes) => (Kind::Binary, bytes.clone(), Message::Binary(bytes.into())),
+                    };
+                    let written = match tokio::time::timeout(WRITE_TIMEOUT, socket.send(frame)).await {
+                        Ok(written) => written.map_err(|error| stream_failure(error, &url)),
+                        Err(_) => Err(Cause::Timeout.error(&url).with("ms", WRITE_TIMEOUT.as_millis())),
+                    };
+                    match written {
+                        Ok(()) => {
+                            let at = Instant::now();
+                            state.sent.fetch_add(1, Ordering::Relaxed);
+                            reporter.message("tx", kind, &bytes);
+                            sink.sent(kind, &bytes);
+                            let _ = ack.send(Ok(Sent { bytes: bytes.len(), at }));
+                        }
+                        Err(error) => {
+                            let _ = ack.send(Err(error.clone()));
+                            break (Closed { code: 1006, reason: String::new(), by: By::Lost, error: Some(error) }, None);
+                        }
+                    }
+                }
+                Some(Command::Close(code, reason, ack)) => {
+                    reporter.control("tx", close_summary(code, &reason));
+                    // A peer that reads nothing gets no close frame either: hang up.
+                    if tokio::time::timeout(CLOSE_GRACE, socket.send(close_frame(code, &reason))).await.is_err() {
+                        break (Closed { code, reason, by: By::Client, error: None }, Some(ack));
+                    }
+                    closing = Some((Closed { code, reason, by: By::Client, error: None }, Some(ack), tokio::time::Instant::now() + CLOSE_GRACE));
+                }
+                // Every handle is gone: the run ended, the job stopped. Say goodbye.
+                None => {
+                    reporter.control("tx", close_summary(1000, ""));
+                    if tokio::time::timeout(CLOSE_GRACE, socket.send(close_frame(1000, ""))).await.is_err() {
+                        break (Closed { code: 1000, reason: String::new(), by: By::Client, error: None }, None);
+                    }
+                    closing = Some((Closed { code: 1000, reason: String::new(), by: By::Client, error: None }, None, tokio::time::Instant::now() + CLOSE_GRACE));
+                }
             },
             // The server never answered our close: hang up anyway.
             _ = tokio::time::sleep_until(deadline.unwrap_or_else(tokio::time::Instant::now)), if deadline.is_some() => {
@@ -531,7 +584,7 @@ impl InboxSink {
 
 impl Sink for InboxSink {
     fn received(&self, message: &Received) {
-        self.inbox.push(Datagram { bytes: message.bytes.clone(), from: self.peer, at: message.at, topic: None, frame: message.frame, request: None });
+        self.inbox.push(Datagram { bytes: message.bytes.clone(), from: self.peer, at: message.at, topic: None, frame: message.frame, request: None, binary: message.kind == Kind::Binary });
     }
 
     fn closed(&self, closed: &Closed) {
@@ -558,13 +611,15 @@ pub async fn open(host: &Host, cfg: &WsConfig, source: &'static str, job: Option
     Ok(RunSocket { connection, sink })
 }
 
-/// Matches like *Wait for UDP*, and adds `json` (the text parsed, or null) and `kind`.
+/// Matches like *Wait for UDP*, and adds `json` (a text message parsed, or
+/// null) and `kind` (`text` or `binary`).
 pub struct WsMatcher(pub UdpMatcher);
 
 impl Matcher for WsMatcher {
     fn matches(&self, datagram: &Datagram) -> Option<Value> {
         let mut reply = self.0.matches(datagram)?;
-        reply["json"] = std::str::from_utf8(&datagram.bytes).ok().and_then(|text| serde_json::from_str(text).ok()).unwrap_or(Value::Null);
+        reply["json"] = std::str::from_utf8(&datagram.bytes).ok().filter(|_| !datagram.binary).and_then(|text| serde_json::from_str(text).ok()).unwrap_or(Value::Null);
+        reply["kind"] = Value::String(if datagram.binary { "binary" } else { "text" }.into());
         Some(reply)
     }
 }
@@ -588,7 +643,7 @@ struct ScreenMessage {
 
 #[derive(Default)]
 struct Batch {
-    messages: Vec<ScreenMessage>,
+    messages: std::collections::VecDeque<ScreenMessage>,
     dropped: u64,
 }
 
@@ -596,23 +651,23 @@ struct BatchSink(Mutex<Batch>);
 
 impl BatchSink {
     fn push(&self, dir: &'static str, kind: Kind, bytes: &[u8]) {
-        let truncated = bytes.len() > SHOWN_TEXT;
+        let truncated = bytes.len() > if kind == Kind::Binary { SHOWN_HEX } else { SHOWN_TEXT };
         let shown = &bytes[..bytes.len().min(SHOWN_TEXT)];
         let message = ScreenMessage {
             ts: now_ms(),
             dir,
             kind,
             text: String::from_utf8_lossy(shown).into_owned(),
-            hex: (kind == Kind::Binary).then(|| matching::hex(bytes, 4096)),
+            hex: (kind == Kind::Binary).then(|| matching::hex(bytes, SHOWN_HEX)),
             bytes: bytes.len(),
             truncated,
         };
         let mut batch = self.0.lock().unwrap();
         if batch.messages.len() == BATCH_CAP {
-            batch.messages.remove(0);
+            batch.messages.pop_front();
             batch.dropped += 1;
         }
-        batch.messages.push(message);
+        batch.messages.push_back(message);
     }
 
     fn take(&self) -> Batch {
@@ -667,12 +722,13 @@ impl WsHub {
 
     pub async fn send(&self, id: u64, payload: &WsPayload) -> EngineResult<usize> {
         let message = payload.outgoing()?;
-        self.get(id)?.send(message).await
+        Ok(self.get(id)?.send(message).await?.bytes)
     }
 
     pub async fn close(&self, id: u64, code: Option<u16>, reason: Option<String>) -> EngineResult<Closed> {
         let code = code.unwrap_or(1000);
         check_close_code(code)?;
+        check_reason(reason.as_deref().unwrap_or_default())?;
         Ok(self.get(id)?.close(code, reason.as_deref().unwrap_or_default()).await)
     }
 }
@@ -715,7 +771,7 @@ pub async fn start_client(host: Host, jobs: JobRegistry, hub: WsHub, cfg: WsConf
         let flush = |host: &Host| {
             let batch = sink.take();
             if !batch.messages.is_empty() || batch.dropped > 0 {
-                host.emit("ws://messages", MessageBatch { job_id: id, ts: now_ms(), messages: batch.messages, dropped: batch.dropped });
+                host.emit("ws://messages", MessageBatch { job_id: id, ts: now_ms(), messages: batch.messages.into(), dropped: batch.dropped });
             }
         };
         let mut ticker = tokio::time::interval(FLUSH_EVERY);
@@ -784,15 +840,15 @@ pub async fn exchange(host: &Host, cfg: &WsConfig, send: Option<&WsPayload>, exp
     let RunSocket { connection, sink } = open(host, cfg, "websocket", None).await?;
     let (since, sent) = match message {
         Some(message) => {
-            let since = Instant::now();
-            (since, Some(connection.send(message).await?))
+            let sent = connection.send(message).await?;
+            (sent.at, Some(sent.bytes))
         }
         None => (connecting, None),
     };
     let reply = match (matcher, expect) {
         (Some(matcher), Some(expect)) => match sink.inbox.wait(&WsMatcher(matcher), since, Duration::from_millis(expect.timeout_ms)).await? {
             WaitOutcome::Matched(datagram, value) => Some(WsReply {
-                kind: if std::str::from_utf8(&datagram.bytes).is_ok() { Kind::Text } else { Kind::Binary },
+                kind: if datagram.binary { Kind::Binary } else { Kind::Text },
                 text: value["text"].as_str().unwrap_or_default().to_string(),
                 hex: value["hex"].as_str().unwrap_or_default().to_string(),
                 bytes: datagram.bytes.len(),

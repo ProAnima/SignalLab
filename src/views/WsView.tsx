@@ -8,6 +8,8 @@ import { asJson, protocolsOf, protocolsText } from "../lib/websocket";
 
 /** Messages the screen keeps; older ones go (the Inspector has them while capture is armed). */
 const KEPT = 2000;
+/** Characters a row of the list shows; the whole message is in its detail. */
+const ROW_TEXT = 300;
 
 type Shown = WsMessage & { n: number };
 
@@ -37,6 +39,8 @@ export function WsView() {
   const [picked, setPicked] = useState<number | null>(null);
   const counter = useRef(0);
   const list = useRef<HTMLDivElement>(null);
+  // Whether the list is scrolled to its end, as the person left it: then it follows new messages.
+  const pinned = useRef(true);
 
   useJobStream<WsStateEvent>(EV.wsState, job?.id ?? null, (event) => {
     setHandshake(event.handshake);
@@ -58,10 +62,10 @@ export function WsView() {
     if (batch.dropped) setDropped((prior) => prior + batch.dropped);
   });
 
-  // Newest last, followed while the list is scrolled to its end.
+  // Newest last, followed while the list was scrolled to its end before they came.
   useEffect(() => {
     const element = list.current;
-    if (element && element.scrollHeight - element.scrollTop - element.clientHeight < 80) element.scrollTop = element.scrollHeight;
+    if (element && pinned.current) element.scrollTop = element.scrollHeight;
   }, [messages]);
 
   // Stopped from the console strip.
@@ -70,6 +74,7 @@ export function WsView() {
   }, [jobGone, job]);
 
   const connect = async () => {
+    if (connecting) return;
     if (job) {
       try { await api.wsClose(job.id); } catch (e) { pushError("ws", e); }
       return;
@@ -183,12 +188,13 @@ export function WsView() {
               <span>{t("ws.sent", { n: counts.tx })}</span>
               {dropped > 0 && <span className="warn">{t("ws.dropped", { n: dropped })}</span>}
             </div>
-            <div className="ws-list scroll-y" ref={list}>
+            <div className="ws-list scroll-y" ref={list}
+              onScroll={(e) => { const element = e.currentTarget; pinned.current = element.scrollHeight - element.scrollTop - element.clientHeight < 24; }}>
               {messages.map((message) => (
                 <button key={message.n} className={"ws-row " + message.dir + (picked === message.n ? " active" : "")} onClick={() => setPicked(message.n)}>
                   <span className="ws-time">{fmtTime(message.ts)}</span>
                   <span className="ws-dir" aria-label={t(message.dir === "rx" ? "ws.in" : "ws.out")}>{message.dir === "rx" ? "↓" : "↑"}</span>
-                  <span className="ws-text">{message.kind === "binary" ? message.hex : message.text}</span>
+                  <span className="ws-text">{(message.kind === "binary" ? message.hex ?? "" : message.text).slice(0, ROW_TEXT)}</span>
                   <span className="ws-size">{message.kind === "binary" ? `${t("ws.binary")} · ` : ""}{fmtBytes(message.bytes)}</span>
                 </button>
               ))}
@@ -201,9 +207,10 @@ export function WsView() {
               <p className="section-label">{t(chosen.dir === "rx" ? "ws.in" : "ws.out")} · {fmtTime(chosen.ts)}</p>
               <pre className="ws-detail">{chosen.kind === "binary" ? chosen.hex : chosenJson ?? chosen.text}</pre>
               {chosen.truncated && <p className="experiment-empty">{t("ws.truncated", { size: fmtBytes(chosen.bytes) })}</p>}
-              <div className="btn-row">
+              {/* A cut message would be sent cut: only a whole one is offered as a draft. */}
+              {!chosen.truncated && <div className="btn-row">
                 <button className="ghost sm" onClick={() => { setBinary(chosen.kind === "binary"); setDraft(chosen.kind === "binary" ? chosen.hex ?? "" : chosen.text); }}>{t("ws.editHere")}</button>
-              </div>
+              </div>}
             </div>
           )}
         </div>

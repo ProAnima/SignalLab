@@ -38,16 +38,19 @@ fn service() -> (Service, Arc<Recorder>) {
     (Service::new(host, Mode::Server, Arc::new(FileStore::new(None).with_env(|_| None))), recorder)
 }
 
-/// What the service saw: the texts it received and the close codes clients sent.
+/// What the service saw: the texts it received, the close codes clients sent,
+/// and how many clients were connected at once at most.
 #[derive(Default)]
 struct Seen {
     texts: Mutex<Vec<String>>,
     closes: Mutex<Vec<u16>>,
+    open: Mutex<(u32, u32)>,
 }
 
 /// Greets with `welcome`; answers `ask <x>` with `{"echo":"<x>","n":<count>}`,
-/// `quit` by closing with 4001 "bye", JSON with itself (an echo service),
-/// anything else with `echo <text>`; echoes binary. Takes the first subprotocol offered.
+/// `quit` by closing with 4001 "bye", `drop` by cutting the line with no close
+/// frame, JSON with itself (an echo service), anything else with `echo <text>`;
+/// echoes binary. Takes the first subprotocol offered.
 async fn service_on_loopback() -> (String, Arc<Seen>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("ws://{}", listener.local_addr().unwrap());
@@ -65,6 +68,18 @@ async fn service_on_loopback() -> (String, Arc<Seen>) {
                     Ok(response)
                 };
                 let Ok(mut socket) = tokio_tungstenite::accept_hdr_async(stream, choose).await else { return };
+                {
+                    let mut open = seen.open.lock().unwrap();
+                    open.0 += 1;
+                    open.1 = open.1.max(open.0);
+                }
+                struct Leaving(Arc<Seen>);
+                impl Drop for Leaving {
+                    fn drop(&mut self) {
+                        self.0.open.lock().unwrap().0 -= 1;
+                    }
+                }
+                let _leaving = Leaving(seen.clone());
                 let _ = socket.send(Message::text("welcome")).await;
                 let mut count = 0;
                 while let Some(Ok(message)) = socket.next().await {
@@ -76,6 +91,8 @@ async fn service_on_loopback() -> (String, Arc<Seen>) {
                                 json!({ "echo": rest, "n": count }).to_string()
                             } else if text.starts_with('{') {
                                 text.to_string()
+                            } else if text.as_str() == "drop" {
+                                return;
                             } else if text.as_str() == "quit" {
                                 let _ = socket.close(Some(CloseFrame { code: CloseCode::from(4001), reason: "bye".into() })).await;
                                 continue;
@@ -351,4 +368,95 @@ async fn the_echo_template_passes_against_an_echo_service() {
     assert!(result.steps.iter().any(|step| step.node_id == "same" && step.state == "passed"), "the echo came back unchanged");
     let sent = seen.texts.lock().unwrap().clone();
     assert!(sent.len() == 1 && sent[0].starts_with("{\"type\":\"ping\",\"run\":\""), "{sent:?}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_line_cut_mid_session_is_a_reset_not_a_failed_upgrade() {
+    let (service, _) = service();
+    let (url, _) = service_on_loopback().await;
+    let doc = document(
+        vec![
+            node("start", 0.0, json!({ "type": "start" })),
+            node("socket", 100.0, json!({ "type": "ws_connect", "url": url })),
+            node("cut", 200.0, json!({ "type": "ws_send", "connection": "socket", "text": "drop" })),
+            node("more", 300.0, json!({ "type": "wait_ws", "connection": "socket", "mode": "contains", "pattern": "never", "timeout_ms": 3000 })),
+            node("end", 400.0, json!({ "type": "end" })),
+        ],
+        vec![("start", "next", "socket"), ("socket", "next", "cut"), ("cut", "next", "more"), ("more", "matched", "end")],
+    );
+    let result = run(&service, &doc).await;
+    let error = serde_json::to_value(result.error.as_ref().unwrap()).unwrap();
+    assert_eq!((error["code"].as_str(), error["node"].as_str()), (Some("transport.reset"), Some("more")), "{error}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_answer_is_what_came_after_the_send_and_keeps_its_kind() {
+    let (service, _) = service();
+    let (url, _) = service_on_loopback().await;
+    // The greeting is already there when the message goes: the answer is the echo, not it.
+    for _ in 0..5 {
+        let exchange = service.invoke("ws_exchange", json!({ "config": { "url": url }, "message": { "text": "ask q" }, "expect": { "mode": "any", "timeout_ms": 2000 } })).await.unwrap();
+        assert_eq!(exchange["reply"]["json"]["echo"], "q", "{exchange}");
+    }
+    // Bytes that happen to be UTF-8 still came as a binary message.
+    let binary = service.invoke("ws_exchange", json!({ "config": { "url": url }, "message": { "hex": "7b 7d" }, "expect": { "mode": "hex", "pattern": "7b7d", "timeout_ms": 2000 } })).await.unwrap();
+    assert_eq!((binary["reply"]["kind"].as_str(), binary["reply"]["json"].is_null()), (Some("binary"), true), "{binary}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_rendered_reason_must_fit_a_close_frame_and_a_send_needs_its_connect_before_it() {
+    let (service, _) = service();
+    let (url, _) = service_on_loopback().await;
+    let long = "x".repeat(200);
+    let doc = document(
+        vec![
+            node("start", 0.0, json!({ "type": "start" })),
+            node("socket", 100.0, json!({ "type": "ws_connect", "url": url })),
+            node("bye", 200.0, json!({ "type": "ws_close", "connection": "socket", "reason": "{{why}}" })),
+            node("end", 300.0, json!({ "type": "end" })),
+        ],
+        vec![("start", "next", "socket"), ("socket", "next", "bye"), ("bye", "next", "end")],
+    );
+    let mut doc = doc;
+    doc["params"] = json!([{ "name": "why", "value": long }]);
+    let result = run(&service, &doc).await;
+    let error = serde_json::to_value(result.error.as_ref().unwrap()).unwrap();
+    assert_eq!((error["code"].as_str(), error["node"].as_str(), error["params"]["max"].as_str()), (Some("node.too_long"), Some("bye"), Some("123")), "{error}");
+    let refused = service.invoke("ws_close", json!({ "jobId": 1, "reason": long })).await.unwrap_err();
+    assert_eq!(serde_json::to_value(refused).unwrap()["code"], "node.too_long");
+
+    // A send on a branch beside its connect would race it: refused before the run.
+    let beside = document(
+        vec![
+            node("start", 0.0, json!({ "type": "start" })),
+            node("fork", 100.0, json!({ "type": "fork" })),
+            node("socket", 200.0, json!({ "type": "ws_connect", "url": url })),
+            node("say", 200.0, json!({ "type": "ws_send", "connection": "socket", "text": "hi" })),
+            node("join", 300.0, json!({ "type": "join" })),
+            node("end", 400.0, json!({ "type": "end" })),
+        ],
+        vec![("start", "next", "fork"), ("fork", "branch1", "socket"), ("fork", "branch2", "say"), ("socket", "next", "join"), ("say", "next", "join"), ("join", "next", "end")],
+    );
+    let error = serde_json::to_value(service.invoke("experiment_validate", json!({ "document": beside })).await.unwrap_err()).unwrap();
+    assert_eq!((error["code"].as_str(), error["node"].as_str()), (Some("ws.connection_after"), Some("say")), "{error}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_connect_run_again_closes_its_old_connection_first() {
+    let (service, _) = service();
+    let (url, seen) = service_on_loopback().await;
+    let doc = document(
+        vec![
+            node("start", 0.0, json!({ "type": "start" })),
+            node("again", 100.0, json!({ "type": "loop", "max": 3 })),
+            node("socket", 200.0, json!({ "type": "ws_connect", "url": url })),
+            node("greeted", 300.0, json!({ "type": "wait_ws", "connection": "socket", "mode": "contains", "pattern": "welcome", "timeout_ms": 3000 })),
+            node("end", 400.0, json!({ "type": "end" })),
+        ],
+        vec![("start", "next", "again"), ("again", "body", "socket"), ("socket", "next", "greeted"), ("greeted", "matched", "again"), ("again", "done", "end")],
+    );
+    let result = run(&service, &doc).await;
+    assert_eq!(result.outcome, Outcome::Passed, "{}", failure(&result));
+    assert!(eventually(|| seen.open.lock().unwrap().0 == 0).await, "and the last one closes with the run");
+    assert_eq!(seen.open.lock().unwrap().1, 1, "never two connections at once");
 }

@@ -262,6 +262,12 @@ async fn websocket(env: &StepEnv<'_>, kind: &NodeKind, context: &mut BranchConte
     match kind {
         NodeKind::WsConnect { url, headers, protocols, timeout_ms } => {
             let config = WsConfig { url: url.clone(), headers: headers.clone(), protocols: protocols.clone(), timeout_ms: *timeout_ms };
+            // Run again (a Loop): the old connection closes first — a device taking one
+            // client at a time would refuse the new one, or drop the old one unasked.
+            let previous = env.websockets.lock().unwrap().remove(env.node_id);
+            if let Some(previous) = previous {
+                previous.connection.close(1000, "").await;
+            }
             // Before connecting: a greeting can arrive the moment the upgrade is done.
             context.last_action = Some(Instant::now());
             let socket = ws::open(env.host, &config, "experiment", None).await?;
@@ -277,11 +283,15 @@ async fn websocket(env: &StepEnv<'_>, kind: &NodeKind, context: &mut BranchConte
         NodeKind::WsSend { connection, text, binary } => {
             let socket = run_socket(env, connection)?;
             let message = Outgoing::of(text, *binary).map_err(|error| error.in_field(Field::new("payload")))?;
-            context.last_action = Some(Instant::now());
-            let bytes = socket.connection.send(message).await?;
+            // Answers count from the write: anything read before it is not one.
+            let sent = socket.connection.send(message).await?;
+            context.last_action = Some(sent.at);
+            let bytes = sent.bytes;
             Ok(StepOutcome::next(format!("Sent {bytes} B")).said("exp.step.wsSent", json!({ "bytes": bytes })))
         }
         NodeKind::WsClose { connection, code, reason } => {
+            // Rendered, the reason may have grown past what a close frame carries.
+            ws::check_reason(reason)?;
             let socket = env.websockets.lock().unwrap().remove(connection);
             let socket = socket.ok_or_else(|| EngineError::new("ws.not_connected").with("id", connection).in_field(Field::new("connection")))?;
             let closed = socket.connection.close(*code, reason).await;
@@ -480,13 +490,20 @@ pub async fn execute(env: &StepEnv<'_>, kind: &NodeKind, context: &mut BranchCon
             Ok(StepOutcome::next(format!("{name} on {local}")).said("exp.step.emulating", json!({ "name": name, "local": local })))
         }
         // Impairing since before the first step, too.
-        NodeKind::Impairment { profile, .. } => {
+        NodeKind::Impairment { .. } => {
             let relay = env.relays.get(env.node_id).ok_or_else(|| EngineError::new("impair.not_running").with("id", env.node_id))?;
-            let (listen, target, label) = (relay.listen.to_string(), relay.target.to_string(), profile.label());
+            if let Some(error) = relay.failed() {
+                return Err(error);
+            }
+            // What it impairs with now: a Change impairment may have run before (a Loop).
+            let (listen, target, label) = (relay.listen.to_string(), relay.target.to_string(), relay.profile().label());
             Ok(StepOutcome::next(format!("{listen} → {target}: {label}")).said("exp.step.impairing", json!({ "listen": listen, "target": target, "profile": label })))
         }
         NodeKind::ImpairmentChange { relay, profile } => {
             let running = env.relays.get(relay).ok_or_else(|| EngineError::new("impair.not_running").with("id", relay).in_field(Field::new("relay")))?;
+            if let Some(error) = running.failed() {
+                return Err(error.in_field(Field::new("relay")));
+            }
             let before = running.profile().label();
             running.set(profile.clone());
             let label = profile.label();

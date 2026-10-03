@@ -279,9 +279,9 @@ Detailed design: [docs/delivery.md](docs/delivery.md).
 - **Performance.** All high-rate events go through the rate gate and report what was not drawn.
 - **Tests.** Local protocol fixtures in `cargo test`; editor transformations in `npm test`; every new node kind round-trips through JSON and appears in both locales.
 
-## Next concrete slice (milestone 6 — faults as nodes)
+## Next concrete slice (milestone 7 — load profiles and thresholds)
 
-Milestone 6 is delivered: faults as nodes and phases — Impairment, Change impairment and Emulator down/up, seeded and counted per phase; document version 7. Milestone 5 before it delivered emulators (HTTP, OSC, UDP, TCP, an MQTT broker), with outages and the malformed fault, the *Emulator* node and *Wait for HTTP request* (version 6). Milestone 4 before it added **Repeat** and the bounded **Loop** (version 5). Every screen, the Emulators screen included, is walked end to end — desktop app and server, Windows and Linux, and the published image (`npm run e2e`). Next: **faults as nodes and phases** (milestone 6) — the impairment relay as a node with profiles that change mid-run, and the emulators' outages put on the same schedule, so a phase can take a dependency down and bring it back.
+Delivered since milestone 6 (faults as nodes and phases, seeded and counted per phase): the HTTP burst at a fixed rate with p50/p90/p95/p99 (the start of milestone 7), WebSocket (milestone 10's first transport: a screen, connect/send/wait/close nodes, `send ws`), Basic/Bearer/Digest authentication and cookie jars for HTTP, and a parameter matrix for `signallab run`; document version 8. Milestone 5 before it delivered emulators (HTTP, OSC, UDP, TCP, an MQTT broker), with outages and the malformed fault, the *Emulator* node and *Wait for HTTP request* (version 6). Every screen, the WebSocket screen included, is walked end to end — desktop app and server, Windows and Linux, and the published image (`npm run e2e`). Next: the rest of milestone 7 — the *Load* setting on an HTTP node with ramp, step and spike profiles, thresholds as checks (`p95 < 300 ms`), and Compare of two runs' reports.
 
 ### PR 4.2 as planned
 

@@ -405,8 +405,12 @@ pub async fn send_node(
     let _redaction = secrets::redact(masked.clone());
     let seed = doc.seed.unwrap_or_else(|| rand::random::<u64>() & data::MAX_SEED);
     let scope = Scope { params: &params, vars, secrets: &secret_values, run_id: 0, seed, node_id, count: 1, now_ms: now_ms() };
+    let kind = data::render_kind(&node.kind, &mut Renderer::new(scope)).map_err(|error| error.at(node_id).masked(&masked))?;
+    // Basic sends name and password as base64: a secret in either is masked in that form too.
+    let derived = data::derived_masks(&kind, &secret_values);
+    let _derived = secrets::redact(derived.clone());
+    let masked: Vec<String> = masked.into_iter().chain(derived).collect();
     let failed = |error: EngineError| error.at(node_id).masked(&masked);
-    let kind = data::render_kind(&node.kind, &mut Renderer::new(scope)).map_err(failed)?;
     let nodes = std::slice::from_ref(node);
     // A *Wait for HTTP request* listens now on a listener of its own, like a run's.
     let mut emulators = emulator_run::arm_run(host, nodes, &params, seed, 0).await.map_err(failed)?;
@@ -414,6 +418,8 @@ pub async fn send_node(
     let listeners = arm_listeners(nodes, Arc::new(host.clone()), &emulators.taps).await.map_err(failed)?;
     let subscriptions = arm_subscriptions(host, nodes, &params).await.map_err(failed)?;
     let websockets = RunSockets::default();
+    // A greeting read while the connection opens counts for a wait.
+    let started = Instant::now();
     if let Some(opener) = opener {
         let scope = Scope { params: &params, vars, secrets: &secret_values, run_id: 0, seed, node_id: &opener.id, count: 1, now_ms: now_ms() };
         let opened = |error: EngineError| error.at(&opener.id).masked(&masked);
@@ -441,7 +447,7 @@ pub async fn send_node(
         has_timeout: false,
         has_limit: false,
         inputs: 1,
-        run_started: Instant::now(),
+        run_started: started,
     };
     let mut context = BranchContext { vars: vars.clone(), ..Default::default() };
     let outcome = steps::execute(&env, &kind, &mut context).await.map_err(failed)?;

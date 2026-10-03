@@ -6,6 +6,7 @@ import { useFieldIds } from "../lib/hooks";
 import { describeError } from "../lib/errors";
 import { fmtTime } from "../lib/format";
 import { OscArgsEditor, fromOscArg, toOscArg, type ArgRow } from "../components/OscArgs";
+import { HttpAuthFields } from "../components/HttpAuthFields";
 import { SignalTree } from "../components/SignalTree";
 import { addFolder, allFolders, freeFolderName, joinFolder, normalizeFolder } from "../lib/library";
 import {
@@ -467,6 +468,11 @@ function HttpEditor({
           {t("sig.addHeader")}
         </button>
       </div>
+      {/* The credentials the signal was saved with: seen and changed here too, gone with "None". */}
+      <HttpAuthFields auth={request.auth ?? { scheme: "none" }} onChange={(auth) => {
+        const { auth: _previous, ...rest } = request;
+        onChange(auth.scheme === "none" ? rest : { ...rest, auth });
+      }} />
       <div className="field">
         <label htmlFor="sig-body">{t("sig.body")}</label>
         <textarea

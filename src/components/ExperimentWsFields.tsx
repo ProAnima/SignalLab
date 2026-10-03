@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import type { Experiment, ExperimentNode } from "../lib/api";
 import { useT } from "../lib/i18n";
 import { TemplateField } from "./TemplateField";
@@ -6,6 +7,17 @@ import { protocolsOf, protocolsText } from "../lib/websocket";
 type WsNode = Extract<ExperimentNode, { type: "ws_connect" | "ws_send" | "wait_ws" | "ws_close" }>;
 type ConnectNode = Extract<ExperimentNode, { type: "ws_connect" }>;
 
+
+/** Subprotocols typed as text — a comma or a space stays while it is typed — and kept as a list. */
+function ProtocolsField({ protocols, onChange }: { protocols: string[]; onChange: (protocols: string[]) => void }) {
+  const t = useT();
+  const [text, setText] = useState(protocolsText(protocols));
+  // Changed from elsewhere (undo, another node): show that, unless it is what is typed.
+  useEffect(() => { setText((current) => protocolsText(protocolsOf(current)) === protocolsText(protocols) ? current : protocolsText(protocols)); }, [protocols]);
+  return <label data-tip={t("exp.wsProtocolsHint")}>{t("exp.wsProtocols")}<input value={text} spellCheck={false} placeholder="graphql-transport-ws"
+    onChange={event => { setText(event.target.value); onChange(protocolsOf(event.target.value)); }}
+    onBlur={() => setText(protocolsText(protocolsOf(text)))} /></label>;
+}
 
 /** Which connection a send, wait or close uses: one of the document's WebSocket connect nodes. */
 function ConnectionPicker({ node, doc, patch }: { node: Exclude<WsNode, ConnectNode>; doc: Experiment; patch: (change: Partial<ExperimentNode>) => void }) {
@@ -33,8 +45,7 @@ export function ExperimentWsFields({ node, doc, patch }: { node: WsNode; doc: Ex
         <TemplateField label={t("exp.headerValue")} placeholder={t("exp.headerValue")} value={value} onChange={text => patch({ headers: node.headers.map((pair, i) => i === index ? [pair[0], text] : pair) })} />
         <button className="ghost sm" aria-label={t("exp.removeHeader")} data-tip={t("exp.removeHeader")} onClick={() => patch({ headers: node.headers.filter((_, i) => i !== index) })}>×</button>
       </div>)}<button className="ghost sm" onClick={() => patch({ headers: [...node.headers, ["", ""]] })}>＋ {t("exp.addHeader")}</button></div>
-      <label data-tip={t("exp.wsProtocolsHint")}>{t("exp.wsProtocols")}<input value={protocolsText(node.protocols)} spellCheck={false} placeholder="graphql-transport-ws"
-        onChange={event => patch({ protocols: protocolsOf(event.target.value) })} /></label>
+      <ProtocolsField protocols={node.protocols} onChange={protocols => patch({ protocols })} />
       <label>{t("common.timeoutMs")}<input type="number" min="1" max="120000" value={node.timeout_ms} onChange={event => patch({ timeout_ms: Number(event.target.value) })} /></label>
     </>;
     case "ws_send": return <>

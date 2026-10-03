@@ -122,7 +122,12 @@ pub(crate) async fn send_http(state: &State, arguments: &Value) -> Answer {
     match http(state, request, url).await {
         Ok(response) => {
             let head: Vec<String> = response.headers.iter().map(|(name, value)| format!("{name}: {value}")).collect();
-            let text = format!("HTTP {} {} · {} ms · {} bytes\n{}\n\n{}", response.status, response.status_text, response.latency_ms.round(), response.body_bytes, head.join("\n"), clip(&response.body));
+            let mut text = format!("HTTP {} {} · {} ms · {} bytes", response.status, response.status_text, response.latency_ms.round(), response.body_bytes);
+            // A 401 that Digest could not answer says why: the status alone would read as wrong credentials.
+            if let Some(error) = response.digest.as_ref().and_then(|digest| digest.error.as_ref()) {
+                text.push_str(&format!("\nDigest not answered: {}", state.ctx.texts.describe(error, &["cli.err."], &|_| None).text));
+            }
+            let text = format!("{text}\n{}\n\n{}", head.join("\n"), clip(&response.body));
             let mut data = json!({ "status": response.status, "status_text": response.status_text, "latency_ms": response.latency_ms, "headers": response.headers, "body": clip(&response.body), "body_bytes": response.body_bytes });
             if let Some(digest) = &response.digest {
                 data["digest"] = json!(digest);
@@ -152,6 +157,9 @@ pub(crate) async fn send_mqtt(state: &State, arguments: &Value) -> Answer {
     }
 }
 
+/// The longest `send_ws` waits for an answer, as its schema says.
+const MAX_WS_WAIT_MS: u64 = 120_000;
+
 pub(crate) async fn send_ws(state: &State, arguments: &Value) -> Answer {
     let url = match text_arg(arguments, "url") {
         Ok(url) => url,
@@ -166,7 +174,11 @@ pub(crate) async fn send_ws(state: &State, arguments: &Value) -> Answer {
         (None, None) => None,
     };
     let timeout = arguments["timeout_ms"].as_u64().unwrap_or(2_000);
+    if !(1..=MAX_WS_WAIT_MS).contains(&timeout) {
+        return Answer::wrong(format!("timeout_ms is 1 to {MAX_WS_WAIT_MS}"));
+    }
     let expect = match (arguments["expect"].as_str(), arguments["expect_regex"].as_str(), arguments["wait"].as_bool().unwrap_or(false)) {
+        (Some(_), Some(_), _) => return Answer::wrong("give expect or expect_regex, not both"),
         (Some(text), _, _) => Some(json!({ "mode": "contains", "pattern": text, "timeout_ms": timeout })),
         (None, Some(regex), _) => Some(json!({ "mode": "regex", "pattern": regex, "timeout_ms": timeout })),
         (None, None, true) => Some(json!({ "mode": "any", "pattern": "", "timeout_ms": timeout })),

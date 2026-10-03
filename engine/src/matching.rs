@@ -35,6 +35,8 @@ pub struct Datagram {
     /// (`method`, `path`, `query`, `headers`, `body`, `json`, `from`); `bytes`
     /// is its body. `None` for a datagram.
     pub request: Option<Value>,
+    /// A WebSocket binary message (false for text, and for everything else).
+    pub binary: bool,
 }
 
 /// Decides whether a datagram is the awaited reply. On a match it returns the
@@ -528,7 +530,7 @@ mod tests {
     use crate::osc_codec::encode_message;
 
     fn datagram(bytes: Vec<u8>) -> Datagram {
-        Datagram { bytes, from: "127.0.0.1:9000".parse().unwrap(), at: Instant::now(), topic: None, frame: None, request: None }
+        Datagram { bytes, from: "127.0.0.1:9000".parse().unwrap(), at: Instant::now(), topic: None, frame: None, request: None, binary: false }
     }
 
     #[test]

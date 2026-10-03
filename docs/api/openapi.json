@@ -174,7 +174,7 @@
           "emulator_check": { "arguments": { "emulator": "Emulator", "params": "object?" }, "returns": "null, or the EngineError it would be refused with (with the rule and response it is in)" },
           "emulator_start": { "arguments": { "emulator": "Emulator", "params": "object?", "seed": "integer?", "source": "string? — the library id, kept on the job" }, "returns": "JobInfo; its port is open, emulator://activity reports what it answers", "job": true },
           "emulator_exchanges": { "arguments": { "jobId": "integer", "after": "integer?", "limit": "integer?" }, "returns": "{job_id, name, protocol, local, counts: {total, unmatched, failed, down, hits}, forced?, exchanges}: what a running emulator received after `after`" },
-          "emulator_down": { "arguments": { "jobId": "integer", "down": "boolean", "fault": "unavailable|reset|timeout?" }, "returns": "null: down until brought up, whatever its outage says" }
+          "emulator_down": { "arguments": { "jobId": "integer", "down": "boolean", "fault": "unavailable|reset|timeout?" }, "returns": "null: down until brought up, whatever its outage says; brought up, it follows its outage schedule again" }
         }
       }
     },

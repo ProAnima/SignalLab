@@ -20,6 +20,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use crate::host::Host;
 use tokio::net::UdpSocket;
+use tokio::task::JoinSet;
 
 use super::error::{EngineError, EngineResult, Field};
 use super::inspect::{self, describe_payload, Frame, Gate};
@@ -177,21 +178,6 @@ pub struct ImpairCounts {
     pub bytes: u64,
 }
 
-impl ImpairCounts {
-    fn since(self, earlier: ImpairCounts) -> ImpairCounts {
-        ImpairCounts {
-            received: self.received - earlier.received,
-            forwarded: self.forwarded - earlier.forwarded,
-            dropped: self.dropped - earlier.dropped,
-            throttled: self.throttled - earlier.throttled,
-            duplicated: self.duplicated - earlier.duplicated,
-            corrupted: self.corrupted - earlier.corrupted,
-            reordered: self.reordered - earlier.reordered,
-            bytes: self.bytes - earlier.bytes,
-        }
-    }
-}
-
 #[derive(Default)]
 struct Stats {
     received: AtomicU64,
@@ -220,22 +206,37 @@ impl Stats {
     }
 }
 
-/// One stretch under one profile.
+/// One stretch under one profile. A packet is counted in the phase that
+/// decided it, even when its delayed copy goes out after the switch.
 #[derive(Clone, Debug, Serialize)]
 pub struct Phase {
     pub profile: String,
-    /// From and until, milliseconds since the relay opened.
+    /// From and until, milliseconds since the relay opened (`opened_ms`).
     pub from_ms: u64,
     pub to_ms: u64,
     pub counts: ImpairCounts,
 }
 
+/// The profile now, and the counters of the phase it began.
+struct Current {
+    profile: Arc<ImpairProfile>,
+    stats: Arc<Stats>,
+    since_ms: u64,
+}
+
+/// A phase that ended. Its counters stay live: a copy delayed past the
+/// switch is counted in the phase that decided it, not in the next one.
+struct ClosedPhase {
+    profile: String,
+    from_ms: u64,
+    to_ms: u64,
+    stats: Arc<Stats>,
+}
+
 struct PhaseLog {
-    closed: Vec<Phase>,
+    closed: Vec<ClosedPhase>,
     /// Phases no longer kept (more than `MAX_PHASES`).
     earlier: u64,
-    since_ms: u64,
-    at_start: ImpairCounts,
 }
 
 /// A relay's counters for a run's report: in all, and phase by phase.
@@ -249,6 +250,11 @@ pub struct ImpairmentSummary {
     pub phases: Vec<Phase>,
     #[serde(skip_serializing_if = "is_zero")]
     pub earlier_phases: u64,
+    /// When the relay opened (ms since 1970): its phases' `from_ms`/`to_ms` count from then.
+    pub opened_ms: u64,
+    /// Why it stopped relaying before the run ended, if it did.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<EngineError>,
 }
 
 fn is_zero(value: &u64) -> bool {
@@ -271,31 +277,38 @@ struct Sending {
     reordered: bool,
 }
 
-/// One direction's state: its own seeded stream, whether a burst of loss is
-/// on, when its bandwidth-limited link is free.
+/// One direction's state: its seed and name, how many packets it decided,
+/// whether a burst of loss is on, when its bandwidth-limited link is free.
 struct Leg {
-    rng: Rng,
+    seed: u64,
+    name: String,
+    /// Packets decided so far. Each draws from a stream of its own, so how
+    /// many draws one takes (a throttled one takes fewer) never moves the
+    /// next one's: the same seed and traffic give the same fates.
+    packets: u64,
     bursting: bool,
     link_free: Option<Instant>,
 }
 
 impl Leg {
     fn new(seed: u64, name: &str) -> Self {
-        Leg { rng: Rng::for_node(seed ^ IMPAIR_STREAM, name, 0), bursting: false, link_free: None }
+        Leg { seed: seed ^ IMPAIR_STREAM, name: name.to_string(), packets: 0, bursting: false, link_free: None }
     }
 
     fn decide(&mut self, profile: &ImpairProfile, payload: &[u8], now: Instant) -> Fate {
+        let mut rng = Rng::for_node(self.seed, &self.name, self.packets);
+        self.packets += 1;
         if profile.offline {
             return Fate::Dropped("offline");
         }
         // Gilbert–Elliott: a packet starts a burst with `burst_start`; each packet in
         // one is lost and ends it with 1 / `burst_length`, so bursts last that long on average.
         if profile.burst_start > 0.0 {
-            if !self.bursting && self.rng.unit() < profile.burst_start {
+            if !self.bursting && rng.unit() < profile.burst_start {
                 self.bursting = true;
             }
             if self.bursting {
-                if self.rng.unit() < 1.0 / profile.burst_length.max(1.0) {
+                if rng.unit() < 1.0 / profile.burst_length.max(1.0) {
                     self.bursting = false;
                 }
                 return Fate::Dropped("burst");
@@ -303,7 +316,7 @@ impl Leg {
         } else {
             self.bursting = false;
         }
-        if profile.loss > 0.0 && self.rng.unit() < profile.loss {
+        if profile.loss > 0.0 && rng.unit() < profile.loss {
             return Fate::Dropped("loss");
         }
         // The link serializes packets one after another at the rate; a long queue is a drop.
@@ -319,18 +332,18 @@ impl Leg {
         } else {
             self.link_free = None;
         }
-        let copies = if profile.duplicate > 0.0 && self.rng.unit() < profile.duplicate { 2 } else { 1 };
+        let copies = if profile.duplicate > 0.0 && rng.unit() < profile.duplicate { 2 } else { 1 };
         let mut sent = Vec::with_capacity(copies);
         for _ in 0..copies {
             let mut bytes = payload.to_vec();
-            let corrupted = profile.corrupt > 0.0 && !bytes.is_empty() && self.rng.unit() < profile.corrupt;
+            let corrupted = profile.corrupt > 0.0 && !bytes.is_empty() && rng.unit() < profile.corrupt;
             if corrupted {
-                let index = self.rng.below_u64(bytes.len() as u64) as usize;
-                bytes[index] ^= 1 << self.rng.below_u64(8);
+                let index = rng.below_u64(bytes.len() as u64) as usize;
+                bytes[index] ^= 1 << rng.below_u64(8);
             }
-            let jitter = if profile.jitter_ms > 0.0 { self.rng.unit() * profile.jitter_ms } else { 0.0 };
+            let jitter = if profile.jitter_ms > 0.0 { rng.unit() * profile.jitter_ms } else { 0.0 };
             let mut delay = queued + Duration::from_secs_f64((profile.latency_ms + jitter) / 1000.0);
-            let reordered = profile.reorder > 0.0 && self.rng.unit() < profile.reorder;
+            let reordered = profile.reorder > 0.0 && rng.unit() < profile.reorder;
             if reordered {
                 delay += REORDER_HOLD.max(Duration::from_secs_f64(profile.latency_ms / 1000.0));
             }
@@ -377,12 +390,16 @@ impl Tap {
 pub struct Relay {
     pub listen: SocketAddr,
     pub target: SocketAddr,
-    profile: RwLock<Arc<ImpairProfile>>,
+    current: RwLock<Current>,
+    /// In all: every phase's counters add up to these.
     stats: Stats,
     in_flight: AtomicUsize,
     phases: Mutex<PhaseLog>,
     opened: Instant,
+    /// When it opened, wall clock: the phases' times are from then.
+    opened_ms: u64,
     seed: u64,
+    failed: Mutex<Option<EngineError>>,
 }
 
 impl Relay {
@@ -390,34 +407,43 @@ impl Relay {
         Arc::new(Relay {
             listen,
             target,
-            profile: RwLock::new(Arc::new(profile)),
+            current: RwLock::new(Current { profile: Arc::new(profile), stats: Arc::default(), since_ms: 0 }),
             stats: Stats::default(),
             in_flight: AtomicUsize::new(0),
-            phases: Mutex::new(PhaseLog { closed: Vec::new(), earlier: 0, since_ms: 0, at_start: ImpairCounts::default() }),
+            phases: Mutex::new(PhaseLog { closed: Vec::new(), earlier: 0 }),
             opened: Instant::now(),
+            opened_ms: now_ms(),
             seed,
+            failed: Mutex::new(None),
         })
     }
 
     pub fn profile(&self) -> Arc<ImpairProfile> {
-        self.profile.read().unwrap().clone()
+        self.current.read().unwrap().profile.clone()
     }
 
-    /// Impair with `profile` from now on: the phase so far is closed and counted.
+    /// Impair with `profile` from now on: the phase so far is closed.
     pub fn set(&self, profile: ImpairProfile) {
         let mut log = self.phases.lock().unwrap();
+        let mut current = self.current.write().unwrap();
         let now_ms = self.opened.elapsed().as_millis() as u64;
-        let counts = self.stats.counts();
-        let previous = self.profile();
-        let phase = Phase { profile: previous.label(), from_ms: log.since_ms, to_ms: now_ms, counts: counts.since(log.at_start) };
+        let closed = ClosedPhase { profile: current.profile.label(), from_ms: current.since_ms, to_ms: now_ms, stats: current.stats.clone() };
         if log.closed.len() == MAX_PHASES {
             log.closed.remove(0);
             log.earlier += 1;
         }
-        log.closed.push(phase);
-        log.since_ms = now_ms;
-        log.at_start = counts;
-        *self.profile.write().unwrap() = Arc::new(profile);
+        log.closed.push(closed);
+        *current = Current { profile: Arc::new(profile), stats: Arc::default(), since_ms: now_ms };
+    }
+
+    /// It stopped relaying: why, kept for the steps that use it and the report.
+    pub(crate) fn fail(&self, error: EngineError) {
+        *self.failed.lock().unwrap() = Some(error);
+    }
+
+    /// Why it stopped relaying, if it has.
+    pub fn failed(&self) -> Option<EngineError> {
+        self.failed.lock().unwrap().clone()
     }
 
     pub fn counts(&self) -> ImpairCounts {
@@ -427,28 +453,49 @@ impl Relay {
     /// What it did so far, the current phase up to now included.
     pub fn summary(&self, node: Option<&str>) -> ImpairmentSummary {
         let log = self.phases.lock().unwrap();
-        let counts = self.stats.counts();
-        let mut phases = log.closed.clone();
-        phases.push(Phase { profile: self.profile().label(), from_ms: log.since_ms, to_ms: self.opened.elapsed().as_millis() as u64, counts: counts.since(log.at_start) });
-        ImpairmentSummary { node: node.map(str::to_string), listen: self.listen.to_string(), target: self.target.to_string(), counts, phases, earlier_phases: log.earlier }
+        let current = self.current.read().unwrap();
+        let mut phases: Vec<Phase> = log.closed.iter().map(|phase| Phase { profile: phase.profile.clone(), from_ms: phase.from_ms, to_ms: phase.to_ms, counts: phase.stats.counts() }).collect();
+        phases.push(Phase { profile: current.profile.label(), from_ms: current.since_ms, to_ms: self.opened.elapsed().as_millis() as u64, counts: current.stats.counts() });
+        ImpairmentSummary {
+            node: node.map(str::to_string),
+            listen: self.listen.to_string(),
+            target: self.target.to_string(),
+            counts: self.stats.counts(),
+            phases,
+            earlier_phases: log.earlier,
+            opened_ms: self.opened_ms,
+            error: self.failed(),
+        }
     }
 
-    /// One packet: decided now, sent (possibly later, more than once) through `socket`.
-    fn take(self: &Arc<Self>, leg: &mut Leg, payload: &[u8], socket: &Arc<UdpSocket>, dest: Option<SocketAddr>, tap: &Tap) {
-        self.stats.received.fetch_add(1, Ordering::Relaxed);
+    /// One packet: decided now, sent (possibly later, more than once) through
+    /// `socket` by a task of `flights` — the relay's, so stopping the relay
+    /// stops what it still had on its way.
+    #[allow(clippy::too_many_arguments)]
+    fn take(self: &Arc<Self>, leg: &mut Leg, payload: &[u8], socket: &Arc<UdpSocket>, dest: Option<SocketAddr>, tap: &Tap, flights: &Mutex<JoinSet<()>>) {
+        // The profile and the phase it counts in, read together: a packet is
+        // counted where it was decided, whatever a switch does meanwhile.
+        let (profile, phase) = {
+            let current = self.current.read().unwrap();
+            (current.profile.clone(), current.stats.clone())
+        };
+        let count = |field: fn(&Stats) -> &AtomicU64| {
+            field(&self.stats).fetch_add(1, Ordering::Relaxed);
+            field(&phase).fetch_add(1, Ordering::Relaxed);
+        };
+        count(|stats| &stats.received);
         // Decided once per packet: a dropped packet is exactly what a QA run wants to see.
         let capture = tap.armed();
-        let profile = self.profile();
         let copies = match leg.decide(&profile, payload, Instant::now()) {
             Fate::Dropped(why) => {
-                self.stats.dropped.fetch_add(1, Ordering::Relaxed);
+                count(|stats| &stats.dropped);
                 if capture {
                     tap.record(payload, dest, format!("dropped ({why})"));
                 }
                 return;
             }
             Fate::Throttled => {
-                self.stats.throttled.fetch_add(1, Ordering::Relaxed);
+                count(|stats| &stats.throttled);
                 if capture {
                     tap.record(payload, dest, "throttled".into());
                 }
@@ -457,25 +504,33 @@ impl Relay {
             Fate::Sent(copies) => copies,
         };
         if self.in_flight.load(Ordering::Relaxed) + copies.len() > MAX_IN_FLIGHT {
-            self.stats.throttled.fetch_add(1, Ordering::Relaxed);
+            count(|stats| &stats.throttled);
+            if capture {
+                tap.record(payload, dest, format!("throttled ({MAX_IN_FLIGHT} on their way)"));
+            }
             return;
         }
         let total = copies.len();
         if total > 1 {
-            self.stats.duplicated.fetch_add(1, Ordering::Relaxed);
+            count(|stats| &stats.duplicated);
         }
+        let mut flights = flights.lock().unwrap();
+        // Finished sends go; the set holds only what is still on its way.
+        while flights.try_join_next().is_some() {}
         for (index, copy) in copies.into_iter().enumerate() {
             if copy.corrupted {
-                self.stats.corrupted.fetch_add(1, Ordering::Relaxed);
+                count(|stats| &stats.corrupted);
             }
             if copy.reordered {
-                self.stats.reordered.fetch_add(1, Ordering::Relaxed);
+                count(|stats| &stats.reordered);
             }
             self.in_flight.fetch_add(1, Ordering::Relaxed);
-            let (relay, socket, tap) = (self.clone(), socket.clone(), tap.clone());
-            tokio::spawn(async move {
+            // Due from the decision, not from when the task first runs: no drift under load.
+            let due = tokio::time::Instant::now() + copy.delay;
+            let (relay, socket, tap, phase) = (self.clone(), socket.clone(), tap.clone(), phase.clone());
+            flights.spawn(async move {
                 if !copy.delay.is_zero() {
-                    tokio::time::sleep(copy.delay).await;
+                    tokio::time::sleep_until(due).await;
                 }
                 let sent = match dest {
                     Some(address) => socket.send_to(&copy.bytes, address).await,
@@ -484,8 +539,10 @@ impl Relay {
                 relay.in_flight.fetch_sub(1, Ordering::Relaxed);
                 match sent {
                     Ok(size) => {
-                        relay.stats.forwarded.fetch_add(1, Ordering::Relaxed);
-                        relay.stats.bytes.fetch_add(size as u64, Ordering::Relaxed);
+                        for stats in [&relay.stats, &*phase] {
+                            stats.forwarded.fetch_add(1, Ordering::Relaxed);
+                            stats.bytes.fetch_add(size as u64, Ordering::Relaxed);
+                        }
                         if capture {
                             let mut verdict = format!("forwarded +{:.0}ms", copy.delay.as_secs_f64() * 1000.0);
                             if copy.corrupted {
@@ -520,9 +577,12 @@ impl Relay {
         // representative slice rather than swamping the Inspector.
         let gate = Arc::new(Gate::new(25));
         let tap = |leg: &'static str, dir: &'static str| Tap { host: host.clone(), job_id, leg, dir, peer: self.target.to_string(), gate: gate.clone() };
+        // What is on its way, delayed: owned here, so it ends with the relay —
+        // no packet goes out after a stop, and no socket outlives it.
+        let flights: Arc<Mutex<JoinSet<()>>> = Arc::new(Mutex::new(JoinSet::new()));
 
         let c2s = {
-            let (relay, down, up, client, tap, receiving) = (self.clone(), downstream.clone(), upstream.clone(), client.clone(), tap("client→target", "tx"), down_local.clone());
+            let (relay, down, up, client, tap, receiving, flights) = (self.clone(), downstream.clone(), upstream.clone(), client.clone(), tap("client→target", "tx"), down_local.clone(), flights.clone());
             let mut leg = Leg::new(self.seed, &format!("{name}:client"));
             tokio::spawn(async move {
                 let mut buf = vec![0u8; 65_536];
@@ -530,7 +590,7 @@ impl Relay {
                     match down.recv_from(&mut buf).await {
                         Ok((n, from)) => {
                             *client.lock().unwrap() = Some(from);
-                            relay.take(&mut leg, &buf[..n], &up, None, &tap);
+                            relay.take(&mut leg, &buf[..n], &up, None, &tap, &flights);
                         }
                         // A reply to a client that has gone: the relay carries on.
                         Err(e) if crate::net::udp_transient(&e) => continue,
@@ -540,7 +600,7 @@ impl Relay {
             })
         };
         let s2c = {
-            let (relay, down, up, client, tap, receiving) = (self.clone(), downstream.clone(), upstream.clone(), client.clone(), tap("target→client", "rx"), up_local.clone());
+            let (relay, down, up, client, tap, receiving, flights) = (self.clone(), downstream.clone(), upstream.clone(), client.clone(), tap("target→client", "rx"), up_local.clone(), flights.clone());
             let mut leg = Leg::new(self.seed, &format!("{name}:target"));
             tokio::spawn(async move {
                 let mut buf = vec![0u8; 65_536];
@@ -549,7 +609,7 @@ impl Relay {
                         Ok(n) => {
                             let dest = *client.lock().unwrap();
                             if let Some(address) = dest {
-                                relay.take(&mut leg, &buf[..n], &down, Some(address), &tap);
+                                relay.take(&mut leg, &buf[..n], &down, Some(address), &tap, &flights);
                             }
                         }
                         // The target is not listening (yet): the upstream socket is
@@ -644,7 +704,8 @@ pub async fn start_proxy(host: Host, jobs: JobRegistry, hub: RelayHub, cfg: Prox
             })
         };
         guard.watch(reporter.abort_handle());
-        let error = relay.clone().serve(host.clone(), id, format!("job-{id}"), downstream, upstream).await;
+        // One name for every screen relay: the same seed gives the same drops in any job.
+        let error = relay.clone().serve(host.clone(), id, "relay".into(), downstream, upstream).await;
         drop(guard);
         host.emit("job://ended", serde_json::json!({ "job_id": id, "kind": "netsim", "error": error }));
         jobs_cl.finish(id);
@@ -672,6 +733,75 @@ mod tests {
 
     fn start_relay(host: Host, jobs: JobRegistry, listen: String, target: String, profile: ImpairProfile) -> impl std::future::Future<Output = EngineResult<JobInfo>> {
         start_proxy(host, jobs, RelayHub::new(), ProxyConfig { listen, target, profile, seed: Some(1) })
+    }
+
+    /// A throttled packet takes fewer draws than a sent one; the packets after
+    /// it must not notice: packet n meets the same loss and copies whatever the
+    /// link's timing did to the ones before it.
+    #[test]
+    fn a_rate_limit_does_not_move_the_seeded_draws() {
+        let profile = ImpairProfile { loss: 0.3, duplicate: 0.3, rate_kbps: 8.0, ..calm() };
+        let start = Instant::now();
+        let fate = |fate: Fate| match fate {
+            Fate::Dropped(why) => why.to_string(),
+            Fate::Throttled => "throttled".into(),
+            Fate::Sent(copies) => format!("sent {}", copies.len()),
+        };
+        // All at once: the 8 kbps link queues past a second and throttles.
+        let mut rushed = Leg::new(9, "leg");
+        let crowded: Vec<String> = (0..60).map(|_| fate(rushed.decide(&profile, &[0; 100], start))).collect();
+        // Ten seconds apart: the link is free for each one.
+        let mut calm_leg = Leg::new(9, "leg");
+        let spaced: Vec<String> = (0..60).map(|n| fate(calm_leg.decide(&profile, &[0; 100], start + Duration::from_secs(10 * n)))).collect();
+        assert!(crowded.iter().any(|fate| fate == "throttled") && !spaced.iter().any(|fate| fate == "throttled"));
+        for (n, (a, b)) in crowded.iter().zip(&spaced).enumerate() {
+            if a != "throttled" {
+                assert_eq!(a, b, "packet {n} met another fate because earlier ones were throttled");
+            }
+        }
+    }
+
+    /// Stopping a relay stops what it still had on its way: its port is free
+    /// at once, and nothing reaches the target after the stop.
+    #[tokio::test]
+    async fn a_stop_takes_the_delayed_packets_and_the_port_with_it() {
+        let host = Host::new(Recorder::new(), Capture::new());
+        let jobs = JobRegistry::new();
+        let target = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let listen_port = UdpSocket::bind("127.0.0.1:0").await.unwrap().local_addr().unwrap().port();
+        let slow = ImpairProfile { latency_ms: 800.0, ..calm() };
+        let job = start_relay(host, jobs.clone(), format!("127.0.0.1:{listen_port}"), target.local_addr().unwrap().to_string(), slow).await.unwrap();
+        let client = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        for _ in 0..5 {
+            client.send_to(b"late", ("127.0.0.1", listen_port)).await.unwrap();
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(jobs.stop(job.id));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(UdpSocket::bind(("127.0.0.1", listen_port)).await.is_ok(), "the listen port is free right after the stop");
+        let mut buf = [0u8; 64];
+        let late = tokio::time::timeout(Duration::from_millis(1200), target.recv_from(&mut buf)).await;
+        assert!(late.is_err(), "nothing delayed went out after the stop");
+    }
+
+    /// A copy delayed past a switch is counted where it was decided.
+    #[tokio::test]
+    async fn a_delayed_packet_counts_in_the_phase_that_decided_it() {
+        let target = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let (downstream, upstream) = open("127.0.0.1:0".parse().unwrap(), "127.0.0.1:0", target.local_addr().unwrap(), "target").await.unwrap();
+        let listen = downstream.local_addr().unwrap();
+        let relay = Relay::new(listen, target.local_addr().unwrap(), ImpairProfile { name: "slow".into(), latency_ms: 300.0, ..calm() }, 1);
+        let serving = tokio::spawn(relay.clone().serve(Host::new(Recorder::new(), Capture::new()), 0, "test".into(), downstream, upstream));
+        let client = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        client.send_to(b"one", listen).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        relay.set(ImpairProfile { name: "offline".into(), offline: true, ..calm() });
+        recv(&target).await;
+        let summary = relay.summary(None);
+        let phases: Vec<(&str, u64, u64)> = summary.phases.iter().map(|phase| (phase.profile.as_str(), phase.counts.received, phase.counts.forwarded)).collect();
+        assert_eq!(phases, [("slow", 1, 1), ("offline", 0, 0)], "it went out during offline, and counts for slow");
+        assert!(summary.opened_ms > 0 && summary.error.is_none());
+        serving.abort();
     }
 
     /// The relay's target may come up after the relay: datagrams sent while it

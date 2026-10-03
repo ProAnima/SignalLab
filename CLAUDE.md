@@ -263,13 +263,17 @@ src/components/FirewallBanner.tsx  the desktop app's firewall notice, with Allow
   Bearer, Digest) becomes an `Authorization` header in `http::builder` as the
   request is sent; frames, steps and reports carry the response, never that
   header, and a node's credentials are templated fields (`{{secret.NAME}}`,
-  masked). Digest answers a 401's challenge and sends again
-  (`http::execute`); a burst shares one `DigestMemory`, so one challenge serves
-  all its requests. The RFC 2617/7616 examples are unit tests, and the e2e
-  fixture checks answers with hashing of its own.
+  masked — Basic's base64 of one too, `experiment_data::derived_masks`). Digest
+  answers a 401's challenge and sends again (`http::digest`, which follows
+  redirects itself: the URL that asks is answered, never another origin); a
+  burst shares one `DigestMemory` — one origin, a count per nonce that never
+  repeats, one cnonce — so one challenge serves all its requests. The RFC
+  2617/7616 examples are unit tests, and the e2e fixture checks answers
+  (uri included) with hashing of its own.
 - **Cookies are a jar a person can see.** `cookies::CookieJar` is reqwest's
   cookie store (RFC 6265 rules) held by us: the HTTP screen's (in `Service`,
-  used while *Keep cookies* is on, listed by `http_cookies`) and one per run
+  used while *Keep cookies* is on — by the library's HTTP signals too, through
+  `fireSignal` — listed by `http_cookies`; on a server, one for every page) and one per run
   (`Experiment::cookies`, default on; files before version 8 open with it off
   so they run as before). *Send now* uses none.
 - **A WebSocket is one socket, one owner.** `ws::Connection::spawn` hands the

@@ -9,7 +9,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
@@ -72,9 +72,12 @@ struct EngineShared {
     end_reached: AtomicBool,
     params: BTreeMap<String, String>,
     seed: u64,
-    /// Secret values this run reads, and the same values as the mask list.
+    /// Secret values this run reads; the mask list is those values and what a
+    /// request derived from them (Basic's base64), added as requests render.
     secrets: BTreeMap<String, String>,
-    masked: Vec<String>,
+    masked: RwLock<Vec<String>>,
+    /// The Inspector masks the derived values too while the run lasts.
+    derived: Mutex<Vec<secrets::Redaction>>,
     /// Executions per node, for `{{counter}}` and per-execution random streams.
     counts: Mutex<HashMap<String, u64>>,
     /// Every branch task. Branches are spawned, so aborting the job's own task
@@ -126,6 +129,9 @@ impl Drop for CancelBranches {
         if let Ok(mut websockets) = self.0.websockets.lock() {
             websockets.clear();
         }
+        if let Ok(mut derived) = self.0.derived.lock() {
+            derived.clear();
+        }
     }
 }
 
@@ -176,7 +182,8 @@ impl Step {
 }
 
 fn emit(shared: &EngineShared, node_id: &str, step: Step) {
-    let masked = &shared.masked;
+    let masked = shared.masked.read().unwrap();
+    let masked = masked.as_slice();
     let event = RunEvent {
         job_id: shared.job_id,
         ts: now_ms(),
@@ -367,6 +374,17 @@ async fn run_branch(
 }
 
 impl EngineShared {
+    /// Values a rendered request derived from a secret, masked from now on.
+    fn mask_more(&self, values: Vec<String>) {
+        let mut masked = self.masked.write().unwrap();
+        let new: Vec<String> = values.into_iter().filter(|value| !value.is_empty() && !masked.contains(value)).collect();
+        if new.is_empty() {
+            return;
+        }
+        masked.extend(new.iter().cloned());
+        self.derived.lock().unwrap().push(secrets::redact(new));
+    }
+
     /// One more execution of `node`: its number, for `{{counter}}` and its random stream.
     fn next_count(&self, node: &str) -> u64 {
         let mut counts = self.counts.lock().unwrap();
@@ -388,7 +406,9 @@ fn render(shared: &EngineShared, node: &Node, context: &BranchContext, count: u6
         count,
         now_ms: now_ms(),
     };
-    data::render_kind(&node.kind, &mut Renderer::new(scope))
+    let kind = data::render_kind(&node.kind, &mut Renderer::new(scope))?;
+    shared.mask_more(data::derived_masks(&kind, &shared.secrets));
+    Ok(kind)
 }
 
 /// One execution of a step, retried: a failed attempt of an action or wait is
@@ -535,7 +555,8 @@ pub(crate) async fn run(host: &Host, followers: Followers, job_id: u64, doc: &Ex
         end_reached: AtomicBool::new(false),
         params: prepared.params,
         seed: prepared.seed,
-        masked: prepared.secrets.values().cloned().collect(),
+        masked: RwLock::new(prepared.secrets.values().cloned().collect()),
+        derived: Mutex::new(Vec::new()),
         secrets: prepared.secrets,
         counts: Mutex::new(HashMap::new()),
         tasks: Mutex::new(TaskGuard::new()),
@@ -552,7 +573,7 @@ pub(crate) async fn run(host: &Host, followers: Followers, job_id: u64, doc: &Ex
     });
     let _cancel = CancelBranches(shared.clone());
     // The Inspector masks these values while the run lasts (or until it is stopped).
-    let _redaction = secrets::redact(shared.masked.clone());
+    let _redaction = secrets::redact(shared.secrets.values().cloned().collect());
 
     let (done_tx, mut done_rx) = tokio::sync::mpsc::channel(1);
     // validate_document guarantees exactly one Start.
@@ -590,7 +611,7 @@ pub(crate) async fn run(host: &Host, followers: Followers, job_id: u64, doc: &Ex
     }
     let first = shared.first_error.lock().unwrap().clone();
     match first {
-        Some(error) => Err(error.masked(&shared.masked)),
+        Some(error) => Err(error.masked(&shared.masked.read().unwrap())),
         None => Ok(()),
     }
 }

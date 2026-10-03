@@ -241,7 +241,7 @@ pub(crate) async fn serve_datagrams(socket: Arc<UdpSocket>, context: Arc<Context
     loop {
         match socket.recv_from(&mut buffer).await {
             Ok((size, from)) => {
-                let datagram = Datagram { bytes: buffer[..size].to_vec(), from, at: Instant::now(), topic: None, frame: None, request: None };
+                let datagram = Datagram { bytes: buffer[..size].to_vec(), from, at: Instant::now(), topic: None, frame: None, request: None, binary: false };
                 responder.answer(&socket, &datagram);
             }
             // An ICMP "port unreachable" for an earlier reply; the socket is fine.
@@ -375,7 +375,7 @@ async fn reply_line(stream: &mut TcpStream, peer: SocketAddr, message: &[u8], co
         let _ = stream.shutdown().await;
         return false;
     }
-    let datagram = Datagram { bytes: message.to_vec(), from: peer, at: started, topic: None, frame: None, request: None };
+    let datagram = Datagram { bytes: message.to_vec(), from: peer, at: started, topic: None, frame: None, request: None, binary: false };
     let found = rules.iter().enumerate().find_map(|(index, rule)| rule.matcher.matches(&datagram).map(|value| (index, rule, value)));
     let verdict = match &found {
         Some((index, ..)) => format!("#{}", index + 1),

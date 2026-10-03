@@ -40,9 +40,9 @@ signallab doctor                                   # what stands between Signal 
 | `<FILE>…` | experiment files (any version the app reads; older ones are migrated) or bundled template names |
 | `--param NAME=VALUE` | a parameter value for this run, repeatable; it applies to the experiments that have that parameter and must belong to at least one |
 | `--profile NAME` | run with this profile (`""` = the defaults) |
-| `--matrix NAME=V1,V2` (`-m`) | run once per value; repeat for more names — every combination runs, the first name varying slowest — or the same name again for more values |
+| `--matrix NAME=V1,V2` (`-m`) | run once per value; repeat for more names — every combination runs, the first name varying slowest — or the same name again for more values; spaces around names and values are dropped |
 | `--matrix-file PATH` | combinations from JSON: `{"NAME": [values], …}` (every combination; its names after `--matrix`'s, alphabetically) or `[{"NAME": value, …}, …]` (these, each crossed with `--matrix`) |
-| `--fail-fast` | stop at the first run that does not pass; the rest are not started (said, and counted as `not_started` in `--json`'s summary) |
+| `--fail-fast` | stop at the first run that does not pass; the rest are not started (said, counted as `not_started` in `--json`'s summary, and skipped suites of the JUnit report) |
 | `--seed N` | the seed of the random values; a failed run prints the one it used |
 | `--timeout SECONDS` | fail a run that takes longer (1–300, default 300) |
 | `--junit PATH` | a JUnit report: a suite per experiment, a case per node that ran, skipped cases for nodes the run never reached, the failure in words with its technical detail |
@@ -73,10 +73,11 @@ On GitHub Actions a failure is also an `::error` annotation on the run page.
 payload size. Each combination is a run of its own — named `file [host=a,
 user=admin]`, a test suite of the JUnit report (with `param.NAME` properties),
 a report of its own under `--report` (a folder) and, with `--json`, a `matrix`
-object on its `started` and `ended` lines. Every combination is checked before
-the first one sends anything; an experiment without one of the matrix's
-parameters runs once, not once per value it would ignore. At most 256
-combinations from one command.
+object next to `file` (the file as given) on its `started`, `ended` and `error`
+lines, and on `validate`'s. Every combination is checked before the first one
+sends anything; an experiment without one of the matrix's parameters runs once,
+not once per value it would ignore, and a value or combination given twice runs
+once. At most 256 runs from one command.
 
 ```
 signallab run smoke.json -m host=10.0.0.20:9000,10.0.0.21:9000 -m user=admin,guest --fail-fast --junit junit.xml
@@ -98,8 +99,8 @@ With several experiments the most serious code wins.
 `--json` (anywhere on the line) prints one JSON object per line on stdout and
 nothing else: `started`, every `step`, `ended` (the run
 result: outcome, seed, params, error, steps, report path), then `summary`
-(`total`, `passed`, `failed`, `exit_code`). A failure that kept an experiment
-from starting is `{"type":"error","error":{code,params,…},"exit_code":2}`.
+(`total`, `passed`, `failed`, `not_started`, `exit_code`). A failure that kept an
+experiment from starting is `{"type":"error","file":…,"error":{code,params,…},"exit_code":2}`.
 Errors are always the engine's `EngineError` — a stable `code` and its values —
 so a script can branch on `error.code` whatever the language.
 

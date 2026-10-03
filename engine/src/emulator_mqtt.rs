@@ -530,7 +530,7 @@ fn published(shared: &Shared, message: Message, retain: bool, client: &str, peer
     let context = &shared.context;
     let Rules::Mqtt(rules) = &context.compiled.rules else { return };
     let started = Instant::now();
-    let datagram = Datagram { bytes: message.payload.clone(), from: peer, at: started, topic: Some(message.topic.clone()), frame: None, request: None };
+    let datagram = Datagram { bytes: message.payload.clone(), from: peer, at: started, topic: Some(message.topic.clone()), frame: None, request: None, binary: false };
     let found = rules
         .rules
         .iter()

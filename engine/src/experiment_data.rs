@@ -13,7 +13,7 @@ use super::error::{EngineError, EngineResult, Field};
 use super::experiment::{Experiment, Node, NodeKind, Until};
 use super::experiment_validate::LoopShape;
 use super::http::HttpResponse;
-use super::http_auth::Auth;
+use super::http_auth::{self, Auth};
 use super::matching::{self, UdpMode};
 pub use super::matching::{compare, CompareOp};
 use super::osc_codec::OscArg;
@@ -570,6 +570,20 @@ pub fn load_secrets<'a>(nodes: impl IntoIterator<Item = &'a Node>, store: &dyn S
         }
     }
     Ok(values)
+}
+
+/// What a rendered node sends a secret as besides the value itself: Basic's
+/// base64 of `name:password`, when either holds a secret value — a server
+/// that echoes the request would otherwise show it in that form.
+pub fn derived_masks(kind: &NodeKind, secrets: &BTreeMap<String, String>) -> Vec<String> {
+    let NodeKind::Http { request } = kind else { return Vec::new() };
+    let Auth::Basic { username, password } = &request.auth else { return Vec::new() };
+    let holds = |text: &str| secrets.values().any(|value| !value.is_empty() && text.contains(value.as_str()));
+    if holds(username) || holds(password) {
+        vec![http_auth::basic_credentials(username, password)]
+    } else {
+        Vec::new()
+    }
 }
 
 /// A response as it may leave the engine: secret values masked.

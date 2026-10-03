@@ -41,7 +41,13 @@ impl Auth {
 
 /// `Basic dXNlcjpwYXNz`.
 pub fn basic(username: &str, password: &str) -> String {
-    format!("Basic {}", base64::engine::general_purpose::STANDARD.encode(format!("{username}:{password}")))
+    format!("Basic {}", basic_credentials(username, password))
+}
+
+/// `dXNlcjpwYXNz`: what Basic sends of a name and password — a secret in
+/// either is masked in this form too.
+pub fn basic_credentials(username: &str, password: &str) -> String {
+    base64::engine::general_purpose::STANDARD.encode(format!("{username}:{password}"))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -120,6 +126,12 @@ fn challenges(text: &str) -> Vec<(String, Vec<(String, String)>)> {
             if let Some((_, params)) = found.last_mut() {
                 params.push((token.to_ascii_lowercase(), value));
             }
+        } else if let Some(qop) = found.last_mut().and_then(|(_, params)| params.last_mut()).filter(|(key, _)| key == "qop").filter(|_| {
+            // `qop=auth,auth-int` unquoted, as some servers write it: the list goes on.
+            token.eq_ignore_ascii_case("auth") || token.eq_ignore_ascii_case("auth-int")
+        }) {
+            qop.1.push(',');
+            qop.1.push_str(&token);
         } else {
             found.push((token, Vec::new()));
         }
@@ -249,29 +261,67 @@ pub fn cnonce() -> String {
     (0..16).map(|_| format!("{:02x}", rand::random::<u8>())).collect()
 }
 
-/// A Digest challenge remembered across requests (a burst's, a run's), so
-/// each one after the first answers it at once — one round trip, as a
-/// browser does — counting its uses.
+/// One answer to a challenge: this request's count of its nonce and the client nonce.
+#[derive(Clone, Debug)]
+pub struct Answering {
+    pub challenge: Challenge,
+    pub nc: u32,
+    pub cnonce: String,
+}
+
+impl Answering {
+    pub fn header(&self, username: &str, password: &str, method: &str, uri: &str, body: &[u8]) -> String {
+        authorization(&self.challenge, username, password, method, uri, self.nc, &self.cnonce, body)
+    }
+}
+
+/// The Digest challenge of one origin, remembered across the requests of a
+/// burst so each one after the first answers it at once — one round trip, as
+/// a browser does. Every answer to one nonce counts on with one client nonce
+/// (which `-sess` hashes into its first hash), so requests in flight together
+/// that meet the same new nonce never send the same count twice.
 #[derive(Default)]
-pub struct DigestMemory(Mutex<Option<(Challenge, u32)>>);
+pub struct DigestMemory(Mutex<Option<Remembered>>);
+
+struct Remembered {
+    origin: String,
+    challenge: Challenge,
+    nc: u32,
+    cnonce: String,
+}
+
+impl Remembered {
+    fn answer(&mut self) -> Answering {
+        self.nc += 1;
+        Answering { challenge: self.challenge.clone(), nc: self.nc, cnonce: self.cnonce.clone() }
+    }
+}
 
 impl DigestMemory {
-    /// The remembered challenge and the next count, if any.
-    pub fn next(&self) -> Option<(Challenge, u32)> {
+    /// The next answer to what `origin` asked last, if it asked.
+    pub fn next(&self, origin: &str) -> Option<Answering> {
         let mut held = self.0.lock().unwrap();
-        let (challenge, nc) = held.as_mut()?;
-        *nc += 1;
-        Some((challenge.clone(), *nc))
+        Some(held.as_mut().filter(|held| held.origin == origin)?.answer())
     }
 
-    /// A fresh challenge: count from 1.
-    pub fn remember(&self, challenge: Challenge) -> u32 {
-        *self.0.lock().unwrap() = Some((challenge, 1));
-        1
+    /// The answer to a challenge `origin` just gave: its nonce counted on when
+    /// it is the one held, else counted from 1 with a new client nonce.
+    pub fn remember(&self, origin: &str, challenge: Challenge) -> Answering {
+        let mut held = self.0.lock().unwrap();
+        if let Some(same) = held.as_mut().filter(|held| held.origin == origin && held.challenge.realm == challenge.realm && held.challenge.nonce == challenge.nonce) {
+            same.challenge = challenge;
+            return same.answer();
+        }
+        let fresh = held.insert(Remembered { origin: origin.into(), challenge, nc: 0, cnonce: cnonce() });
+        fresh.answer()
     }
 
-    pub fn forget(&self) {
-        *self.0.lock().unwrap() = None;
+    /// An answer to `nonce` was refused: forgotten, unless a newer one is held by now.
+    pub fn forget(&self, origin: &str, nonce: &str) {
+        let mut held = self.0.lock().unwrap();
+        if held.as_ref().is_some_and(|held| held.origin == origin && held.challenge.nonce == nonce) {
+            *held = None;
+        }
     }
 }
 
@@ -342,19 +392,34 @@ mod tests {
         assert!(digest_challenge(["Digest realm=\"r\""]).unwrap_err().is("http.digest_invalid"), "no nonce");
         let escaped = digest_challenge([r#"Digest realm="a \"quoted\" realm", nonce="n""#]).unwrap().unwrap();
         assert_eq!(escaped.realm, "a \"quoted\" realm");
+        // A qop list some servers leave unquoted is still one list, and what follows it still counts.
+        let bare = digest_challenge(["Digest realm=\"r\", qop=auth-int,auth, nonce=\"n\", algorithm=SHA-256"]).unwrap().unwrap();
+        assert_eq!((bare.qop, bare.nonce.as_str(), bare.algorithm), (Some(Qop::Auth), "n", Algorithm::Sha256));
+        let then = digest_challenge(["Digest realm=\"r\", nonce=\"n\", qop=auth-int, Basic realm=\"b\""]).unwrap().unwrap();
+        assert_eq!(then.qop, Some(Qop::AuthInt), "Basic after it is a challenge of its own");
     }
 
     #[test]
     fn basic_is_base64_of_name_and_password_and_memory_counts_uses() {
         assert_eq!(basic("Aladdin", "open sesame"), "Basic QWxhZGRpbjpvcGVuIHNlc2FtZQ==");
+        const LAB: &str = "http://127.0.0.1:8080";
         let memory = DigestMemory::default();
-        assert!(memory.next().is_none());
+        assert!(memory.next(LAB).is_none());
         let challenge = digest_challenge(["Digest realm=\"r\", nonce=\"n\""]).unwrap().unwrap();
-        assert_eq!(memory.remember(challenge.clone()), 1);
-        assert_eq!(memory.next().map(|(_, nc)| nc), Some(2));
-        assert_eq!(memory.next().map(|(_, nc)| nc), Some(3));
-        memory.forget();
-        assert!(memory.next().is_none());
+        let first = memory.remember(LAB, challenge.clone());
+        assert_eq!(first.nc, 1);
+        assert!(memory.next("http://127.0.0.1:8081").is_none(), "another origin is not answered");
+        assert_eq!(memory.next(LAB).map(|answer| answer.nc), Some(2));
+        // Requests in flight together meet the same new nonce: they count on, one client nonce.
+        let again = memory.remember(LAB, challenge.clone());
+        assert_eq!((again.nc, again.cnonce.as_str()), (3, first.cnonce.as_str()));
+        let stale = digest_challenge(["Digest realm=\"r\", nonce=\"m\", stale=true"]).unwrap().unwrap();
+        let fresh = memory.remember(LAB, stale);
+        assert!(fresh.nc == 1 && fresh.cnonce != first.cnonce, "a new nonce counts from 1");
+        memory.forget(LAB, "n");
+        assert_eq!(memory.next(LAB).map(|answer| answer.nc), Some(2), "a refusal of the old nonce leaves the new one");
+        memory.forget(LAB, "m");
+        assert!(memory.next(LAB).is_none());
         assert_eq!(cnonce().len(), 32);
         assert_eq!(serde_json::to_value(Auth::Digest { username: "u".into(), password: "p".into() }).unwrap(), serde_json::json!({ "scheme": "digest", "username": "u", "password": "p" }));
         assert!(serde_json::from_value::<Auth>(serde_json::json!({ "scheme": "none" })).unwrap().is_none());

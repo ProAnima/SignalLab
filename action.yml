@@ -110,13 +110,15 @@ runs:
         fi
         args=(run)
         for file in $INPUT_EXPERIMENTS; do args+=("$file"); done
+        # One per line; spaces and a CR around a line are not part of it.
+        trim() { local text="${1#"${1%%[![:space:]]*}"}"; printf '%s' "${text%"${text##*[![:space:]]}"}"; }
         while IFS= read -r pair; do
-          pair="${pair#"${pair%%[![:space:]]*}"}"
+          pair="$(trim "$pair")"
           [ -n "$pair" ] && args+=(--param "$pair")
         done <<< "$INPUT_PARAMS"
         [ -n "$INPUT_PROFILE" ] && args+=(--profile "$INPUT_PROFILE")
         while IFS= read -r axis; do
-          axis="${axis#"${axis%%[![:space:]]*}"}"
+          axis="$(trim "$axis")"
           [ -n "$axis" ] && args+=(--matrix "$axis")
         done <<< "$INPUT_MATRIX"
         [ -n "$INPUT_MATRIX_FILE" ] && args+=(--matrix-file "$INPUT_MATRIX_FILE")

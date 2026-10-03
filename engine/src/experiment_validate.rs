@@ -276,6 +276,29 @@ pub fn validate_with(doc: &Experiment, params: &BTreeMap<String, String>) -> Eng
         return Err(EngineError::new("graph.unreachable").at(&unreachable.id));
     }
     order.reverse();
+    // A WebSocket send, wait or close comes after the connect it uses: on a
+    // branch beside it, or before it, it would find no connection (or race one).
+    let mut incoming: HashMap<&str, Vec<&str>> = HashMap::new();
+    for edges in ordered.values() {
+        for edge in edges {
+            incoming.entry(edge.to.as_str()).or_default().push(edge.from.as_str());
+        }
+    }
+    for node in &doc.nodes {
+        let Some(connection) = node.kind.connection() else { continue };
+        let mut before: HashSet<&str> = HashSet::new();
+        let mut stack = vec![node.id.as_str()];
+        while let Some(id) = stack.pop() {
+            for from in incoming.get(id).into_iter().flatten() {
+                if before.insert(from) {
+                    stack.push(from);
+                }
+            }
+        }
+        if !before.contains(connection) {
+            return Err(EngineError::new("ws.connection_after").with("id", connection).in_field(Field::new("connection")).at(&node.id));
+        }
+    }
     // `looped`: reached over a wire back from a Loop's body. A Loop's body runs
     // at least once, so Done and Limit follow only such an arrival — and a
     // request made in the body is there for the checks after the loop.

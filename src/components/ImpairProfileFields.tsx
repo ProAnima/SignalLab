@@ -1,4 +1,4 @@
-import { useId } from "react";
+import { useEffect, useId, useState } from "react";
 import type { ImpairProfile } from "../lib/api";
 import { useT, type TKey } from "../lib/i18n";
 import { changedProfile, fullProfile, IMPAIR_PRESETS, presetOf, presetProfile } from "../lib/impairments";
@@ -18,6 +18,28 @@ function Slider({ label, tip, value, onChange, min, max, step, unit, disabled }:
       <input id={id} type="range" min={min} max={max} step={step} value={value} disabled={disabled} aria-valuetext={`${value}${unit}`} onChange={(event) => onChange(+event.target.value)} />
     </div>
   );
+}
+
+/** The bandwidth limit as typed: kept as text while it is being typed ("1" on the way to
+ * "1000"), handed on once it is a limit the engine takes (0, or 8 and up), clamped on leaving. */
+function RateField({ id, value, onChange, disabled }: { id: string; value: number; onChange: (value: number) => void; disabled?: boolean }) {
+  const [text, setText] = useState(String(value));
+  // A preset or another field changed it: show that.
+  useEffect(() => { setText((current) => Number(current) === value ? current : String(value)); }, [value]);
+  const usable = (typed: number) => typed === 0 || (typed >= 8 && typed <= 10000000);
+  return <input id={id} type="number" min={0} max={10000000} step={100} value={text} disabled={disabled}
+    onChange={(event) => {
+      setText(event.target.value);
+      const typed = Math.round(Number(event.target.value));
+      if (event.target.value.trim() !== "" && Number.isFinite(typed) && usable(typed)) onChange(typed);
+    }}
+    onBlur={() => {
+      const typed = Math.max(0, Math.round(Number(text) || 0));
+      // Below the engine's floor a limit means nothing a link has; 0 is none.
+      const settled = typed === 0 ? 0 : Math.min(10000000, Math.max(8, typed));
+      setText(String(settled));
+      if (settled !== value) onChange(settled);
+    }} />;
 }
 
 /** A probability as the slider shows it: percent, to a tenth. */
@@ -63,12 +85,7 @@ export function ImpairProfileFields({ profile, onChange, disabled }: { profile: 
     <Slider label={t("ns.reorder")} tip={t("ns.reorderHint")} value={pct(full.reorder)} onChange={(value) => set({ reorder: value / 100 })} min={0} max={100} step={1} unit="%" disabled={disabled} />
     <div className="field">
       <label htmlFor={rateId} data-tip={t("ns.rateHint")}>{t("ns.rate")}</label>
-      <input id={rateId} type="number" min={0} max={10000000} step={100} value={full.rate_kbps} disabled={disabled}
-        onChange={(event) => {
-          const value = Math.max(0, Math.round(Number(event.target.value) || 0));
-          // Below the engine's floor a limit means nothing a link has; 0 is none.
-          set({ rate_kbps: value === 0 ? 0 : Math.min(10000000, Math.max(8, value)) });
-        }} />
+      <RateField id={rateId} value={full.rate_kbps} disabled={disabled} onChange={(rate_kbps) => set({ rate_kbps })} />
     </div>
   </div>;
 }

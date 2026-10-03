@@ -8,7 +8,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -24,6 +24,9 @@ use super::osc_codec::{decode_packet, summarize_messages};
 
 /// Datagrams kept per socket; older ones are dropped and counted.
 pub const QUEUE: usize = 1024;
+/// Bytes kept per inbox (WebSocket messages are large where datagrams are not);
+/// older ones are dropped and counted.
+pub const QUEUE_BYTES: usize = 64 << 20;
 
 /// The sockets of one run, by bind address.
 pub type Listeners = HashMap<SocketAddr, Arc<Listener>>;
@@ -71,6 +74,8 @@ impl FrameSink for NoFrames {
 /// A UDP socket (`Listener`) and an MQTT subscription (`subscribe`) fill one each.
 pub struct Inbox {
     datagrams: Mutex<VecDeque<Datagram>>,
+    /// What `datagrams` holds, in bytes.
+    held: AtomicUsize,
     dropped: AtomicU64,
     /// Wakes every waiting step when a datagram arrives or the source fails.
     arrived: Notify,
@@ -79,7 +84,7 @@ pub struct Inbox {
 
 impl Default for Inbox {
     fn default() -> Self {
-        Inbox { datagrams: Mutex::new(VecDeque::new()), dropped: AtomicU64::new(0), arrived: Notify::new(), failed: Mutex::new(None) }
+        Inbox { datagrams: Mutex::new(VecDeque::new()), held: AtomicUsize::new(0), dropped: AtomicU64::new(0), arrived: Notify::new(), failed: Mutex::new(None) }
     }
 }
 
@@ -87,10 +92,14 @@ impl Inbox {
     pub fn push(&self, datagram: Datagram) {
         {
             let mut datagrams = self.datagrams.lock().unwrap();
-            if datagrams.len() == QUEUE {
-                datagrams.pop_front();
+            let size = datagram.bytes.len();
+            while !datagrams.is_empty() && (datagrams.len() == QUEUE || self.held.load(Ordering::Relaxed) + size > QUEUE_BYTES) {
+                if let Some(old) = datagrams.pop_front() {
+                    self.held.fetch_sub(old.bytes.len(), Ordering::Relaxed);
+                }
                 self.dropped.fetch_add(1, Ordering::Relaxed);
             }
+            self.held.fetch_add(size, Ordering::Relaxed);
             datagrams.push_back(datagram);
         }
         self.arrived.notify_waiters();
@@ -139,7 +148,9 @@ impl Inbox {
             .enumerate()
             .filter(|(_, datagram)| datagram.at >= since)
             .find_map(|(index, datagram)| matcher.matches(datagram).map(|reply| (index, reply)))?;
-        datagrams.remove(index).map(|datagram| (datagram, reply))
+        let taken = datagrams.remove(index)?;
+        self.held.fetch_sub(taken.bytes.len(), Ordering::Relaxed);
+        Some((taken, reply))
     }
 
     fn arrived_since(&self, since: Instant) -> usize {
@@ -208,7 +219,7 @@ impl Listener {
             loop {
                 match receiving.recv_from(&mut buffer).await {
                     Ok((size, from)) => {
-                        let mut datagram = Datagram { bytes: buffer[..size].to_vec(), from, at: Instant::now(), topic: None, frame: None, request: None };
+                        let mut datagram = Datagram { bytes: buffer[..size].to_vec(), from, at: Instant::now(), topic: None, frame: None, request: None, binary: false };
                         datagram.frame = match &tap {
                             Some(tap) => tap.received(&receiving, &datagram),
                             None => sink.received(local, &datagram),
@@ -367,7 +378,7 @@ mod tests {
         let queue = Inbox::default();
         let from: SocketAddr = "127.0.0.1:1".parse().unwrap();
         for index in 0..QUEUE + 6 {
-            queue.push(Datagram { bytes: index.to_string().into_bytes(), from, at: Instant::now(), topic: None, frame: None, request: None });
+            queue.push(Datagram { bytes: index.to_string().into_bytes(), from, at: Instant::now(), topic: None, frame: None, request: None, binary: false });
         }
         assert_eq!((queue.datagrams.lock().unwrap().len(), queue.dropped.load(Ordering::Relaxed)), (QUEUE, 6));
         assert_eq!(queue.datagrams.lock().unwrap().front().unwrap().bytes, b"6", "the oldest are dropped");

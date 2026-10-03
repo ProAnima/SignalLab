@@ -217,11 +217,11 @@ function digestParams(header) {
   return params;
 }
 
-/** Whether `header` answers one of `nonces` for `method`, as RFC 7616 computes it. */
-function digestAnswered(header, method, nonces) {
+/** Whether `header` answers one of `nonces` for `method` and this request's `target`, as RFC 7616 computes it. */
+function digestAnswered(header, method, target, nonces) {
   if (!header?.startsWith("Digest ")) return false;
   const p = digestParams(header.slice(7));
-  if (!nonces.has(p.nonce) || p.username !== DIGEST.username || p.realm !== DIGEST.realm || p.qop !== "auth" || p.algorithm !== "SHA-256") return false;
+  if (!nonces.has(p.nonce) || p.uri !== target || p.username !== DIGEST.username || p.realm !== DIGEST.realm || p.qop !== "auth" || p.algorithm !== "SHA-256") return false;
   const h = (text) => createHash("sha256").update(text).digest("hex");
   const ha1 = h(`${p.username}:${p.realm}:${DIGEST.password}`);
   const ha2 = h(`${method}:${p.uri}`);
@@ -329,7 +329,7 @@ export async function startFixtures({ pongPort }) {
       counts.httpPaths.push(request.url);
       // Digest: a challenge, then the answer checked; /login sets a cookie that /me wants.
       if (request.url.startsWith("/digest")) {
-        if (digestAnswered(request.headers.authorization, request.method, nonces)) {
+        if (digestAnswered(request.headers.authorization, request.method, request.url, nonces)) {
           counts.digestAnswered += 1;
           response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ digest: "ok" }));
         } else {

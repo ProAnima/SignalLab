@@ -261,7 +261,7 @@ fn reply_text(response: &hyper::Response<Full<Bytes>>, body: &str) -> String {
 /// A run's *Wait for HTTP request* steps hear every request, answered or not.
 fn heard(context: &Context, peer: SocketAddr, started: Instant, body: &[u8], frame: Option<u64>, request: &Value) {
     if let Some(inbox) = &context.inbox {
-        inbox.push(Datagram { bytes: body[..body.len().min(READ_BODY)].to_vec(), from: peer, at: started, topic: None, frame, request: Some(request.clone()) });
+        inbox.push(Datagram { bytes: body[..body.len().min(READ_BODY)].to_vec(), from: peer, at: started, topic: None, frame, request: Some(request.clone()), binary: false });
     }
 }
 
