@@ -2,7 +2,7 @@
 //! opened before the first step; one task per branch; every wire of an output
 //! followed (each past the first a parallel branch with a copy of the
 //! variables); Joins merged in document order; End passed once, after the last
-//! branch; each step retried and repeated as its node says. Every step is
+//! branch; each step retried, repeated or loaded as its node says. Every step is
 //! reported as it happens, secret values masked. What a step does is
 //! `experiment_steps`; starting and following a run is `experiment_run`.
 
@@ -22,6 +22,7 @@ use super::netsim::Relay;
 use super::netsim_run;
 use super::error::{EngineError, EngineResult, Field};
 use super::experiment::{Experiment, Node, NodeKind, Repeat, RepeatUntil};
+use super::load::{self, Load, LoadMetrics};
 use super::experiment_data as data;
 use super::experiment_run::RunEvent;
 use super::cookies::CookieJar;
@@ -143,15 +144,30 @@ struct Step {
     vars: Option<BTreeMap<String, Value>>,
     error: Option<EngineError>,
     frame: Option<u64>,
+    load: Option<Box<LoadMetrics>>,
 }
 
 impl Step {
     fn running() -> Self {
-        Step { state: "running", detail: String::new(), message: None, vars: None, error: None, frame: None }
+        Step { state: "running", detail: String::new(), message: None, vars: None, error: None, frame: None, load: None }
     }
 
     fn failed(error: EngineError) -> Self {
-        Step { state: "failed", detail: String::new(), message: None, vars: None, error: Some(error), frame: None }
+        Step { state: "failed", detail: String::new(), message: None, vars: None, error: Some(error), frame: None, load: None }
+    }
+
+    /// A load's progress: what it has sent so far, how fast, how slow.
+    fn loading(progress: &load::Progress) -> Self {
+        let (s, rps, p95) = (format!("{:.0}", progress.elapsed.as_secs_f64()), format!("{:.0}", progress.rps), format!("{:.0}", progress.p95_ms));
+        Step {
+            state: "load",
+            detail: format!("{s} s · sent {} · {rps}/s · p95 {p95} ms · failed {}", progress.sent, progress.failed),
+            message: Some(("exp.step.loading", serde_json::json!({ "s": s, "sent": progress.sent, "rps": rps, "p95": p95, "failed": progress.failed }))),
+            vars: None,
+            error: None,
+            frame: None,
+            load: None,
+        }
     }
 
     /// A repeating step's progress: the sends so far.
@@ -164,7 +180,7 @@ impl Step {
                 "total": format!("{:.1}", repeat.duration_ms as f64 / 1000.0),
             })),
         };
-        Step { state: "repeating", detail: format!("Sent {sent} times"), message: Some((key, params)), vars: None, error: None, frame: None }
+        Step { state: "repeating", detail: format!("Sent {sent} times"), message: Some((key, params)), vars: None, error: None, frame: None, load: None }
     }
 
     /// An attempt failed and the step will run again after `pause`.
@@ -177,6 +193,7 @@ impl Step {
             vars: None,
             error: Some(error),
             frame: None,
+            load: None,
         }
     }
 }
@@ -195,6 +212,7 @@ fn emit(shared: &EngineShared, node_id: &str, step: Step) {
         vars: step.vars.map(|vars| vars.into_iter().map(|(name, value)| (name, secrets::mask_value(&value, masked))).collect()),
         error: step.error.map(|error| error.masked(masked)),
         frame: step.frame,
+        load: step.load,
     };
     if let Ok(mut list) = shared.events.lock() {
         list.push(event.clone());
@@ -206,6 +224,11 @@ fn emit(shared: &EngineShared, node_id: &str, step: Step) {
 
 /// The first failure of a run stops every branch; later ones are only reported.
 fn fail(shared: &EngineShared, node_id: &str, error: EngineError) {
+    fail_measured(shared, node_id, error, None);
+}
+
+/// A failure, with what a load measured before it — a threshold that did not hold.
+fn fail_measured(shared: &EngineShared, node_id: &str, error: EngineError, load: Option<Box<LoadMetrics>>) {
     let error = error.at(node_id);
     shared.stop_flag.store(true, Ordering::SeqCst);
     {
@@ -214,7 +237,7 @@ fn fail(shared: &EngineShared, node_id: &str, error: EngineError) {
             *first = Some(error.clone());
         }
     }
-    emit(shared, node_id, Step::failed(error));
+    emit(shared, node_id, Step { load, ..Step::failed(error) });
 }
 
 fn spawn_branch(
@@ -336,22 +359,24 @@ async fn run_branch(
             inputs: shared.joins.lock().ok().and_then(|joins| joins.get(&current).map(|barrier| barrier.expected)).unwrap_or(1),
             run_started: shared.started,
         };
-        // A template that does not resolve is neither retried nor repeated.
+        // A template that does not resolve is neither retried, repeated nor loaded.
+        let mut measured = None;
         let result = match rendered {
-            Ok(kind) => match node.repeat.as_ref().filter(|_| node.kind.repeats()) {
-                Some(repeat) => repeated(&shared, &env, &node, kind, repeat, &mut context).await,
-                None => attempts(&shared, &env, &node, &kind, &mut context).await,
+            Ok(kind) => match (node.load.as_ref().filter(|_| node.kind.loads()), node.repeat.as_ref().filter(|_| node.kind.repeats())) {
+                (Some(load), _) => loaded(&shared, &env, &node, kind, load, &mut context, &mut measured).await,
+                (None, Some(repeat)) => repeated(&shared, &env, &node, kind, repeat, &mut context).await,
+                (None, None) => attempts(&shared, &env, &node, &kind, &mut context).await,
             },
             Err(error) => Err(error),
         };
         let port = match result {
             Ok(outcome) => {
-                let step = Step { state: "passed", detail: outcome.detail, message: outcome.message, vars: outcome.written, error: None, frame: outcome.frame };
+                let step = Step { state: "passed", detail: outcome.detail, message: outcome.message, vars: outcome.written, error: None, frame: outcome.frame, load: measured };
                 emit(&shared, &current, step);
                 outcome.port
             }
             Err(error) => {
-                fail(&shared, &current, error);
+                fail_measured(&shared, &current, error, measured);
                 break;
             }
         };
@@ -457,6 +482,32 @@ async fn repeated(shared: &EngineShared, env: &StepEnv<'_>, node: &Node, first: 
         // Stop aborts this task, so the pause ends with it.
         tokio::time::sleep(pause).await;
         kind = render(shared, node, context, shared.next_count(&node.id))?;
+    }
+}
+
+/// An HTTP request sent on a load profile (`load::run`), its templates read
+/// once: progress reported every second, and what it measured kept in
+/// `measured` for the step's event whether it passes or fails. The first
+/// threshold that does not hold fails the step — unless another branch's
+/// failure stopped the load, which is then the run's failure.
+async fn loaded(shared: &EngineShared, env: &StepEnv<'_>, node: &Node, kind: NodeKind, load: &Load, context: &mut BranchContext, measured: &mut Option<Box<LoadMetrics>>) -> EngineResult<StepOutcome> {
+    let NodeKind::Http { request } = kind else { return Err(EngineError::new("run.not_an_action")) };
+    context.last_action = Some(Instant::now());
+    let running = load::LoadEnv { host: env.host, seed: shared.seed, node_id: &node.id, cookies: env.cookies.clone(), stop: &shared.stop_flag };
+    let metrics = load::run(running, request, load, |progress| emit(shared, &node.id, Step::loading(&progress))).await?;
+    let (sent, rps, p95, errors) = (metrics.sent, format!("{:.1}", metrics.rps), format!("{:.0}", metrics.p95_ms), load::shown(metrics.error_rate));
+    let detail = format!("{sent} requests · {rps}/s · p95 {p95} ms · {errors} % failed");
+    let failure = metrics.thresholds.iter().position(|verdict| !verdict.held).map(|index| metrics.thresholds[index].error(index));
+    *measured = Some(Box::new(metrics));
+    match failure {
+        Some(error) if !shared.stop_flag.load(Ordering::Relaxed) => Err(error),
+        _ => Ok(StepOutcome {
+            port: "next",
+            detail,
+            message: Some(("exp.step.loaded", serde_json::json!({ "sent": sent, "rps": rps, "p95": p95, "errors": errors }))),
+            written: None,
+            frame: None,
+        }),
     }
 }
 
@@ -605,7 +656,7 @@ pub(crate) async fn run(host: &Host, followers: Followers, job_id: u64, doc: &Ex
     // Every branch has finished: now the run is complete.
     if shared.first_error.lock().unwrap().is_none() {
         if let Some(end) = doc.nodes.iter().find(|node| matches!(node.kind, NodeKind::End)) {
-            let complete = Step { state: "passed", detail: "Complete".into(), message: Some(("exp.step.complete", serde_json::json!({}))), vars: None, error: None, frame: None };
+            let complete = Step { state: "passed", detail: "Complete".into(), message: Some(("exp.step.complete", serde_json::json!({}))), vars: None, error: None, frame: None, load: None };
             emit(&shared, &end.id, complete);
         }
     }

@@ -26,6 +26,7 @@ import { ExperimentProperties } from "../components/ExperimentProperties";
 import { ExperimentTimeline } from "../components/ExperimentTimeline";
 import { ExperimentAddMenu, type MenuItem } from "../components/ExperimentAddMenu";
 import { ExperimentFinder } from "../components/ExperimentFinder";
+import { ExperimentCompare } from "../components/ExperimentCompare";
 import { ExperimentDocuments } from "../components/ExperimentDocuments";
 import { ExperimentParams } from "../components/ExperimentParams";
 import { ExperimentRunWith, type RunOptions } from "../components/ExperimentRunWith";
@@ -79,6 +80,7 @@ export function ExperimentView({ active, focusMode, setFocusMode, onShowFrame, o
   const [timelineOpen, setTimelineOpen] = useState(false);
   const [finderOpen, setFinderOpen] = useState(false);
   const [documentsOpen, setDocumentsOpen] = useState(false);
+  const [compareOpen, setCompareOpen] = useState(false);
   const [runWithAt, setRunWithAt] = useState<{ right: number; top: number } | null>(null);
   // What Run with… was last used with, for the next time it opens this session.
   const [runWithLast, setRunWithLast] = useState<RunOptions | null>(null);
@@ -319,14 +321,16 @@ export function ExperimentView({ active, focusMode, setFocusMode, onShowFrame, o
       </div>
       {propertiesOpen && <ExperimentProperties panelRef={propertiesRef} doc={doc} node={selectedNode} count={selection.length} wire={canvas.selectedWire} busy={busy}
         problemNodeId={problemNodeId} validationError={validationError} storedSecrets={storedSecrets} preview={preview}
-        test={selectedNode ? tests[selectedNode.id] : undefined} sending={sending} onSend={sendNode} onExtract={extractPicked} onShowEmulator={onShowEmulator}
+        test={selectedNode ? tests[selectedNode.id] : undefined} sending={sending} onSend={sendNode}
+        measured={selectedNode ? [...events].reverse().find((event) => event.node_id === selectedNode.id && event.load)?.load : undefined} onExtract={extractPicked} onShowEmulator={onShowEmulator}
         onPatch={patchNode} onEdit={edit} onAddNext={canvas.openAddMenu} onCopy={copyFromPanel} onDuplicate={duplicateSelected} onDelete={removeSelected}
         onRemoveWire={canvas.removeWire} onLeave={focusNode} />}
     </div>
     <ExperimentTimeline doc={doc} events={events} outcome={outcome} running={!!job} reportPath={reportPath} lastRun={lastRun} lastSeed={lastSeed} busy={busy}
       open={timelineOpen} onToggle={() => setTimelineOpen(!timelineOpen)} height={timelineHeight} initialHeight={TIMELINE_HEIGHT}
       maxHeight={() => Math.max(90, (viewRef.current?.clientHeight ?? 700) - 260)} onHeight={setTimelineHeight}
-      describe={describe} onEdit={edit} onShowNode={showNode} onShowFrame={onShowFrame} />
+      describe={describe} onEdit={edit} onShowNode={showNode} onShowFrame={onShowFrame} onCompare={() => setCompareOpen(true)} />
+    {compareOpen && <ExperimentCompare doc={doc} latest={reportPath.split(/[\\/]/).pop() ?? ""} onClose={() => setCompareOpen(false)} />}
     {menu && <ExperimentAddMenu menu={menu} nodes={doc.nodes} onAdd={addFromMenu} onClose={() => setMenu(null)} />}
     {paramsAt && <ExperimentParams doc={doc} issues={profileIssues} disabled={busy} anchor={paramsAt} describe={describe}
       onClose={() => { commitEdit(); setParamsAt(null); }} onEdit={(update) => edit(update)}

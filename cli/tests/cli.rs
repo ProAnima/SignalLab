@@ -54,7 +54,7 @@ fn experiment(dir: &Path, name: &str, middle: Value, port: &str) -> String {
     middle["x"] = 200.into();
     middle["y"] = 80.into();
     let document = json!({
-        "version": 8,
+        "version": 9,
         "name": name,
         "params": [{ "name": "who", "value": "world" }],
         "nodes": [{ "id": "start", "type": "start", "x": 0, "y": 80 }, middle, { "id": "end", "type": "end", "x": 400, "y": 80 }],
@@ -342,7 +342,7 @@ async fn start_server(dir: &Path) -> Running {
 /// An experiment that sends `{{word}} {{n}}` to `target` and passes unless `n` is 2.
 fn matrixed(dir: &Path, target: SocketAddr) -> String {
     let document = json!({
-        "version": 8, "name": "Matrixed",
+        "version": 9, "name": "Matrixed",
         "params": [{ "name": "word", "value": "x" }, { "name": "n", "value": "0" }],
         "nodes": [
             { "id": "start", "type": "start", "x": 0, "y": 80 },

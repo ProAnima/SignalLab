@@ -12,6 +12,21 @@ release notes — so what is written here is what users read. See
 
 ### Added
 
+- **Load on an HTTP node.** An experiment's HTTP request can run under a
+  profile — constant, ramp, steps, spike or random (Poisson) arrivals, up to
+  100 000 requests a second and 512 at once — drawn in the properties before it
+  runs. The step measures p50/p90/p95/p99, mean and slowest, the error rate, the
+  rate achieved, answers by status or cause, each second and a latency histogram,
+  and passes only when its **thresholds** hold (`p95 < 300 ms`, `errors < 1 %`):
+  the first that does not fails it and says by how much. The timeline counts up
+  every second; the properties show the result. Experiment files are version 9.
+- **Compare two runs.** *Compare* in the timeline sets this run beside the one
+  before it, or any earlier run of the experiment: each load step's metrics before
+  and after, the change, a regression in red, and how each threshold went.
+  `signallab run` prints each threshold's verdict and fails on one that does not
+  hold (JUnit `type="load.threshold"`); MCP has `list_runs` and `compare_runs`;
+  the API `experiment_runs` and `experiment_compare`. Run reports are version 5.
+
 - **The Inspector keeps whole frames.** A frame keeps its bytes up to 256 KiB
   instead of the first KiB: the list still shows a preview, *Show all* brings every
   row, *Save as signal* replays a datagram of any size byte for byte (it refused

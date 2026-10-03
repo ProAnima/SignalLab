@@ -6,6 +6,20 @@
 .experiment-document-button { flex-shrink: 0; }
 .experiment-documents { width: min(610px, calc(100vw - 32px)); max-height: calc(100vh - 40px); padding: 0; border: 1px solid var(--border-strong); border-radius: var(--radius); color: var(--text); background: var(--surface-1); box-shadow: var(--shadow-md); }
 .experiment-documents::backdrop { background: rgba(0, 0, 0, .65); backdrop-filter: blur(4px); }
+/* Compare: two runs picked, a table per load step. */
+.experiment-compare { width: min(720px, calc(100vw - 32px)); }
+.experiment-compare-pick { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); margin-bottom: var(--space-4); }
+.experiment-compare-pick label { display: flex; flex-direction: column; gap: 6px; color: var(--text-dim); font-size: 11px; }
+.experiment-compare-step { margin-bottom: var(--space-4); }
+.experiment-compare-step h3 { margin: 0 0 var(--space-2); font-size: 13px; }
+.experiment-compare-step h3 small { color: var(--text-faint); font-weight: 400; }
+.experiment-compare-step table { width: 100%; border-collapse: collapse; margin-bottom: var(--space-2); font: 12px var(--mono); }
+.experiment-compare-step th, .experiment-compare-step td { padding: 5px 8px; border-bottom: 1px solid var(--border); text-align: right; }
+.experiment-compare-step thead th { color: var(--text-faint); font: 600 9.5px var(--sans); text-transform: uppercase; letter-spacing: 0.9px; }
+.experiment-compare-step tbody th { text-align: left; color: var(--text-dim); font-weight: 400; }
+.experiment-compare-step th:first-child { text-align: left; }
+.experiment-compare-step tr.worse td:last-child { color: var(--red); font-weight: 600; }
+.experiment-compare-open { margin-right: var(--space-2); }
 .experiment-documents-content { padding: 22px; }
 .experiment-documents header { display: flex; align-items: flex-start; gap: 16px; justify-content: space-between; margin-bottom: 18px; }
 .experiment-documents h2 { margin: 0 0 6px; font-size: 19px; }

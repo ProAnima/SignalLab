@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use std::net::SocketAddr;
 
 use super::error::{EngineError, EngineResult, Field};
-use super::experiment::{NodeKind, Repeat, RepeatUntil, Retry, MAX_LOOP, MAX_REPEATS, RUN_LIMIT};
+use super::experiment::{Node, NodeKind, Repeat, RepeatUntil, Retry, MAX_LOOP, MAX_REPEATS, RUN_LIMIT};
 use super::experiment_data::{self as data, ExtractFrom};
 use super::matching::{UdpMode, MAX_ARG_INDEX};
 
@@ -118,6 +118,18 @@ pub(crate) fn check_repeat(kind: &NodeKind, repeat: &Repeat) -> EngineResult<()>
         return Err(EngineError::new("node.repeat_too_long").with("seconds", RUN_LIMIT.as_secs()).in_field(Field::new("repeat")));
     }
     Ok(())
+}
+
+/// Load sends an HTTP request on a profile, in place of Repeat and Retry: a
+/// failed request is counted, not tried again.
+pub(crate) fn check_load(node: &Node, load: &crate::load::Load) -> EngineResult<()> {
+    if !node.kind.loads() {
+        return Err(EngineError::new("node.load_unsupported").in_field(Field::new("load")));
+    }
+    if node.repeat.is_some() || node.retry.is_some() {
+        return Err(EngineError::new("node.load_alone").in_field(Field::new("load")));
+    }
+    crate::load::check(load)
 }
 
 fn check_rules(count: usize, indexes: impl Iterator<Item = usize>) -> EngineResult<()> {

@@ -26,7 +26,8 @@ const KINDS: &[Kind] = &[
     Kind {
         kind: "http",
         fields: &[("request.method", "GET, POST, PUT, PATCH, DELETE, HEAD"), ("request.url", "http(s) URL, templated"), ("request.headers", "[[name, value], …], templated"), ("request.body", "text or null, templated"), ("request.timeout_ms", "milliseconds"),
-                 ("request.auth", "optional: {scheme: basic|digest, username, password} or {scheme: bearer, token}, templated ({{secret.NAME}}); Digest answers the server's 401 challenge")],
+                 ("request.auth", "optional: {scheme: basic|digest, username, password} or {scheme: bearer, token}, templated ({{secret.NAME}}); Digest answers the server's 401 challenge"),
+                 ("load", "optional: send the request on a load profile, many at once, measured and judged by thresholds — see \"load\"")],
         example: || json!({ "request": { "method": "POST", "url": "{{api}}/cue", "headers": [["Content-Type", "application/json"]], "body": "{\"cue\": 1}", "timeout_ms": 5000 } }),
     },
     Kind { kind: "assert_status", fields: &[("status", "the HTTP status the last response must have")], example: || json!({ "status": 200 }) },
@@ -316,7 +317,40 @@ pub fn describe(texts: &Texts) -> Value {
             ],
         },
         "nodes": nodes,
+        "load": load(),
         "emulators": emulators(),
+    })
+}
+
+/// Load on an HTTP node: the profiles, the thresholds, what a step reports.
+fn load() -> Value {
+    let example = json!({
+        "profile": { "shape": "ramp", "from": 10, "to": 200, "duration_ms": 60000 },
+        "concurrency": 64,
+        "thresholds": [{ "metric": "p95_ms", "op": "lt", "value": 300 }, { "metric": "error_rate", "op": "lt", "value": 1 }],
+    });
+    debug_assert!(serde_json::from_value::<signal_lab_engine::load::Load>(example.clone()).is_ok());
+    json!({
+        "shape": "\"load\": {profile, concurrency (1–512, default 32), thresholds: [{metric, op, value}]} on an http node",
+        "profiles": {
+            "constant": "{shape, rate, duration_ms}: rate requests/s throughout",
+            "ramp": "{shape, from, to, duration_ms}: from → to linearly",
+            "steps": "{shape, from, step, every_ms, steps}: from, from + step, … each for every_ms",
+            "spike": "{shape, base, peak, at_ms, spike_ms, duration_ms}: base, peak from at_ms for spike_ms, base again",
+            "poisson": "{shape, rate, duration_ms}: arrivals at random, rate on average, from the run's seed",
+        },
+        "metrics": ["p50_ms", "p90_ms", "p95_ms", "p99_ms", "mean_ms", "max_ms", "error_rate (% failed)", "rps (achieved)", "missed"],
+        "ops": ["lt", "le", "gt", "ge"],
+        "rules": [
+            "HTTP nodes only, without repeat or retry: a failed request (no answer, or not 2xx) is counted, not tried again.",
+            "Rates are 0.1–100000 requests/s (ramp, steps and spike may start or rest at 0); the whole profile runs within a run's 300 s.",
+            "Templates are read once, as the step starts; the run's cookies and Digest answers are shared by every request.",
+            "A request still waiting for a free worker 50 ms past its moment is skipped and counted as missed, never sent late.",
+            "The step fails on the first threshold that does not hold (error load.threshold, with metric, op, value, actual); without thresholds it passes and measures.",
+            "A load leaves no response for assert_status, extract or the like: judge it with thresholds.",
+            "The step's last event carries load: {planned, sent, ok, failed, missed, rps, error_rate, p50_ms…p99_ms, statuses, seconds, histogram, thresholds}; list_runs and compare_runs read them back.",
+        ],
+        "example": example,
     })
 }
 

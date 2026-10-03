@@ -264,6 +264,62 @@ export async function experimentSelection(expect: Expect) {
   expect("the template is as it was", count() === before.nodes && wires() === before.wires);
 }
 
+/**
+ * Load on the HTTP node: 20 requests a second for 1.5 s, judged by its two
+ * thresholds, its numbers in the properties; then a threshold that cannot hold
+ * fails the step and says by how much.
+ */
+export async function experimentLoad(expect: Expect, args: StepArgs) {
+  const editor = await openTemplate("exp.templateHttp");
+  // A load is measured, not checked: the status check goes, its wires bridged to End.
+  const check = await selectNode(editor, "exp.node.assert_status");
+  await click(button(check, T("exp.delete")));
+  await until("the check removed", () => editor.querySelectorAll(".experiment-node").length === 3);
+  const properties = await selectNode(editor, "exp.node.http");
+  await type(control(properties, "URL"), `http://127.0.0.1:${args.port}/e2e/load`);
+  await setChecked(checkbox(properties, T("exp.loadOn")), true);
+  expect("Load replaces Repeat and Retry", !textOf(properties).includes(T("exp.repeatOn")) && !textOf(properties).includes(T("exp.retryOn")));
+  await type(control(properties, T("exp.loadShape")), "constant");
+  await type(control(properties, T("exp.loadRate")), 20);
+  await type(control(properties, T("exp.loadDuration")), 1500);
+  await type(control(properties, T("exp.loadConcurrency")), 4);
+  const planned = T("exp.loadPlanned", { approx: "false", n: 30, s: "1.5" });
+  const chart = await until("the profile's chart", () => properties.querySelector(".experiment-load-chart figcaption"));
+  expect("the chart adds the profile up", textOf(chart).includes(planned), textOf(chart));
+  const nameless = unnamed(properties);
+  expect("the load's fields have names", nameless.length === 0, nameless.join(" | "));
+  const badge = await until("the load badge", () => editor.querySelector(".experiment-node-load"));
+  expect("the node shows its rate", textOf(badge) === "⚡20/s", textOf(badge));
+
+  const { outcome, rows } = await runAndWait(editor);
+  expect("the run under load passes its thresholds", outcome === T("exp.passed"), `${outcome} · ${rows.join(" | ")}`);
+  expect("the timeline says what the load sent", rows.some((row) => row.includes(T("exp.node.http")) && row.includes("30 requests")), rows.join(" | "));
+  const result = await until("the load's numbers", () => properties.querySelector<HTMLElement>(".experiment-load-result"));
+  const verdicts = [...result.querySelectorAll(".experiment-verdicts li")];
+  expect("both thresholds held", verdicts.length === 2 && verdicts.every((verdict) => verdict.classList.contains("held")), textOf(result));
+  expect("every request answered 200", textOf(result.querySelector(".experiment-load-statuses")) === "200 × 30", textOf(result.querySelector(".experiment-load-statuses")));
+
+  // p95 below nothing cannot hold: the step fails on it, the verdict in red.
+  await type(properties.querySelector<HTMLInputElement>(".experiment-threshold input")!, 0);
+  const failed = await runAndWait(editor);
+  const rule = T("err.load.threshold", { metric: "p95_ms", op: "<", value: "0", actual: "" }).split(", ").pop()!;
+  expect("a threshold that does not hold fails the run, saying which", failed.outcome.startsWith(T("exp.failed")) && failed.outcome.includes(rule), `${failed.outcome} · ${rule}`);
+  const broken = await until("the broken threshold", () => properties.querySelector(".experiment-verdicts li.broken"));
+  expect("…and the result shows which", textOf(broken).includes(`${T("exp.metric.p95_ms")} < 0`), textOf(broken));
+
+  // Compare: this run beside the one before it.
+  await click(button(editor, T("exp.compare")));
+  const compare = await until("the Compare dialog", () => document.querySelector<HTMLDialogElement>("dialog.experiment-compare[open]"));
+  const table = await until("the comparison", () => compare.querySelector(".experiment-compare-step table"));
+  expect("each metric before and after", [...table.querySelectorAll("tbody th")].map(textOf).includes(T("exp.metric.p95_ms")), textOf(table));
+  const threshold = compare.querySelector(".experiment-compare-step .experiment-verdicts li");
+  expect("the first threshold held before and not after", textOf(threshold).includes("✓ → ✕"), textOf(threshold));
+  const unnamedInDialog = unnamed(compare);
+  expect("the dialog's controls have names", unnamedInDialog.length === 0, unnamedInDialog.join(" | "));
+  await click(button(compare, T("exp.close")));
+  await until("the dialog to close", () => !document.querySelector("dialog.experiment-compare[open]"));
+}
+
 export async function experimentParallel(expect: Expect, args: StepArgs) {
   const editor = await openTemplate("exp.templateParallel");
   const properties = await selectNode(editor, "exp.node.http");

@@ -50,7 +50,7 @@ fn node(id: &str, x: f64, kind: Value) -> Value {
 
 fn document(nodes: Vec<Value>, edges: Vec<(&str, &str, &str)>, seed: u64) -> Experiment {
     let edges: Vec<Value> = edges.into_iter().map(|(from, port, to)| json!({ "from": from, "to": to, "port": port })).collect();
-    serde_json::from_value(json!({ "version": 8, "name": "Faults", "params": [], "profiles": [], "profile": null, "seed": seed, "nodes": nodes, "edges": edges })).unwrap()
+    serde_json::from_value(json!({ "version": 9, "name": "Faults", "params": [], "profiles": [], "profile": null, "seed": seed, "nodes": nodes, "edges": edges })).unwrap()
 }
 
 async fn run(service: &Service, doc: Experiment) -> RunResult {

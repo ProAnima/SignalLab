@@ -118,7 +118,7 @@ async fn every_tool_works_for_a_client_here() {
         let names: Vec<&str> = tools["result"]["tools"].as_array().unwrap().iter().map(|tool| tool["name"].as_str().unwrap()).collect();
         for name in [
             "describe_nodes", "list_templates", "get_template", "validate_experiment", "run_experiment", "send_osc", "send_udp", "send_http", "send_mqtt", "send_ws", "listen",
-            "list_signals", "fire_signal", "list_emulators", "start_emulator", "emulator_exchanges", "set_emulator_down", "list_jobs", "stop_job",
+            "list_signals", "fire_signal", "list_emulators", "start_emulator", "emulator_exchanges", "set_emulator_down", "list_runs", "compare_runs", "list_jobs", "stop_job",
         ] {
             assert!(names.contains(&name), "{name} in {names:?}");
         }
@@ -133,14 +133,14 @@ async fn every_tool_works_for_a_client_here() {
         assert_eq!(template["document"]["name"], "Empty experiment");
 
         // Validate, then run — a document the model wrote, with a parameter.
-        let document = json!({ "version": 8, "name": "Model's check", "params": [{ "name": "who", "value": "x" }],
+        let document = json!({ "version": 9, "name": "Model's check", "params": [{ "name": "who", "value": "x" }],
             "nodes": [{ "id": "start", "type": "start", "x": 0, "y": 0 }, { "id": "say", "type": "log", "x": 200, "y": 0, "message": "hi {{who}}" },
                       { "id": "get", "type": "http", "x": 400, "y": 0, "request": { "method": "GET", "url": format!("http://{http}/") } },
                       { "id": "ok", "type": "assert_status", "x": 600, "y": 0, "status": 200 }, { "id": "end", "type": "end", "x": 800, "y": 0 }],
             "edges": [{ "from": "start", "to": "say" }, { "from": "say", "to": "get" }, { "from": "get", "to": "ok" }, { "from": "ok", "to": "end" }] });
         let (text, data, failed) = client.call("validate_experiment", json!({ "document": document }));
         assert!(!failed && data["valid"] == true, "{text}");
-        let broken = json!({ "version": 8, "name": "Broken", "nodes": [{ "id": "start", "type": "start", "x": 0, "y": 0 }], "edges": [] });
+        let broken = json!({ "version": 9, "name": "Broken", "nodes": [{ "id": "start", "type": "start", "x": 0, "y": 0 }], "edges": [] });
         let (text, data, failed) = client.call("validate_experiment", json!({ "document": broken }));
         assert!(failed && data["error"]["code"].is_string(), "a broken document says why: {text}");
 
@@ -153,6 +153,15 @@ async fn every_tool_works_for_a_client_here() {
         assert!(text.starts_with("PASSED · Model's check") && text.contains("hi model") && text.contains("HTTP 200"), "{text}");
         let progress: Vec<&Value> = notes.iter().filter(|note| note["method"] == "notifications/progress").collect();
         assert!(progress.len() >= 5 && progress.iter().all(|note| note["params"]["progressToken"] == "run-1"), "progress while it ran: {notes:?}");
+
+        // The run read back from its report; a run compared with itself has nothing to regress.
+        let (text, runs, failed) = client.call("list_runs", json!({ "experiment": "Model's check" }));
+        let name = runs["runs"][0]["name"].as_str().unwrap_or_default().to_string();
+        assert!(!failed && name.starts_with("run-") && text.contains("Model's check · passed"), "{text}");
+        let (text, compared, failed) = client.call("compare_runs", json!({ "a": name, "b": name }));
+        assert!(!failed && compared["steps"] == json!([]) && text.contains("No load steps"), "{text}");
+        let (text, _, failed) = client.call("compare_runs", json!({ "a": "../experiment.json", "b": name }));
+        assert!(failed && text.contains("experiment.json"), "only runs' reports are read: {text}");
 
         // A run that fails is an answer, with the reason located.
         let (text, data, failed) = client.call("run_experiment", json!({ "template": "http-check", "timeout": 10 }));
@@ -232,7 +241,7 @@ async fn every_tool_works_for_a_client_here() {
         assert!(failed);
 
         // A run that is cancelled stops, and nothing answers the cancelled request.
-        let slow = json!({ "version": 8, "name": "Slow", "nodes": [{ "id": "start", "type": "start", "x": 0, "y": 0 }, { "id": "wait", "type": "delay", "x": 200, "y": 0, "ms": 20000 }, { "id": "end", "type": "end", "x": 400, "y": 0 }],
+        let slow = json!({ "version": 9, "name": "Slow", "nodes": [{ "id": "start", "type": "start", "x": 0, "y": 0 }, { "id": "wait", "type": "delay", "x": 200, "y": 0, "ms": 20000 }, { "id": "end", "type": "end", "x": 400, "y": 0 }],
             "edges": [{ "from": "start", "to": "wait" }, { "from": "wait", "to": "end" }] });
         let cancelled = client.start_request("tools/call", json!({ "name": "run_experiment", "arguments": { "document": slow } }));
         std::thread::sleep(Duration::from_millis(500));

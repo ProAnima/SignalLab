@@ -99,6 +99,11 @@ export function canRepeat(node: ExperimentNode): boolean {
   return ["http", "tcp", "mqtt", "osc", "udp", "ws_send"].includes(node.type);
 }
 
+/** Sends on a load profile (the engine's `NodeKind::loads`): an HTTP request. */
+export function canLoad(node: ExperimentNode): boolean {
+  return node.type === "http";
+}
+
 /** Sends or listens, so a second attempt may succeed (the engine's `NodeKind::retries`). */
 export function canRetry(node: ExperimentNode): boolean {
   return ["http", "tcp", "mqtt", "osc", "udp", "ws_connect", "ws_send", "wait_osc", "wait_udp", "wait_mqtt", "wait_http", "wait_ws"].includes(node.type);

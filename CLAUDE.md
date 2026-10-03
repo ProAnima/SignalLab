@@ -90,6 +90,9 @@ src/                      React UI
   components/ErrorMessage.tsx  where · what — why, technical detail folded
   views/*.tsx             one screen per module; ExperimentView composes the node editor
   styles.css              the stylesheet: styles/*.css by area, @imported in cascade order
+  lib/load.ts             load profiles: what they add up to, the chart's points, the badge (pure)
+  components/ExperimentLoad.tsx  an HTTP node's Load: the profile, its chart, thresholds; the result
+  components/ExperimentCompare.tsx  two runs side by side, from the timeline's Compare
   lib/emulators.ts        new emulators, presets, Mock this, the starter set's texts (pure)
   lib/emulatorStore.tsx   the emulator library, which ones run, what they received
   components/EmulatorEditor.tsx  an emulator's rules: the Emulators screen and the node's dialog
@@ -113,7 +116,9 @@ engine/src/               signal-lab-engine — no Tauri, no window
   discovery.rs            the discovery listener: peers, multicast joins, auto-reply
   inspect.rs              the capture bus: bounded ring + batch pump to the UI
   http.rs                 request runner + concurrent burst (closed, or at a rate; missed counted)
-  latency.rs              LatencyHistogram: p50…p99 within 0.5 %, atomics, constant memory
+  latency.rs              LatencyHistogram: p50…p99 within 0.5 %, atomics, constant memory, coarse bins
+  load.rs                 Load on an HTTP node: profiles checked, the schedule, metrics, thresholds, the run
+  experiment_compare.rs   run history from the reports, two runs compared (experiment_runs/_compare)
   netsim.rs               UDP impairment relay: profiles, seeded per-leg decisions, live changes, phases
   netsim_run.rs           a run's relays (Impairment nodes), opened before the first step
   storm.rs                UDP/TCP load generator
@@ -157,6 +162,8 @@ engine/src/               signal-lab-engine — no Tauri, no window
   feedback.rs             feedback_send: the form to the studio's hub, its limits checked first
   hub.rs                  where the hub is (SIGNALLAB_HUB_URL) and Signal Lab's project on it (docs/hub.md)
 engine/tests/burst.rs     the HTTP burst against loopback: closed, paced, missed, stopped
+engine/tests/load.rs      a node under load: a ramp failing p95 for the right reason, progress, statuses and
+                          causes, missed, Stop, validation, two runs compared
 engine/tests/websocket.rs the screen's job, a run's connect/send/wait/close, server closes, failed upgrades
 engine/tests/http_auth.rs Basic/Bearer/Digest checked by the server's own hashing, a burst's one challenge, jars
 engine/tests/ping_reply.rs  an experiment run end to end over loopback (repeat_loop.rs: Repeat and Loop;
@@ -423,6 +430,18 @@ src/components/FirewallBanner.tsx  the desktop app's firewall notice, with Allow
   branch. An OSC/UDP node with `reply` sends from the listener on `reply.bind`
   (`Listener::send_to`, port 0 allowed) and waits there in the same step; its
   variable is written on Next. Both are document version 4.
+- **Load is a node setting, measured, not checked.** `Node::load` (version 9)
+  applies to HTTP nodes only, never with Repeat or Retry (`node.load_alone`);
+  `load::check` bounds it (rates as the burst's, the whole profile within
+  `RUN_LIMIT`). `load::run` renders the request once, sends it on a `Schedule` —
+  each moment computed from the profile, so a late wake-up never shifts the rest;
+  Poisson gaps from the run's seed — `concurrency` at a time with the run's
+  cookie jar and one Digest memory, and skips what a busy worker could not send
+  within `MISS_AFTER` (counted as missed). Its `LoadMetrics`, thresholds read,
+  ride on the step's last event (`RunEvent::load`, passed or failed) and so in the
+  report (version 5); progress is a `load` step at most once a second. A load
+  leaves no response, so a check after it is `graph.needs_http`. A run is named
+  by its report's file name (`experiment_compare::check_name`), never a path.
 - **Repeat is a node setting; Loop is the one cycle.** `Node::repeat` applies
   to actions: the runner sends again (`experiment_flow::repeated`), rendering
   templates per send, retrying each, reporting progress at most once a second;

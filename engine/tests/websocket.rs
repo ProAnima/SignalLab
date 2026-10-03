@@ -129,7 +129,7 @@ fn node(id: &str, x: f64, kind: Value) -> Value {
 
 fn document(nodes: Vec<Value>, edges: Vec<(&str, &str, &str)>) -> Value {
     let edges: Vec<Value> = edges.into_iter().map(|(from, port, to)| json!({ "from": from, "to": to, "port": port })).collect();
-    json!({ "version": 8, "name": "WebSocket", "params": [{ "name": "who", "value": "lab" }], "profiles": [], "profile": null, "seed": 3, "nodes": nodes, "edges": edges })
+    json!({ "version": 9, "name": "WebSocket", "params": [{ "name": "who", "value": "lab" }], "profiles": [], "profile": null, "seed": 3, "nodes": nodes, "edges": edges })
 }
 
 async fn run(service: &Service, doc: &Value) -> RunResult {

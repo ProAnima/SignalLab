@@ -2,10 +2,11 @@ import type { ExperimentNode, ExperimentStep } from "../lib/api";
 import { NODE_CATALOG } from "../lib/experimentCatalog";
 import { validPortsFor as outputPorts, NODE_HEIGHT as NODE_H, NODE_WIDTH as NODE_W, type Anchor } from "../lib/experimentGraph";
 import { nodeLabel, nodeSummary, portLabel } from "../lib/experimentText";
+import { durationMs, loadBadge, loadNotation, planned, short } from "../lib/load";
 import type { CanvasControls } from "../lib/useExperimentCanvas";
 import { useT } from "../lib/i18n";
 
-const STATE_GLYPH: Record<string, string> = { running: "●", passed: "✓", retry: "↻", repeating: "⟳" };
+const STATE_GLYPH: Record<string, string> = { running: "●", passed: "✓", retry: "↻", repeating: "⟳", load: "⚡" };
 
 /**
  * One node on the canvas: its body (select — with Shift or Ctrl, one more —,
@@ -44,6 +45,8 @@ export function ExperimentCanvasNode({ node, selected, state, detached, invalid,
         <span className="experiment-node-type">{label}</span>
         {node.repeat && (() => { const tip = node.repeat.until === "count" ? t("exp.repeatBadgeCount", { count: node.repeat.count }) : t("exp.repeatBadgeFor", { s: node.repeat.duration_ms / 1000 });
           return <span className="experiment-node-repeat" data-tip={tip} aria-label={tip}>{node.repeat.until === "count" ? `×${node.repeat.count}` : `${node.repeat.duration_ms / 1000}s`}</span>; })()}
+        {node.load && (() => { const tip = t("exp.loadBadge", { profile: loadNotation(node.load.profile), n: planned(node.load.profile), s: short(durationMs(node.load.profile) / 1000) });
+          return <span className="experiment-node-load" data-tip={tip} aria-label={tip}>⚡{loadBadge(node.load.profile)}</span>; })()}
         {node.retry && <span className="experiment-node-retry" data-tip={t("exp.retryBadge", { attempts: node.retry.attempts })} aria-label={t("exp.retryBadge", { attempts: node.retry.attempts })}>↻{node.retry.attempts}</span>}
         {state !== undefined && <span className={`node-status-badge ${state}`} aria-label={t(`exp.${state}`)}>
           {STATE_GLYPH[state] ?? "✕"}

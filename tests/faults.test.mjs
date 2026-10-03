@@ -40,7 +40,7 @@ test("Route through impairment: a relay in front of the node, the node pointed a
   const start = createNode("start", 0, 100);
   const udp = { ...createNode("udp", 300, 100), target: "127.0.0.1:9000" };
   const end = createNode("end", 600, 100);
-  const doc = { version: 8, name: "x", params: [], profiles: [], profile: null, seed: null, nodes: [start, udp, end], edges: [{ from: start.id, to: udp.id, port: "next" }, { from: udp.id, to: end.id, port: "next" }] };
+  const doc = { version: 9, name: "x", params: [], profiles: [], profile: null, seed: null, nodes: [start, udp, end], edges: [{ from: start.id, to: udp.id, port: "next" }, { from: udp.id, to: end.id, port: "next" }] };
   const routed = routeThroughImpairment(doc, udp.id);
   assert.ok(routed);
   const { doc: next, relay } = routed;

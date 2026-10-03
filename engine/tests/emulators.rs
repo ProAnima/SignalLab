@@ -49,7 +49,7 @@ fn node(id: &str, x: f64, kind: Value) -> Value {
 
 fn document(name: &str, nodes: Vec<Value>, edges: Vec<(&str, &str, &str)>) -> Experiment {
     let edges: Vec<Value> = edges.into_iter().map(|(from, port, to)| json!({ "from": from, "to": to, "port": port })).collect();
-    serde_json::from_value(json!({ "version": 8, "name": name, "params": [], "profiles": [], "profile": null, "seed": 11, "nodes": nodes, "edges": edges })).unwrap()
+    serde_json::from_value(json!({ "version": 9, "name": name, "params": [], "profiles": [], "profile": null, "seed": 11, "nodes": nodes, "edges": edges })).unwrap()
 }
 
 async fn run(service: &Service, doc: Experiment) -> RunResult {
@@ -106,7 +106,7 @@ async fn a_flaky_dependency_is_retried_and_the_run_proves_what_reached_it() {
     tokio::time::sleep(Duration::from_millis(50)).await;
     assert!(reqwest::get(format!("http://127.0.0.1:{port}/orders/1")).await.is_err(), "the port closed with the run");
     let report: Value = serde_json::from_str(&std::fs::read_to_string(result.report_path.as_ref().unwrap()).unwrap()).unwrap();
-    assert_eq!((report["version"].clone(), report["emulators"][0]["counts"]["hits"].clone()), (json!(4), json!([3])));
+    assert_eq!((report["version"].clone(), report["emulators"][0]["counts"]["hits"].clone()), (json!(5), json!([3])));
 }
 
 /// The bundled template does what it says: answered on the third attempt.

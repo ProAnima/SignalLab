@@ -1,7 +1,7 @@
 import { useMemo, type RefObject } from "react";
-import type { Experiment, ExperimentNode } from "../lib/api";
+import type { Experiment, ExperimentNode, LoadMetrics } from "../lib/api";
 import { NODE_CATALOG } from "../lib/experimentCatalog";
-import { canRepeat, canRetry, GENERATORS, replyFields, secretNames, variablesBefore } from "../lib/experimentData";
+import { canLoad, canRepeat, canRetry, GENERATORS, replyFields, secretNames, variablesBefore } from "../lib/experimentData";
 import { disconnect, portOf, routeThroughImpairment } from "../lib/experimentGraph";
 import { nodeHelp, nodeLabel, portLabel, wireName } from "../lib/experimentText";
 import type { Wire } from "../lib/experimentWires";
@@ -10,6 +10,7 @@ import { canSendNow, type NodeTest, type Preview } from "../lib/useExperimentNod
 import { editable } from "../lib/useExperimentShortcuts";
 import { useT } from "../lib/i18n";
 import { ErrorMessage } from "./ErrorMessage";
+import { LoadFields, LoadResult } from "./ExperimentLoad";
 import { ExperimentNodeFields } from "./ExperimentNodeFields";
 import { RepeatFields, RetryFields } from "./ExperimentNodeOptions";
 import { ExperimentNodePreview, ExperimentNodeTest } from "./ExperimentNodeTest";
@@ -20,7 +21,7 @@ import { TemplateSuggestions, type TemplateSuggestion } from "./TemplateField";
  * its wires and actions — or, with several selected, what can be done to them
  * together — or the selected wire.
  */
-export function ExperimentProperties({ panelRef, doc, node, count, wire, busy, problemNodeId, validationError, storedSecrets, preview, test, sending,
+export function ExperimentProperties({ panelRef, doc, node, count, wire, busy, problemNodeId, validationError, storedSecrets, preview, test, sending, measured,
   onSend, onExtract, onShowEmulator, onPatch, onEdit, onAddNext, onCopy, onDuplicate, onDelete, onRemoveWire, onLeave }: {
   /** The pane, where a new node's first field is found and focused. */
   panelRef: RefObject<HTMLElement | null>;
@@ -39,6 +40,8 @@ export function ExperimentProperties({ panelRef, doc, node, count, wire, busy, p
   preview: Preview | null;
   test: NodeTest | undefined;
   sending: string | null;
+  /** What the last run's load on this node measured. */
+  measured: LoadMetrics | undefined;
   onSend: (node: ExperimentNode) => void;
   onExtract: (node: ExperimentNode, path: (string | number)[], value: unknown) => void;
   /** Opens an emulator a Send now response was mocked into. */
@@ -92,9 +95,12 @@ export function ExperimentProperties({ panelRef, doc, node, count, wire, busy, p
       <fieldset disabled={busy}>
       <TemplateSuggestions.Provider value={suggestions}>
         <ExperimentNodeFields node={node} doc={doc} patch={(change) => onPatch(node.id, change)} />
-        {canRepeat(node) && <RepeatFields repeat={node.repeat} patch={(change) => onPatch(node.id, change)} />}
-        {canRetry(node) && <RetryFields retry={node.retry} patch={(change) => onPatch(node.id, change)} />}
+        {/* Load replaces Repeat and Retry: a failed request is counted, not tried again. */}
+        {canLoad(node) && <LoadFields load={node.load} patch={(change) => onPatch(node.id, change)} />}
+        {canRepeat(node) && !node.load && <RepeatFields repeat={node.repeat} patch={(change) => onPatch(node.id, change)} />}
+        {canRetry(node) && !node.load && <RetryFields retry={node.retry} patch={(change) => onPatch(node.id, change)} />}
       </TemplateSuggestions.Provider>
+      {measured && <LoadResult metrics={measured} />}
       {preview?.nodeId === node.id && <ExperimentNodePreview node={node} preview={preview} />}
       {canSendNow(node) && <ExperimentNodeTest node={node} test={test} sending={sending} onSend={onSend} onExtract={onExtract} onShowEmulator={onShowEmulator} />}
       {doc.edges.filter((edge) => edge.from === node.id).map((edge) => <div className="experiment-connection" key={`${portOf(edge)}-${edge.to}`}><span>{portLabel(portOf(edge), t)} → {label(doc.nodes.find((item) => item.id === edge.to)?.type ?? "end")}</span><button className="ghost sm" data-tip={t("exp.disconnect")} aria-label={t("exp.disconnect")} onClick={() => onEdit((current) => disconnect(current, edge.from, portOf(edge), edge.to))}>×</button></div>)}

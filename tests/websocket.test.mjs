@@ -5,7 +5,7 @@ import { canRepeat, canRetry, replyFields, variablesBefore, writtenVariable } fr
 import { isWait, previewLines } from "../src/lib/experimentText.ts";
 import { asJson, protocolsOf, protocolsText } from "../src/lib/websocket.ts";
 
-const doc = (nodes, edges = []) => ({ version: 8, name: "x", params: [], profiles: [], profile: null, seed: null, nodes, edges });
+const doc = (nodes, edges = []) => ({ version: 9, name: "x", params: [], profiles: [], profile: null, seed: null, nodes, edges });
 
 test("a WebSocket send, wait or close names the document's connect when added", () => {
   const connect = createNode("ws_connect", 0, 0);

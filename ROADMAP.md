@@ -35,11 +35,12 @@ This decides what we build and what we leave to others:
 - **Data and replies** (milestones 3 and 4.1): parameters, profiles, secrets, `{{templates}}`, Extract / Check value / Branch on value, Wait for OSC and Wait for UDP with Matched and Timeout outputs.
 - **Server mode** (delivery D1–D4): the same engine and interface in a browser, and a Docker image.
 - **Emulators** (milestone 5): HTTP APIs, OSC/UDP/TCP devices and an MQTT broker with templated replies, sequences, faults and outages — on their own screen, as an experiment node with *Wait for HTTP request*, from `signallab emulate` and over MCP.
+- **Load** (milestone 7): an HTTP node under a constant, ramp, steps, spike or Poisson profile, measured (percentiles, errors, rate, statuses, per second, a histogram) and judged by thresholds; run history and **Compare** of two runs, in the editor, the command line and MCP.
 
 ### Known gaps in what exists
 
 - The impairment relay is UDP only; impairing a TCP stream (latency, throttling, reset, half-open) is still to come.
-- The HTTP burst runs at one fixed rate or as fast as its workers go; ramps, steps and spikes, thresholds and an HTTP node under load are milestone 7.
+- Load applies to HTTP nodes; OSC, UDP and MQTT under load are still to come. A soak longer than a run's five minutes needs the run limit raised — a decision of its own.
 
 ## Delivery order
 
@@ -180,7 +181,7 @@ Detailed design: [docs/milestone-4-reactive.md](docs/milestone-4-reactive.md). *
 
 **Goal.** Measure, not only pass/fail.
 
-**Status:** started — the HTTP screen's burst runs at a fixed rate (open model) or as fast as its workers go, counts the requests it missed, and reports p50/p90/p95/p99 (`engine/tests/burst.rs`). Still open: profiles, the *Load* setting on a node, thresholds, run history and Compare.
+**Status:** delivered for HTTP — the *Load* setting on an HTTP node (document version 9) with constant, ramp, steps, spike and Poisson profiles, thresholds that fail the step for the right reason, metrics on the step's event and in the report (version 5), and `experiment_runs` / `experiment_compare` behind the timeline's **Compare**, `list_runs` / `compare_runs` in MCP (`engine/tests/load.rs`, the tour's `experimentLoad`). The design and what changed on the way: [docs/milestone-7-load.md](docs/milestone-7-load.md). Later: OSC, UDP and MQTT under load; a soak beyond the run limit.
 
 **What the user gets**
 
@@ -278,9 +279,11 @@ Detailed design: [docs/delivery.md](docs/delivery.md).
 - **Performance.** All high-rate events go through the rate gate and report what was not drawn.
 - **Tests.** Local protocol fixtures in `cargo test`; editor transformations in `npm test`; every new node kind round-trips through JSON and appears in both locales.
 
-## Next concrete slice (milestone 7 — load profiles and thresholds)
+## Next concrete slice (TCP impairment, then milestone 8)
 
-Delivered since milestone 6 (faults as nodes and phases, seeded and counted per phase): the HTTP burst at a fixed rate with p50/p90/p95/p99 (the start of milestone 7), WebSocket (milestone 10's first transport: a screen, connect/send/wait/close nodes, `send ws`), Basic/Bearer/Digest authentication and cookie jars for HTTP, and a parameter matrix for `signallab run`; document version 8. Milestone 5 before it delivered emulators (HTTP, OSC, UDP, TCP, an MQTT broker), with outages and the malformed fault, the *Emulator* node and *Wait for HTTP request* (version 6). Every screen, the WebSocket screen included, is walked end to end — desktop app and server, Windows and Linux, and the published image (`npm run e2e`). Next: the rest of milestone 7 — the *Load* setting on an HTTP node with ramp, step and spike profiles, thresholds as checks (`p95 < 300 ms`), and Compare of two runs' reports.
+Milestone 7 is delivered for HTTP: the *Load* setting with five profiles, thresholds as checks, run history and Compare (document version 9, run reports version 5). Next: impairing a TCP stream (latency, throttling, reset, half-open) beside the UDP relay, then milestone 8 — record, replay, mutate.
+
+Delivered before it, since milestone 6 (faults as nodes and phases, seeded and counted per phase): the HTTP burst at a fixed rate with p50/p90/p95/p99 (the start of milestone 7), WebSocket (milestone 10's first transport: a screen, connect/send/wait/close nodes, `send ws`), Basic/Bearer/Digest authentication and cookie jars for HTTP, and a parameter matrix for `signallab run`; document version 8. Milestone 5 before it delivered emulators (HTTP, OSC, UDP, TCP, an MQTT broker), with outages and the malformed fault, the *Emulator* node and *Wait for HTTP request* (version 6). Every screen, the WebSocket screen included, is walked end to end — desktop app and server, Windows and Linux, and the published image (`npm run e2e`). Next: the rest of milestone 7 — the *Load* setting on an HTTP node with ramp, step and spike profiles, thresholds as checks (`p95 < 300 ms`), and Compare of two runs' reports.
 
 ### PR 4.2 as planned
 

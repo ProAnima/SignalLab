@@ -29,7 +29,8 @@ fn node(id: &str, x: i32, y: i32, body: Value) -> Value {
 
 /// Start → an emulator for the run → log → delay → HTTP and its checks →
 /// extract → check → branch on the value, then on the status → fork: OSC with
-/// its reply then a wait, UDP with its reply then a wait → join → TCP → faults →
+/// its reply then a wait, UDP with its reply then a wait → join → TCP → the API
+/// under a short load, judged by thresholds → faults →
 /// a WebSocket: connect, its greeting, a message and its echo, close → MQTT →
 /// wait for it → a request to the emulator and a wait that sees it → a loop → End.
 fn everything(gear: &Gear, mock_port: u16, relay_port: u16) -> Value {
@@ -65,6 +66,9 @@ fn everything(gear: &Gear, mock_port: u16, relay_port: u16) -> Value {
         node("heard", 2800, 300, json!({ "type": "wait_udp", "bind": format!("127.0.0.1:{}", gear.udp_notify), "mode": "contains", "pattern": "hello", "timeout_ms": 3000 })),
         node("both", 3000, 200, json!({ "type": "join" })),
         node("line", 3200, 200, json!({ "type": "tcp", "host": "127.0.0.1", "port": tcp_port, "payload": "line {{who}}\n", "timeout_ms": 3000 })),
+        node("pressure", 3225, 400, json!({ "type": "http", "request": { "method": "GET", "url": "{{api}}/status", "headers": [], "timeout_ms": 3000 },
+            "load": { "profile": { "shape": "constant", "rate": 20, "duration_ms": 500 }, "concurrency": 4,
+                      "thresholds": [{ "metric": "error_rate", "op": "lt", "value": 1 }, { "metric": "p95_ms", "op": "lt", "value": 2000 }] } })),
         node("rougher", 3250, 300, json!({ "type": "impairment_change", "relay": "relay", "profile": { "name": "4g", "latency_ms": 5, "jitter_ms": 2 } })),
         node("pull", 3300, 300, json!({ "type": "emulator_state", "emulator": "mock", "down": true, "fault": "unavailable" })),
         node("plug", 3350, 300, json!({ "type": "emulator_state", "emulator": "mock", "down": false })),
@@ -91,13 +95,13 @@ fn everything(gear: &Gear, mock_port: u16, relay_port: u16) -> Value {
         wire("code", "split", "yes"), wire("code", "odd_status", "no"), wire("odd_status", "end", "next"),
         wire("split", "ping", "branch1"), wire("ping", "told", "next"), wire("told", "both", "matched"),
         wire("split", "hi", "branch2"), wire("hi", "heard", "next"), wire("heard", "both", "matched"),
-        wire("both", "line", "next"), wire("line", "rougher", "next"), wire("rougher", "pull", "next"), wire("pull", "plug", "next"), wire("plug", "socket", "next"),
+        wire("both", "line", "next"), wire("line", "pressure", "next"), wire("pressure", "rougher", "next"), wire("rougher", "pull", "next"), wire("pull", "plug", "next"), wire("plug", "socket", "next"),
         wire("socket", "greeted", "next"), wire("greeted", "say", "matched"), wire("say", "said", "next"), wire("said", "bye", "matched"), wire("bye", "publish", "next"), wire("publish", "echoed", "next"), wire("echoed", "hook", "matched"),
         wire("hook", "hooked", "next"), wire("hooked", "again", "matched"),
         wire("again", "beat", "body"), wire("beat", "again", "next"), wire("again", "end", "done"),
     ];
     json!({
-        "version": 8,
+        "version": 9,
         "name": "Every node",
         "params": [{ "name": "who", "value": "world" }, { "name": "api", "value": format!("http://{}", gear.http) }],
         "nodes": nodes,
@@ -175,6 +179,10 @@ async fn every_node_passes_here_and_on_a_server() {
     assert!(result["impairments"][0]["counts"]["forwarded"].as_u64().unwrap() >= 2, "the datagram and its answer went through it");
     let hook = result["steps"].as_array().unwrap().iter().find(|step| step["node_id"] == "hook" && step["state"] == "passed").unwrap();
     assert!(hook["detail"].as_str().unwrap().starts_with("HTTP 202"), "its route answered: {hook}");
+    let pressure = result["steps"].as_array().unwrap().iter().find(|step| step["node_id"] == "pressure" && step["state"] == "passed").unwrap();
+    assert_eq!((pressure["load"]["sent"].as_u64(), pressure["load"]["failed"].as_u64()), (Some(10), Some(0)), "20/s for half a second: {pressure}");
+    assert!(pressure["load"]["thresholds"].as_array().unwrap().iter().all(|verdict| verdict["held"] == true), "{pressure}");
+    assert!(xml.contains("✓ "), "the JUnit report says how the thresholds went: {xml}");
 
     let seen = &gear.seen;
     let before = (seen.http.load(Ordering::SeqCst), seen.osc.load(Ordering::SeqCst), seen.udp.load(Ordering::SeqCst), seen.tcp_bytes.load(Ordering::SeqCst));

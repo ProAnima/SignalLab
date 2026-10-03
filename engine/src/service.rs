@@ -22,6 +22,7 @@ use crate::emulator_state::RECENT;
 use crate::emulator_files::{self, EmulatorLibrary};
 use crate::error::EngineError;
 use crate::experiment::{Experiment, Node};
+use crate::experiment_compare;
 use crate::experiment_data;
 use crate::experiment_files;
 use crate::experiment_run::{self, RunHandle, RunOptions};
@@ -226,6 +227,15 @@ impl Service {
             "experiment_save" => {
                 let a = args!(command, value, { document: Experiment });
                 reply(experiment_files::save(&a.document)?)
+            }
+            // Runs read back from their reports, and two of them side by side.
+            "experiment_runs" => {
+                let a = args!(command, value, { name: Option<String>, limit: Option<usize> });
+                reply(experiment_compare::runs(a.name.as_deref(), a.limit.unwrap_or(50))?)
+            }
+            "experiment_compare" => {
+                let a = args!(command, value, { a: String, b: String });
+                reply(experiment_compare::compare_runs(&a.a, &a.b)?)
             }
             "experiment_parse" => {
                 let a = args!(command, value, { text: String });

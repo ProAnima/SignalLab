@@ -342,6 +342,7 @@ function plan(ports, fixtures, mode, dataDir, { feedbackHere }) {
     { name: "experimentOsc", args: { device: ports.device, pong: ports.pong }, before: mark, after: (expect) => expect("the device was pinged", counts.pings - at.pings >= 1) },
     { name: "experimentRepeat", args: { device: ports.device, pong: ports.pong }, before: mark, after: (expect) => expect("the device got three pings", counts.pings - at.pings === 3, `${counts.pings - at.pings} pings`) },
     { name: "experimentLoop", args: { device: ports.device }, before: mark, after: (expect) => expect("the device was polled three times", counts.statusPolls - at.polls === 3, `${counts.statusPolls - at.polls} polls`) },
+    { name: "experimentLoad", args: { port: ports.http }, before: mark, after: (expect) => expect("the API got both loads' 30 requests", counts.http - at.http === 60, `${counts.http - at.http} requests`) },
     { name: "experimentEmulator", args: { port: ports.emulatorRun } },
     { name: "experimentFaults" },
     { name: "experimentAuth", args: { port: ports.http }, before: mark, after: (expect) => expect("the run's Digest request was answered and checked", counts.digestAnswered >= 2, `${counts.digestAnswered} answered`) },

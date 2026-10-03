@@ -11,7 +11,7 @@ use serde::Serialize;
 use super::error::{EngineError, EngineResult, Field};
 use super::experiment::{Edge, Experiment, NodeKind, MAX_NODES, PORTS, VERSION};
 use super::experiment_data as data;
-use super::experiment_fields::{check_node, check_repeat, check_retry};
+use super::experiment_fields::{check_load, check_node, check_repeat, check_retry};
 
 /// Structural checks for a draft. Incomplete graphs must remain saveable while
 /// the editor is open; execution uses the stricter `validate_with`.
@@ -226,6 +226,9 @@ pub fn validate_with(doc: &Experiment, params: &BTreeMap<String, String>) -> Eng
         if let Some(repeat) = &node.repeat {
             check_repeat(&node.kind, repeat).map_err(|error| error.at(&node.id))?;
         }
+        if let Some(load) = &node.load {
+            check_load(node, load).map_err(|error| error.at(&node.id))?;
+        }
     }
     crate::emulator_run::check_run_binds(&doc.nodes)?;
     crate::netsim_run::check_run_binds(&doc.nodes, params)?;
@@ -312,7 +315,8 @@ pub fn validate_with(doc: &Experiment, params: &BTreeMap<String, String>) -> Eng
         if node.kind.reads_response() && !has_http {
             return Err(EngineError::new("graph.needs_http").at(id));
         }
-        let has_http = has_http || matches!(node.kind, NodeKind::Http { .. });
+        // A load leaves no response of its own to check: it is measured instead.
+        let has_http = has_http || (matches!(node.kind, NodeKind::Http { .. }) && node.load.is_none());
         let entering = matches!(node.kind, NodeKind::Loop { .. }) && !looped;
         if let Some(edges) = outgoing.get(id) {
             for edge in edges.iter().filter(|edge| !entering || edge.port == "body") {
@@ -406,7 +410,7 @@ mod tests {
         doc.edges.pop();
         assert_eq!(problem(validate(&doc)), ("graph.outputs_required".into(), Some("check".into()), None));
         let mut doc = starter();
-        doc.nodes.push(Node { id: "orphan".into(), x: 0.0, y: 0.0, retry: None, repeat: None, kind: NodeKind::Log { message: "x".into() } });
+        doc.nodes.push(Node { id: "orphan".into(), x: 0.0, y: 0.0, retry: None, repeat: None, load: None, kind: NodeKind::Log { message: "x".into() } });
         doc.edges.push(Edge { from: "orphan".into(), to: "end".into(), port: "next".into() });
         assert_eq!(problem(validate(&doc)), ("graph.unreachable".into(), Some("orphan".into()), None));
     }
@@ -422,7 +426,7 @@ mod tests {
     fn branch_paths_join_and_incomplete_drafts_save() {
         let mut doc = starter();
         doc.nodes[2].kind = NodeKind::BranchStatus { status: 200 };
-        doc.nodes.push(Node { id: "good".into(), x: 540.0, y: 30.0, retry: None, repeat: None, kind: NodeKind::Delay { ms: 10 } });
+        doc.nodes.push(Node { id: "good".into(), x: 540.0, y: 30.0, retry: None, repeat: None, load: None, kind: NodeKind::Delay { ms: 10 } });
         doc.edges.pop();
         doc.edges.extend([
             Edge { from: "check".into(), to: "good".into(), port: "yes".into() },
@@ -486,8 +490,8 @@ mod tests {
         doc.nodes[1].id = "fork".into();
         doc.nodes[2].kind = NodeKind::Join;
         doc.nodes[2].id = "join".into();
-        doc.nodes.push(Node { id: "branch_a".into(), x: 240.0, y: 20.0, retry: None, repeat: None, kind: NodeKind::Delay { ms: 100 } });
-        doc.nodes.push(Node { id: "branch_b".into(), x: 240.0, y: 120.0, retry: None, repeat: None, kind: NodeKind::Log { message: "Parallel test".into() } });
+        doc.nodes.push(Node { id: "branch_a".into(), x: 240.0, y: 20.0, retry: None, repeat: None, load: None, kind: NodeKind::Delay { ms: 100 } });
+        doc.nodes.push(Node { id: "branch_b".into(), x: 240.0, y: 120.0, retry: None, repeat: None, load: None, kind: NodeKind::Log { message: "Parallel test".into() } });
         doc.edges = vec![
             Edge { from: "start".into(), to: "fork".into(), port: "next".into() },
             Edge { from: "fork".into(), to: "branch_a".into(), port: "branch1".into() },

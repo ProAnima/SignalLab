@@ -11,7 +11,7 @@ import { Splitter } from "./Splitter";
  * The run's pane under the canvas: how the run went (report, profile, seed),
  * one row per step, and the Inspector frames the waits matched.
  */
-export function ExperimentTimeline({ doc, events, outcome, running, reportPath, lastRun, lastSeed, busy, open, onToggle, height, initialHeight, maxHeight, onHeight, describe, onEdit, onShowNode, onShowFrame }: {
+export function ExperimentTimeline({ doc, events, outcome, running, reportPath, lastRun, lastSeed, busy, open, onToggle, height, initialHeight, maxHeight, onHeight, describe, onEdit, onShowNode, onShowFrame, onCompare }: {
   doc: Experiment;
   events: ExperimentStep[];
   outcome: Outcome;
@@ -32,6 +32,8 @@ export function ExperimentTimeline({ doc, events, outcome, running, reportPath, 
   onEdit: (update: (current: Experiment) => Experiment) => void;
   onShowNode: (node: ExperimentNode) => void;
   onShowFrame?: (seq: number) => void;
+  /** Opens the run beside an earlier one. */
+  onCompare: () => void;
 }) {
   const t = useT();
   const label = (id: string) => nodeLabel(doc.nodes.find((node) => node.id === id)?.type ?? "end", t);
@@ -47,6 +49,7 @@ export function ExperimentTimeline({ doc, events, outcome, running, reportPath, 
       {reportPath && (download
         ? <a className="experiment-report download-link" href={download} download data-tip={reportPath}>{t("exp.reportSaved")} ↓</a>
         : <span className="experiment-report" data-tip={reportPath}>{t("exp.reportSaved")}</span>)}
+      {reportPath && <button className="ghost sm experiment-compare-open" data-tip={t("exp.compareHint")} disabled={running} onClick={onCompare}>{t("exp.compare")}</button>}
       {lastRun && (lastRun.overridden || doc.profiles.length > 0) && <span className="experiment-run-profile">
         {lastRun.profile ? t("exp.runProfile", { name: lastRun.profile }) : t("exp.runDefaults")}{lastRun.overridden && ` · ${t("exp.overridden")}`}</span>}
       {doc.seed !== null

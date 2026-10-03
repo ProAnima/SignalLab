@@ -11,7 +11,7 @@ use std::fmt::Write as _;
 
 use crate::fail::Exit;
 use crate::i18n::Texts;
-use crate::run::{node_label, step_text, Ended, NotStarted, Record, Step};
+use crate::run::{node_label, step_text, verdict_lines, Ended, NotStarted, Record, Step};
 
 /// Text for an XML attribute or element: escaped, and without the control
 /// characters XML 1.0 cannot carry at all.
@@ -140,7 +140,7 @@ pub fn write(texts: &Texts, records: &[Record], not_started: &[NotStarted], remo
                     let _ = write!(body, "    <testcase name=\"{}\" classname=\"{name}\" time=\"{}\"", escape(&format!("{} ({})", label(case.id), case.id)), seconds(case.time()));
                     let error_here = ended.error.as_ref().is_some_and(|error| error.node.as_deref() == Some(case.id));
                     let step_failed = case.last_state() == "failed";
-                    let unfinished = matches!(case.last_state(), "running" | "retry" | "repeating") && ended.outcome != "passed";
+                    let unfinished = matches!(case.last_state(), "running" | "retry" | "repeating" | "load") && ended.outcome != "passed";
                     if error_here || step_failed || unfinished {
                         failed += 1;
                         let described = if error_here {
@@ -156,13 +156,21 @@ pub fn write(texts: &Texts, records: &[Record], not_started: &[NotStarted], remo
                             let said = step_text(texts, step);
                             let state = texts.plain(&format!("exp.{}", step.state));
                             let _ = writeln!(text, "{state}{}", if said.is_empty() { String::new() } else { format!(" · {said}") });
+                            for verdict in step.load.as_ref().map(|load| verdict_lines(texts, load)).unwrap_or_default() {
+                                let _ = writeln!(text, "  {verdict}");
+                            }
                         }
                         if let Some(detail) = described.as_ref().and_then(|described| described.detail.clone()) {
                             let _ = writeln!(text, "{}: {detail}", texts.plain("err.details"));
                         }
                         let _ = write!(body, ">\n      <failure message=\"{}\" type=\"{}\">{}</failure>\n    </testcase>\n", escape(&message), escape(&kind), escape(text.trim_end()));
                     } else {
-                        let lines: Vec<String> = case.steps.iter().map(|step| step_text(texts, step)).filter(|text| !text.is_empty()).collect();
+                        let lines: Vec<String> = case
+                            .steps
+                            .iter()
+                            .flat_map(|step| std::iter::once(step_text(texts, step)).chain(step.load.as_ref().map(|load| verdict_lines(texts, load)).unwrap_or_default().into_iter().map(|verdict| format!("  {verdict}"))))
+                            .filter(|text| !text.is_empty())
+                            .collect();
                         if lines.is_empty() {
                             body.push_str(" />\n");
                         } else {
@@ -256,7 +264,7 @@ mod tests {
     use signal_lab_engine::experiment_files;
 
     fn step(ts: u64, node: &str, state: &str, error: Option<EngineError>) -> Step {
-        Step { ts, node_id: node.into(), state: state.into(), detail: String::new(), message_key: None, message_params: serde_json::Value::Null, error }
+        Step { ts, node_id: node.into(), state: state.into(), detail: String::new(), message_key: None, message_params: serde_json::Value::Null, error, load: None }
     }
 
     fn document() -> signal_lab_engine::experiment::Experiment {

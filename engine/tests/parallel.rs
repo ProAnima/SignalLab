@@ -40,7 +40,7 @@ fn node(id: &str, kind: &str) -> Value {
 
 fn doc(nodes: Vec<Value>, edges: &[(&str, &str, &str)]) -> Value {
     let edges: Vec<Value> = edges.iter().map(|(from, port, to)| json!({ "from": from, "to": to, "port": port })).collect();
-    json!({ "version": 8, "name": "Parallel", "params": [], "profiles": [], "profile": null, "seed": null, "nodes": nodes, "edges": edges })
+    json!({ "version": 9, "name": "Parallel", "params": [], "profiles": [], "profile": null, "seed": null, "nodes": nodes, "edges": edges })
 }
 
 /// Run to the end; the ended event and this run's steps.

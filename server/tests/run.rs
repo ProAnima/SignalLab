@@ -72,7 +72,7 @@ fn document(name: &str, middle: Value) -> Value {
     middle["x"] = 200.into();
     middle["y"] = 80.into();
     json!({
-        "version": 8,
+        "version": 9,
         "name": name,
         "params": [{ "name": "who", "value": "world" }],
         "nodes": [

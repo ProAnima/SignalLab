@@ -305,14 +305,16 @@ async fn a_run_keeps_its_own_cookies_and_an_old_file_runs_as_it_did() {
         let handle = service.run(doc, RunOptions { limit: Some(Duration::from_secs(20)), ..Default::default() }).await.unwrap();
         handle.finished().await
     };
-    let current: Experiment = serde_json::from_value(session_check(&base, 8)).unwrap();
-    assert!(current.cookies, "a version 8 document keeps cookies unless it says not to");
+    let current: Experiment = serde_json::from_value(session_check(&base, 9)).unwrap();
+    assert!(current.cookies, "a current document keeps cookies unless it says not to");
     let result = run(current).await;
     assert_eq!(result.outcome, Outcome::Passed, "{:?} {:?}", result.error, result.steps.iter().filter(|step| step.state == "failed").collect::<Vec<_>>());
 
     // The same flow in a version 7 file: opened, it keeps no cookies, so /me is refused as before.
     let parsed = service.invoke("experiment_parse", json!({ "text": session_check(&base, 7).to_string() })).await.unwrap();
-    assert_eq!((parsed["version"].as_u64(), parsed["cookies"].as_bool()), (Some(8), Some(false)), "{parsed}");
+    assert_eq!((parsed["version"].as_u64(), parsed["cookies"].as_bool()), (Some(9), Some(false)), "{parsed}");
+    let jarred = service.invoke("experiment_parse", json!({ "text": session_check(&base, 8).to_string() })).await.unwrap();
+    assert_eq!((jarred["version"].as_u64(), jarred["cookies"].as_bool()), (Some(9), Some(true)), "a version 8 file had the jar: {jarred}");
     let legacy: Experiment = serde_json::from_value(parsed).unwrap();
     let result = run(legacy).await;
     assert_eq!(result.outcome, Outcome::Failed);
@@ -367,7 +369,7 @@ async fn basic_credentials_are_masked_as_base64_too() {
     let (base, _) = server().await;
     let sent = format!("Basic {}", base64_of(&format!("lab:{LAB_PASS}")));
     let node = |id: &str, x: u32, kind: Value| { let mut kind = kind; kind["id"] = json!(id); kind["x"] = json!(x); kind["y"] = json!(0); kind };
-    let doc = json!({ "version": 8, "name": "Echo", "params": [], "nodes": [
+    let doc = json!({ "version": 9, "name": "Echo", "params": [], "nodes": [
         node("start", 0, json!({ "type": "start" })),
         node("echo", 200, json!({ "type": "http", "request": { "method": "GET", "url": format!("{base}/echo"), "headers": [], "timeout_ms": 3000,
             "auth": { "scheme": "basic", "username": "lab", "password": "{{secret.LAB_PASS}}" } } })),

@@ -46,7 +46,7 @@ export function ExperimentCanvas({ doc, scrollRef, zoom, width, height, busy, ev
           {doc.edges.map((edge) => { const a = doc.nodes.find((node) => node.id === edge.from); const b = doc.nodes.find((node) => node.id === edge.to); if (!a || !b) return null;
             const p = portOf(edge);
             const back = isBackEdge(doc, edge);
-            const busyState = (id: string) => ["running", "retry", "repeating"].includes(nodeStates.get(id) ?? "");
+            const busyState = (id: string) => ["running", "retry", "repeating", "load"].includes(nodeStates.get(id) ?? "");
             const isRunning = busyState(a.id) || busyState(b.id);
             const isPassed = nodeStates.get(a.id) === "passed" && (nodeStates.get(b.id) === "passed" || nodeStates.get(b.id) === "running");
             const d = wirePath(a, b, p, back);

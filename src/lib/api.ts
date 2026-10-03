@@ -102,6 +102,61 @@ export interface Retry { attempts: number; delay_ms: number; backoff?: "fixed" |
  * `duration_ms`, `interval_ms` apart plus up to `jitter_ms` (from the seed).
  */
 export interface Repeat { until: "count" | "duration"; count: number; duration_ms: number; interval_ms: number; jitter_ms: number }
+/** A load's rate over time (engine/src/load.rs `LoadProfile`), in requests per second. */
+export type LoadProfile =
+  | { shape: "constant"; rate: number; duration_ms: number }
+  | { shape: "ramp"; from: number; to: number; duration_ms: number }
+  | { shape: "steps"; from: number; step: number; every_ms: number; steps: number }
+  | { shape: "spike"; base: number; peak: number; at_ms: number; spike_ms: number; duration_ms: number }
+  | { shape: "poisson"; rate: number; duration_ms: number };
+export type LoadShape = LoadProfile["shape"];
+export type LoadMetric = "p50_ms" | "p90_ms" | "p95_ms" | "p99_ms" | "mean_ms" | "max_ms" | "error_rate" | "rps" | "missed";
+export type ThresholdOp = "lt" | "le" | "gt" | "ge";
+/** The step passes only when `metric op value` holds for its load. */
+export interface Threshold { metric: LoadMetric; op: ThresholdOp; value: number }
+/** An HTTP node's load: in place of Repeat and Retry. */
+export interface Load { profile: LoadProfile; concurrency: number; thresholds: Threshold[] }
+/** A threshold read against what the load measured. */
+export interface Verdict { metric: LoadMetric; op: ThresholdOp; value: number; actual: number; held: boolean }
+/** A run read back from its report (engine/src/experiment_compare.rs). */
+export interface RunSummary {
+  /** The report's file name: what `experimentCompare` takes. */
+  name: string;
+  experiment: string; started_ms: number; ended_ms: number;
+  outcome: "passed" | "failed" | "stopped"; seed: number; profile: string | null;
+  /** Each load step's headline numbers; `held`: every threshold did. */
+  loads: { node: string; sent: number; rps: number; p95_ms: number; error_rate: number; held: boolean }[];
+}
+/** One metric before (`a`) and after (`b`); `worse`: the wrong way by 5 % or more. */
+export interface MetricChange { metric: LoadMetric; a: number; b: number; change: number; percent: number | null; worse: boolean }
+/** Two runs side by side, load step by load step. */
+export interface Comparison {
+  a: RunSummary; b: RunSummary;
+  steps: { node: string; missing_in?: "a" | "b"; metrics: MetricChange[]; sent: [number, number]; thresholds_a: Verdict[]; thresholds_b: Verdict[] }[];
+}
+/** What a load measured (engine/src/load.rs `LoadMetrics`): on the step's last event. */
+export interface LoadMetrics {
+  /** Requests the profile adds up to (Poisson: on average). */
+  planned: number;
+  /** Answered or failed; `ok` answered 2xx. */
+  sent: number; ok: number; failed: number;
+  /** Due while every worker was busy, and skipped. */
+  missed: number;
+  duration_ms: number;
+  rps: number;
+  /** Failed, in % of sent. */
+  error_rate: number;
+  min_ms: number; mean_ms: number; max_ms: number;
+  p50_ms: number; p90_ms: number; p95_ms: number; p99_ms: number;
+  received_bytes: number;
+  /** By status (`"200"`) or, without one, by cause (`"timeout"`). */
+  statuses: Record<string, number>;
+  /** Each second of the profile: sent in it, of those failed, their mean latency. */
+  seconds: { sent: number; failed: number; mean_ms: number }[];
+  /** How many took up to `upto_ms` (null: slower than the last bound). */
+  histogram: { upto_ms: number | null; count: number }[];
+  thresholds: Verdict[];
+}
 /** The answer an OSC message waits for in the same step (the matching of Wait for OSC). */
 export interface OscReply { bind: string; address: string; args: ArgRule[]; timeout_ms: number; variable: string }
 /** The answer a datagram waits for in the same step (the matching of Wait for UDP). */
@@ -113,6 +168,8 @@ export type ExperimentNode = {
   retry?: Retry;
   /** Actions only. */
   repeat?: Repeat;
+  /** HTTP only, without Repeat or Retry. */
+  load?: Load;
 } & (
   | { type: "start" | "end" | "fork" | "join" }
   | { type: "delay"; ms: number }
@@ -262,7 +319,8 @@ export interface Experiment {
 export interface ExperimentStep {
   job_id: number; ts: number; node_id: string;
   /** `retry`: an attempt failed (`error` says why) and the step runs again after a pause. */
-  state: "running" | "passed" | "failed" | "retry" | "repeating"; detail: string;
+  /** `load`: a load's progress, once a second. */
+  state: "running" | "passed" | "failed" | "retry" | "repeating" | "load"; detail: string;
   message_key?: string | null; message_params?: Record<string, string | number>;
   /** Variables this step wrote. */
   vars?: Record<string, unknown>;
@@ -270,6 +328,8 @@ export interface ExperimentStep {
   frame?: number;
   /** Why the step failed. */
   error?: EngineError;
+  /** What a load measured: on its last event, passed or failed. */
+  load?: LoadMetrics;
 }
 
 export interface ExperimentEnded {
@@ -698,6 +758,10 @@ export const api = {
   /** `overrides` and `seed` (Run with…) apply to this run only. */
   experimentStart: (document: Experiment, overrides?: Record<string, string>, seed?: number | null) =>
     invoke<JobInfo>("experiment_start", { document, overrides: overrides ?? null, seed: seed ?? null }),
+  /** The runs' reports, newest first — of the experiment `name` when given. */
+  experimentRuns: (name?: string, limit?: number) => invoke<RunSummary[]>("experiment_runs", { name: name ?? null, limit: limit ?? null }),
+  /** Two runs by report name, `a` before and `b` after. */
+  experimentCompare: (a: string, b: string) => invoke<Comparison>("experiment_compare", { a, b }),
   /** A node with its templates resolved; names without a value stay as written and are listed. */
   experimentResolve: (document: Experiment, nodeId: string, vars: Record<string, unknown>) =>
     invoke<{ node: ExperimentNode; missing: string[] }>("experiment_resolve", { document, nodeId, vars }),

@@ -91,6 +91,20 @@ impl LatencyHistogram {
         Percentiles { p50_ms, p90_ms, p95_ms, p99_ms }
     }
 
+    /// How many took up to each of `bounds_ms` (ascending) and longer than the
+    /// bound before it — each bucket by its middle, so a bound is kept to
+    /// within half a percent; the last count is everything slower.
+    pub fn coarse(&self, bounds_ms: &[f64]) -> Vec<u64> {
+        let mut counts = vec![0; bounds_ms.len() + 1];
+        for (bucket, counter) in self.buckets.iter().enumerate() {
+            let count = counter.load(Ordering::Relaxed);
+            if count > 0 {
+                counts[bounds_ms.partition_point(|bound| bound * 1000.0 < middle_of(bucket))] += count;
+            }
+        }
+        counts
+    }
+
     /// Each of `fractions` (ascending) read in one walk over the buckets.
     fn read<const N: usize>(&self, fractions: &[f64; N]) -> [f64; N] {
         let mut read = [0.0; N];
@@ -171,5 +185,15 @@ mod tests {
         edges.record(3_600_000_000);
         assert!(edges.percentile_ms(0.0) < 0.01);
         assert_eq!(edges.percentile_ms(1.0), 3_600_000.0, "an hour reads as an hour, not as the last bucket");
+    }
+
+    #[test]
+    fn a_coarse_histogram_counts_between_its_bounds() {
+        let histogram = LatencyHistogram::new();
+        for micros in [300, 900, 1500, 4_000, 12_000, 12_000, 2_000_000] {
+            histogram.record(micros);
+        }
+        assert_eq!(histogram.coarse(&[1.0, 5.0, 10.0, 100.0]), [2, 2, 0, 2, 1], "≤1, ≤5, ≤10, ≤100 ms and slower");
+        assert_eq!(LatencyHistogram::new().coarse(&[1.0]), [0, 0]);
     }
 }

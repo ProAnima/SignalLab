@@ -16,7 +16,7 @@ use crate::i18n::TEMPLATES;
 use crate::mcp::{Answer, State};
 use crate::mcp_library::{emulator_exchanges, fire, list_emulators, list_signals, set_emulator_down, start_emulator};
 use crate::mcp_send::{listen, send_http, send_mqtt, send_osc, send_udp, send_ws};
-use crate::run::{failure_text, node_label, read_input, step_text, Ended, Input};
+use crate::run::{failure_text, node_label, read_input, step_text, verdict_lines, Ended, Input};
 
 fn experiment_source() -> Value {
     json!({
@@ -82,6 +82,10 @@ pub(crate) fn tools() -> Vec<Value> {
             json!({ "job_id": { "type": "integer" }, "after": { "type": "integer", "minimum": 0 } }), &["job_id"], true),
         tool("set_emulator_down", "Take an emulator down or up", "Pull the plug on a running emulator, or put it back: down until brought up, whatever its outage says; brought up, it follows its outage schedule again. HTTP meets fault meanwhile (unavailable: 503, reset, timeout); a TCP device and an MQTT broker drop connections; OSC and UDP answer nothing. For a dependency that goes away in the middle of a test.",
             json!({ "job_id": { "type": "integer" }, "down": { "type": "boolean" }, "fault": { "type": "string", "enum": ["unavailable", "reset", "timeout"] } }), &["job_id", "down"], false),
+        tool("list_runs", "List runs", "The reports of earlier runs, newest first — of one experiment when it is named: when each ran, how it ended, its seed, and each load step's numbers (sent, rate, p95, errors, whether its thresholds held). compare_runs takes two of their names.",
+            json!({ "experiment": { "type": "string", "description": "An experiment's name" }, "limit": { "type": "integer", "minimum": 1, "maximum": 500, "description": "How many (default 50)" } }), &[], true),
+        tool("compare_runs", "Compare two runs", "Two runs by their report names (list_runs), a before and b after: each load step's latencies (p50…p99, mean, max), error rate, rate achieved and missed requests side by side, the change, whether it is a regression (5 % or more the wrong way), and how each threshold went in either run.",
+            json!({ "a": { "type": "string", "description": "The run before" }, "b": { "type": "string", "description": "The run after" } }), &["a", "b"], true),
         tool("list_jobs", "List jobs", "What is running: monitors, generators, emulators, runs.", json!({}), &[], true),
         tool("stop_job", "Stop a job", "Stop a running job by its id.", json!({ "id": { "type": "integer" } }), &["id"], false),
     ]
@@ -115,6 +119,17 @@ pub(crate) async fn call(state: &State, name: &str, arguments: &Value, request: 
         "start_emulator" => start_emulator(state, arguments).await,
         "emulator_exchanges" => emulator_exchanges(state, arguments).await,
         "set_emulator_down" => set_emulator_down(state, arguments).await,
+        "list_runs" => match state.engine.invoke("experiment_runs", json!({ "name": arguments["experiment"].as_str(), "limit": arguments["limit"].as_u64() })).await {
+            Ok(runs) => Answer::ok(runs_text(&runs), json!({ "runs": runs })),
+            Err(failure) => Answer::failed(state, &failure),
+        },
+        "compare_runs" => match (arguments["a"].as_str(), arguments["b"].as_str()) {
+            (Some(a), Some(b)) => match state.engine.invoke("experiment_compare", json!({ "a": a, "b": b })).await {
+                Ok(comparison) => Answer::ok(comparison_text(&comparison), comparison),
+                Err(failure) => Answer::failed(state, &failure),
+            },
+            _ => Answer::wrong("a and b are the run names list_runs shows"),
+        },
         "list_jobs" => match state.engine.invoke("jobs_list", json!({})).await {
             Ok(jobs) => {
                 let lines: Vec<String> = jobs.as_array().into_iter().flatten().map(|job| format!("#{} {} — {}", job["id"], job["kind"].as_str().unwrap_or_default(), job["label"].as_str().unwrap_or_default())).collect();
@@ -259,12 +274,19 @@ async fn run(state: &State, arguments: &Value, request: &str, progress: Value) -
     for step in &ended.steps {
         let label = node_label(texts, &document, &step.node_id);
         let said = step_text(texts, step);
-        steps.push(json!({ "node_id": step.node_id, "node": label, "state": step.state, "text": said, "ms": step.ts.saturating_sub(first) }));
+        let mut data = json!({ "node_id": step.node_id, "node": label, "state": step.state, "text": said, "ms": step.ts.saturating_sub(first) });
+        if let Some(load) = &step.load {
+            data["load"] = serde_json::to_value(load).unwrap_or_default();
+        }
+        steps.push(data);
         // The words keep what each step came to; "running" is in the data.
         if step.state == "running" {
             continue;
         }
         text.push_str(&format!("\n{:>7.3}s  {label} ({})  {}{}", step.ts.saturating_sub(first) as f64 / 1000.0, step.node_id, step.state, if said.is_empty() { String::new() } else { format!(" · {said}") }));
+        for verdict in step.load.as_ref().map(|load| verdict_lines(texts, load)).unwrap_or_default() {
+            text.push_str(&format!("\n           {verdict}"));
+        }
     }
     // What the emulators of the run were asked: the proof the system under test called them.
     if !ended.emulators.is_empty() {
@@ -289,6 +311,52 @@ async fn run(state: &State, arguments: &Value, request: &str, progress: Value) -
     });
     // A run that failed is an answer, not a failed call: the steps say why.
     Answer::ok(text, data)
+}
+
+/// The runs, one a line: name, experiment, outcome, when, seed, and each load step's headline.
+fn runs_text(runs: &Value) -> String {
+    let lines: Vec<String> = runs
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|run| {
+            let loads: Vec<String> = run["loads"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|load| format!("{}: {} sent, {:.1}/s, p95 {:.1} ms, {:.2} % errors, thresholds {}", load["node"].as_str().unwrap_or_default(), load["sent"], load["rps"].as_f64().unwrap_or(0.0), load["p95_ms"].as_f64().unwrap_or(0.0), load["error_rate"].as_f64().unwrap_or(0.0), if load["held"] == true { "held" } else { "NOT met" }))
+                .collect();
+            let head = format!("{} · {} · {} · started {} ms · seed {}", run["name"].as_str().unwrap_or_default(), run["experiment"].as_str().unwrap_or_default(), run["outcome"].as_str().unwrap_or_default(), run["started_ms"], run["seed"]);
+            if loads.is_empty() { head } else { format!("{head}\n  {}", loads.join("\n  ")) }
+        })
+        .collect();
+    if lines.is_empty() { "No runs.".to_string() } else { lines.join("\n") }
+}
+
+/// Two runs side by side, a load step at a time: each metric before → after, a regression marked.
+fn comparison_text(comparison: &Value) -> String {
+    let mut text = format!("{} → {}", comparison["a"]["name"].as_str().unwrap_or_default(), comparison["b"]["name"].as_str().unwrap_or_default());
+    let steps = comparison["steps"].as_array().cloned().unwrap_or_default();
+    if steps.is_empty() {
+        text.push_str("\nNo load steps in these runs.");
+    }
+    for step in steps {
+        text.push_str(&format!("\n\n{}", step["node"].as_str().unwrap_or_default()));
+        if let Some(missing) = step["missing_in"].as_str() {
+            text.push_str(&format!(" (not in run {missing})"));
+        }
+        for row in step["metrics"].as_array().into_iter().flatten() {
+            let percent = row["percent"].as_f64().map(|percent| format!(" ({percent:+.1} %)")).unwrap_or_default();
+            let worse = if row["worse"] == true { "  REGRESSION" } else { "" };
+            text.push_str(&format!("\n  {:<10} {:>10.2} → {:>10.2}{percent}{worse}", row["metric"].as_str().unwrap_or_default(), row["a"].as_f64().unwrap_or(0.0), row["b"].as_f64().unwrap_or(0.0)));
+        }
+        let (before, after) = (step["thresholds_a"].as_array().cloned().unwrap_or_default(), step["thresholds_b"].as_array().cloned().unwrap_or_default());
+        for (index, verdict) in after.iter().chain(before.iter().skip(after.len())).enumerate() {
+            let held = |list: &[Value]| list.get(index).map(|verdict| if verdict["held"] == true { "held" } else { "not met" }).unwrap_or("—");
+            text.push_str(&format!("\n  threshold {} {} {}: {} → {}", verdict["metric"].as_str().unwrap_or_default(), verdict["op"].as_str().unwrap_or_default(), verdict["value"], held(&before), held(&after)));
+        }
+    }
+    text
 }
 
 #[cfg(test)]

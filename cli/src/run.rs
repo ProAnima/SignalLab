@@ -10,6 +10,7 @@ use std::time::Duration;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use signal_lab_engine::error::EngineError;
+use signal_lab_engine::load::{shown, LoadMetrics, Metric};
 use signal_lab_engine::experiment::Experiment;
 use signal_lab_engine::experiment_files;
 use signal_lab_engine::experiment_run::{Progress, RunOptions};
@@ -46,6 +47,9 @@ pub struct Step {
     pub message_params: Value,
     #[serde(default)]
     pub error: Option<EngineError>,
+    /// What a load measured, on its last step.
+    #[serde(default)]
+    pub load: Option<LoadMetrics>,
 }
 
 /// The end of a run.
@@ -363,6 +367,9 @@ impl<'a> Printer<'a> {
                 let state = texts.plain(&format!("exp.{}", step.state));
                 let text = if said.is_empty() { state } else { format!("{state} · {said}") };
                 eprintln!("  {at:>8.3}  {label:<width$}  {text}", width = self.width);
+                for verdict in step.load.as_ref().map(|load| verdict_lines(texts, load)).unwrap_or_default() {
+                    eprintln!("  {:>8}  {:<width$}    {verdict}", "", "", width = self.width);
+                }
             }
             _ => {}
         }
@@ -403,6 +410,23 @@ pub fn node_label(texts: &Texts, document: &Experiment, id: &str) -> String {
         }
         None => id.to_string(),
     }
+}
+
+/// Each threshold of a load, held or not, as the app's result shows it: `✓ p95 < 300 ms · 212 ms`.
+pub fn verdict_lines(texts: &Texts, load: &LoadMetrics) -> Vec<String> {
+    load.thresholds
+        .iter()
+        .map(|verdict| {
+            let value = |number: f64| match verdict.metric {
+                Metric::ErrorRate => format!("{} %", shown(number)),
+                Metric::Rps => format!("{}{}", shown(number), texts.plain("unit.perSecond")),
+                Metric::Missed => shown(number),
+                _ => format!("{} {}", shown(number), texts.plain("unit.ms")),
+            };
+            let metric = texts.plain(&format!("exp.metric.{}", verdict.metric.code()));
+            format!("{} {metric} {} {} · {}", if verdict.held { "✓" } else { "✕" }, verdict.op.symbol(), value(verdict.value), value(verdict.actual))
+        })
+        .collect()
 }
 
 /// What a step did or why it failed, in words — the app's timeline row.

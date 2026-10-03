@@ -1,4 +1,5 @@
 //! HTTP client: single request inspector + concurrent load ("burst") runner.
+//! A run's load on a node (`load`) sends through the same client and exchange.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -73,7 +74,7 @@ const MAX_REDIRECTS: usize = 10;
 
 /// A client for `req`: a Digest request follows its redirects itself, so the
 /// URL that asks is the one answered.
-fn build_client(req: &HttpRequest, jar: Option<Arc<CookieJar>>) -> EngineResult<reqwest::Client> {
+pub(crate) fn build_client(req: &HttpRequest, jar: Option<Arc<CookieJar>>) -> EngineResult<reqwest::Client> {
     let mut builder = reqwest::Client::builder()
         .timeout(Duration::from_millis(req.timeout_ms.max(1)))
         .danger_accept_invalid_certs(false)
@@ -177,7 +178,7 @@ fn request_target(url: &reqwest::Url) -> String {
 }
 
 /// Send `req` with its authentication. The latency is all of it: what a client waits.
-async fn execute(client: &reqwest::Client, req: &HttpRequest, memory: &DigestMemory) -> HttpResponse {
+pub(crate) async fn execute(client: &reqwest::Client, req: &HttpRequest, memory: &DigestMemory) -> HttpResponse {
     let out = Outgoing::of(req);
     match &req.auth {
         Auth::None => exchange(client, &out, None).await,
@@ -302,7 +303,7 @@ fn redirect(response: &HttpResponse, from: &reqwest::Url) -> Option<reqwest::Url
 const FRAME_BODY_PREVIEW: usize = 2_000;
 
 /// Render one request/response exchange as a capture frame.
-fn exchange_frame(req: &HttpRequest, resp: &HttpResponse, job_id: Option<u64>) -> Frame {
+pub(crate) fn exchange_frame(req: &HttpRequest, resp: &HttpResponse, job_id: Option<u64>) -> Frame {
     let summary = match &resp.error {
         Some(e) => format!("{} {} → {e}", req.method, req.url),
         None => format!(
@@ -386,7 +387,7 @@ const MAX_CONCURRENCY: u32 = 512;
 /// skipped and counted as missed. Sending it late would bunch the load up and
 /// hide that the workers could not keep the rate; the margin is wider than a
 /// timer tick on any system, so the pacer's own wake-ups never count.
-const MISS_AFTER: Duration = Duration::from_millis(50);
+pub(crate) const MISS_AFTER: Duration = Duration::from_millis(50);
 
 #[derive(Clone, Serialize)]
 struct BurstProgress {

@@ -180,6 +180,13 @@ Inside an experiment the *Emulator* node does the same for one run, and *Wait fo
 HTTP request* checks what arrived; `signallab run` prints each emulator's counts
 after the run, and the report and `--json` carry them (`emulators`).
 
+An HTTP node under **load** prints its progress once a second and, under its last
+line, each threshold held or not (`✕ p95 < 100 ms · 152.58 ms`); a threshold that
+does not hold fails the run (exit 1) and its JUnit case (`type="load.threshold"`,
+the message the metric and the values). The step's `load` in `--json` and in the
+report has every number: planned, sent, ok, failed, missed, rps, error_rate,
+p50_ms…p99_ms, statuses, each second, the histogram and the verdicts.
+
 `signallab emulators` lists the library: id, name, protocol, address and rules
 (`--json` for the whole documents).
 
@@ -218,6 +225,7 @@ talk to gear directly:
 | `list_emulators` | the user's emulator library |
 | `start_emulator` | an emulator (a document, or a library entry by id or name, `bind` to move it) answers until `stop_job` |
 | `emulator_exchanges` | what a running emulator received and answered, rule by rule, with what each request carried (`after` for only the new ones) |
+| `list_runs`, `compare_runs` | earlier runs read back from their reports (each load step's numbers and thresholds), and two of them side by side, a regression marked |
 | `list_jobs`, `stop_job` | what is running |
 
 Results are text for the model and the same as structured data; failures are

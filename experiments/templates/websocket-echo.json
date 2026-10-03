@@ -1,5 +1,5 @@
 {
-  "version": 8,
+  "version": 9,
   "name": "WebSocket echo",
   "params": [
     { "name": "service", "value": "ws://127.0.0.1:9001/echo" }

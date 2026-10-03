@@ -5,7 +5,7 @@ import { NODE_HEIGHT, NODE_WIDTH } from "../src/lib/experimentGraph.ts";
 
 // start → connect → send → close → end, and a Change impairment beside them naming the relay.
 const fixture = () => ({
-  version: 8, name: "Clipboard fixture",
+  version: 9, name: "Clipboard fixture",
   nodes: [
     { id: "start", type: "start", x: 40, y: 40 },
     { id: "connect", type: "ws_connect", x: 260, y: 40, url: "ws://127.0.0.1:9100/", headers: [], protocols: [], timeout_ms: 3000 },

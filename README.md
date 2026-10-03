@@ -31,7 +31,7 @@ choice. See [Interface & localization](#interface--localization).
 
 | Module | What it does |
 | --- | --- |
-| **Experiments** | A node canvas for mixed HTTP, OSC, UDP, TCP and MQTT tests. Add a node after the selected one with `A`, drag a wire out of a port to create or connect the next step, send any single action node on its own, branch on a status or a value, and run work in parallel — several wires out of one output (Start included) run their nodes at the same time, and a Join waits for all of them. Focus and native fullscreen modes give the graph more room. Runs highlight each step and save a JSON report under `Documents/SignalLab/runs/`. Event listeners, loops and retries are planned in [ROADMAP.md](ROADMAP.md). |
+| **Experiments** | A node canvas for mixed HTTP, OSC, UDP, TCP and MQTT tests. Add a node after the selected one with `A`, drag a wire out of a port to create or connect the next step, send any single action node on its own, branch on a status or a value, and run work in parallel — several wires out of one output (Start included) run their nodes at the same time, and a Join waits for all of them. Focus and native fullscreen modes give the graph more room. Runs highlight each step and save a JSON report under `Documents/SignalLab/runs/`; **Compare** puts a run beside an earlier one of the same experiment, load step by load step, a regression in red. An HTTP node can run **under load** — a constant rate, a ramp, steps, a spike or random (Poisson) arrivals, many at once — measured (p50…p99, errors, the rate achieved, statuses, each second) and judged by **thresholds** (`p95 < 300 ms`, `errors < 1 %`). |
 | **Emulators** | Signal Lab as the other side: the API, device or service your system talks to. An **HTTP API** answers by routes (method, a path with `:name` segments, conditions on headers, query, body or JSON) with responses in sequence — 500, 500, then 200 for retries — in turn, or a seeded mix by weight, with delays, jitter and faults (no answer, a closed connection). An **OSC, UDP or TCP device** answers by rules: on this address, payload or line, reply that — to the sender or elsewhere, after a delay; a TCP device greets and can hang up. An **MQTT broker** routes what clients publish (QoS 0/1/2, retained messages, wills, a login if you set one) and answers by rules like a device: on `lab/+/set`, publish `lab/{{request.levels[1]}}/state`. Replies are templates read with what arrived (`{{request.params.id}}`, `{{request.args[0]}}`, `{{request.payload}}`). Any emulator can **go down now and then** (up so long, down so long: HTTP gets 503 with `Retry-After`, a closed connection or no answer; TCP and MQTT drop connections; OSC and UDP go silent), and a response can be **malformed** (JSON that stops halfway). Each exchange is counted per rule, listed live and sent to the Inspector. **Mock this** on the HTTP screen and on an experiment's *Send now* turns a response into a route; each route has **Copy the URL**. The library is `Documents/SignalLab/emulators.json`, starting with a demo API, a demo OSC, UDP and TCP device and a demo MQTT broker on loopback. |
 | **Signals** | The library: a named, editable packet you can fire again — OSC, raw UDP, an HTTP request or an MQTT publish — in nested folders that open and close, searchable, and fired from anywhere with `Ctrl+K`. *Save…* on the HTTP, OSC and MQTT screens files what you just sent into a folder and keeps the screen tied to it: *Save* (`Ctrl+S`) updates it, *Save as…* copies it, and a chip says where it lives and whether it changed. Folders are made, renamed (`F2`), dragged and removed (their contents move up); *Open in…* loads a signal back into its screen. Ships with the recipes for the gear it was written against, saves itself as hand-editable JSON in `Documents/SignalLab/signals.json`, and turns any frame the Inspector caught into a byte-exact replay. |
 | **OSC** | Send OSC 1.0 messages with typed arguments, monitor an incoming port with live decoding, and drive continuous waveforms (sine / triangle / saw / square / ramp / random) into any endpoint with an on-screen oscilloscope. |
@@ -39,7 +39,7 @@ choice. See [Interface & localization](#interface--localization).
 | **Broadcast** | Fan a payload — OSC, text, or raw hex — out to a **list** of hosts, a **broadcast** address (`SO_BROADCAST`), a **multicast** group, or every host in a **CIDR sweep**. One-shot or as a repeating beacon. The paired **discovery listener** joins multicast groups, tables every peer that answers, and can auto-reply to impersonate a device. |
 | **Inspector** | One timeline for every module, in the bottom panel next to the console so it is there on every screen: each OSC send, monitor packet, beacon, discovery probe and impaired relay frame, decoded, with a hex dump and the relay's verdict on it. A frame keeps its bytes whole, up to 256 KiB (the list shows the first KiB, *Show all* the rest; the capture holds up to 64 MiB, the oldest frames making room), so *Save as signal* replays it byte for byte. Its tab shows when capture is on and how many frames it holds; the panel can be maximised. Filter by protocol / direction / text, then export the buffer — every byte kept — to `.jsonl` or `.txt`. |
 | **WebSocket** | Connect to a `ws://` or `wss://` service with the **headers and subprotocols** it expects, send text or bytes, and read every message as it comes, newest last, JSON formatted; the close handshake and who closed, with what code. In experiments: **WebSocket connect**, **send**, **Wait for WebSocket** and **close** — a token extracted earlier can be in the URL or a header. |
-| **HTTP** | Inspect a single request/response (status, latency, headers, body) — with **Basic, Bearer or Digest** authentication (the server's 401 challenge answered, MD5 or SHA-256) and a **cookie jar** that sends back what servers set, as a browser does — then run a concurrent **load burst** — as fast as its workers go, or at a fixed **rate** where a request that finds every worker busy is counted as *missed* rather than sent late — with live RPS, **p50/p90/p95/p99** and min/avg/max latency (ramps and thresholds are planned in [ROADMAP.md](ROADMAP.md)). |
+| **HTTP** | Inspect a single request/response (status, latency, headers, body) — with **Basic, Bearer or Digest** authentication (the server's 401 challenge answered, MD5 or SHA-256) and a **cookie jar** that sends back what servers set, as a browser does — then run a concurrent **load burst** — as fast as its workers go, or at a fixed **rate** where a request that finds every worker busy is counted as *missed* rather than sent late — with live RPS, **p50/p90/p95/p99** and min/avg/max latency. Ramps, steps, spikes and thresholds are an HTTP node's *Load* in an experiment. |
 | **Impairment** | A UDP relay that sits between a client and a target and injects **latency, jitter, packet loss, bursts of loss, duplication, corruption, reordering and a bandwidth limit**, or lets nothing through — a software network conditioner. Presets (*LAN*, *Busy Wi-Fi*, *4G*, *Satellite*, *Intermittent*, *Offline*) set it in one click, and an edit applies while it runs, without dropping the port. Every decision is seeded: the same traffic meets the same fate. |
 | **Storm** | A controlled **UDP/TCP traffic generator** for stress-testing your own servers, with live pps / Mbps metering and a bounded duration. |
 | **Scanner** | Concurrency-bounded **TCP connect port scan** with best-effort service banners and progress. |
@@ -231,6 +231,8 @@ engine/src/              the Rust engine (crate signal-lab-engine, no Tauri)
   http_auth.rs           Basic, Bearer and Digest (RFC 7616): challenges read, answers made
   cookies.rs             cookie jars: the HTTP screen's and a run's, listed and cleared
   latency.rs             latency percentiles in constant memory
+  load.rs                an HTTP node under load: profiles, schedule, metrics, thresholds
+  experiment_compare.rs  run history from the reports, two runs compared
   netsim.rs              UDP impairment relay: profiles, seeded decisions, phases
   netsim_run.rs          a run's relays, opened before the first step
   storm.rs               UDP/TCP load generator
@@ -593,6 +595,23 @@ Every step that sends or listens can **retry** (attempts, the same or a doubling
 pause), and every step that sends can **repeat** — a number of times or for a time,
 every so many milliseconds with an optional seeded jitter; `{{counter}}` numbers the
 sends. An OSC message or UDP datagram can **wait for its reply** in the same step.
+
+An HTTP request can instead run **under load**: its request (templates read once, as
+the step starts) sent on a profile — *Constant*, *Ramp* (from one rate to another),
+*Steps*, *Spike* (a burst in a base rate) or *Random* (Poisson arrivals from the
+run's seed) — at 0.1 to 100 000 requests a second, at most *At once* in flight,
+within a run's five minutes. The properties draw the profile and add it up before it
+runs. A request due while every worker is busy is skipped and counted as *missed*,
+never sent late. The step measures latencies (p50, p90, p95, p99, mean, the slowest),
+the error rate, the rate achieved, answers by status (or by cause: timeout, refused),
+each second's requests and a latency histogram, and passes only when its
+**thresholds** hold (`p95 < 300 ms`, `errors < 1 %`, `rate ≥ 100/s`, `missed ≤ 0`);
+it fails on the first that does not, saying by how much. The timeline counts up
+once a second, the properties show the result, and **Compare** in the timeline sets
+the run beside the one before it (or any earlier run of the experiment): each metric
+before and after, the change, a regression — 5 % or more the wrong way — in red,
+and how each threshold went in either run. A load replaces Repeat and Retry, and
+leaves no response for the checks after it: thresholds judge it.
 
 A **Loop** runs the steps on its *Body* output, which lead back to it, again and
 again — at most a set number of times, and until an exit condition holds when it has

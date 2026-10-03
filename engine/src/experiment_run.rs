@@ -53,6 +53,9 @@ pub struct RunEvent {
     /// The Inspector frame of the message a wait matched, to open it from the timeline.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub frame: Option<u64>,
+    /// What a load measured, its thresholds read: on the step's last event, passed or failed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub load: Option<Box<crate::load::LoadMetrics>>,
 }
 
 #[derive(Clone, Serialize)]

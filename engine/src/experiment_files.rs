@@ -31,7 +31,9 @@ pub fn parse(text: &str) -> EngineResult<Experiment> {
     // Older versions lack parameters, seed or profiles; serde defaults supply them.
     if LEGACY_VERSIONS.contains(&document.version) {
         // Before version 8 no request carried cookies from an earlier one.
-        document.cookies = false;
+        if document.version < 8 {
+            document.cookies = false;
+        }
         document.version = VERSION;
     }
     // Enforce the canonical size too, so an accepted import can be saved again.
@@ -167,6 +169,7 @@ mod tests {
             }
             let document = parse(&value.to_string()).unwrap();
             assert_eq!(document.version, VERSION);
+            assert_eq!(document.cookies, *version >= 8, "version {version}: cookies off only for files from before the jar");
             assert!(document.params.is_empty() && document.seed.is_none());
             assert!(document.profiles.is_empty() && document.profile.is_none());
             let saved: serde_json::Value = serde_json::from_slice(&encode(&document).unwrap()).unwrap();

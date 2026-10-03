@@ -9,20 +9,22 @@ use serde::{Deserialize, Serialize};
 use super::emulator::{Condition, DownFault, Emulator};
 use super::experiment_data::{CompareOp, ExtractFrom, Param, Profile};
 use super::http::HttpRequest;
+use super::load::Load;
 use super::matching::{ArgRule, UdpMode};
 use super::netsim::ImpairProfile;
 use super::osc_codec::OscArg;
 use super::template::Rng;
 
-pub const VERSION: u32 = 8;
+pub const VERSION: u32 = 9;
 /// Read and migrated on load (see `experiment_files::parse`): 1 had no
 /// parameters, 2 had no profiles, 3 had no retries or expected replies, 4 had
 /// no repeats or loops, 5 had no emulators or HTTP waits, 6 no impairments
 /// or emulator switches, 7 no WebSocket nodes, HTTP authentication or a
-/// cookie jar (off for them, so they run as before); serde defaults
-/// supply what is missing. Each new version exists so that an older Signal
-/// Lab refuses a newer file instead of silently dropping those settings.
-pub const LEGACY_VERSIONS: &[u32] = &[1, 2, 3, 4, 5, 6, 7];
+/// cookie jar (off for them, so they run as before), 8 no load on an HTTP
+/// node; serde defaults supply what is missing. Each new version exists so
+/// that an older Signal Lab refuses a newer file instead of silently dropping
+/// those settings.
+pub const LEGACY_VERSIONS: &[u32] = &[1, 2, 3, 4, 5, 6, 7, 8];
 /// A run that takes longer than this is stopped.
 pub const RUN_LIMIT: Duration = Duration::from_secs(300);
 pub const MAX_NODES: usize = 64;
@@ -66,6 +68,10 @@ pub struct Node {
     /// Send more than once: actions only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repeat: Option<Repeat>,
+    /// Send on a load profile, measured and judged by thresholds: HTTP only,
+    /// in place of Repeat and Retry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub load: Option<Load>,
     #[serde(flatten)]
     pub kind: NodeKind,
 }
@@ -457,6 +463,11 @@ impl NodeKind {
     /// May send more than once (Repeat): an action, but not a connection opened again and again.
     pub fn repeats(&self) -> bool {
         self.is_action() && !matches!(self, NodeKind::WsConnect { .. })
+    }
+
+    /// May send on a load profile (Load): an HTTP request.
+    pub fn loads(&self) -> bool {
+        matches!(self, NodeKind::Http { .. })
     }
 
     pub fn is_wait(&self) -> bool {

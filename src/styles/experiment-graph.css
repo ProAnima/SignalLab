@@ -135,19 +135,21 @@
   color: var(--amber);
   background: rgba(255, 192, 105, 0.15);
 }
-.node-status-badge.repeating {
+.node-status-badge.repeating, .node-status-badge.load {
   color: var(--cyan);
   background: rgba(56, 201, 236, 0.15);
 }
 .experiment-node.retry { border-color: var(--amber); }
-.experiment-node.repeating { border-color: var(--cyan); }
+.experiment-node.repeating, .experiment-node.load { border-color: var(--cyan); }
 .experiment-events button.retry { color: var(--amber); }
-.experiment-events button.repeating { color: var(--cyan); }
+.experiment-events button.repeating, .experiment-events button.load { color: var(--cyan); }
 /* Frames the run's waits matched, each opening the Inspector on it. */
 .experiment-frame-links { display: flex; flex-wrap: wrap; gap: var(--space-1); padding: var(--space-1) var(--space-2) var(--space-2); }
 /* How many attempts a step may make: ↻3 next to its type; how often it sends: ×10 or 5s. */
 .experiment-node-retry { padding: 0 5px; border-radius: 4px; font: 600 10px var(--mono); color: var(--amber); background: rgba(255, 192, 105, 0.1); }
 .experiment-node-repeat { padding: 0 5px; border-radius: 4px; font: 600 10px var(--mono); color: var(--cyan); background: rgba(56, 201, 236, 0.1); }
+/* Its load: ⚡0→100/s 30s. */
+.experiment-node-load { flex: none; max-width: 92px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 5px; border-radius: 4px; font: 600 10px var(--mono); color: var(--cyan); background: rgba(56, 201, 236, 0.1); }
 @keyframes pulseDot {
   0% { transform: scale(0.85); opacity: 0.6; }
   100% { transform: scale(1.15); opacity: 1; }
