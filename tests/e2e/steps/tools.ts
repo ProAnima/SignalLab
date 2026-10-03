@@ -176,10 +176,10 @@ export async function netsimCheck(expect: Expect, args: StepArgs) {
 
 export async function storm(expect: Expect, args: StepArgs) {
   const shown = await go("storm");
-  const run = async (protocol: "udp" | "tcp", port: number) => {
+  const run = async (protocol: "udp" | "tcp", port: number, size: number) => {
     await type(control(shown, T("common.target")), `127.0.0.1:${port}`);
     await type(control(shown, T("common.protocol")), protocol);
-    await type(control(shown, T("st.payloadSize")), 64);
+    await type(control(shown, T("st.payloadSize")), size);
     await type(control(shown, T("st.rate")), 200);
     await type(control(shown, T("st.duration")), 1);
     await click(button(shown, T("st.launch")));
@@ -187,9 +187,10 @@ export async function storm(expect: Expect, args: StepArgs) {
     await until("the storm to end by itself", () => hasButton(shown, T("st.launch")), 8000);
     return { packets: numberIn(metric(shown, T("common.packets"))), errors: numberIn(metric(shown, T("common.errors"))) };
   };
-  const udp = await run("udp", args.sink);
+  // Datagrams larger than the Inspector's preview, which inspectWhole then reads whole.
+  const udp = await run("udp", args.sink, 3000);
   expect("a 1 s UDP storm at 200 pps sends about 200", udp.packets >= 150 && udp.packets <= 260 && udp.errors === 0, JSON.stringify(udp));
-  const tcp = await run("tcp", args.tcp);
+  const tcp = await run("tcp", args.tcp, 64);
   expect("a TCP storm sends without errors", tcp.packets > 0 && tcp.errors === 0, JSON.stringify(tcp));
   return { udp: udp.packets, tcp: tcp.packets };
 }

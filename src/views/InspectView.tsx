@@ -1,13 +1,15 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import { api, on, EV, type CaptureStats, type Frame, type InspectBatch } from "../lib/api";
+import { api, on, EV, type CaptureStats, type Frame, type FramePayload, type InspectBatch } from "../lib/api";
 import { useStore } from "../lib/store";
 import { downloadUrl, saveDownload } from "../lib/platform";
 import { useT } from "../lib/i18n";
 import { fmtBytes, fmtNum, fmtTime } from "../lib/format";
-import { signalFromFrame } from "../lib/signals";
+import { signalFromFrame, wholeFrame } from "../lib/signals";
 
 /** Frames kept in the view. The engine's ring holds more for export. */
 const VIEW_CAPACITY = 4000;
+/** Bytes a frame's hex preview shows; the engine keeps the rest. */
+const PREVIEW_BYTES = 1024;
 /** Rows actually rendered — filtering happens over the whole buffer first. */
 const RENDER_LIMIT = 300;
 
@@ -38,6 +40,9 @@ export function InspectView({ reveal }: { reveal?: { seq: number; at: number } |
   const [query, setQuery] = useState("");
   const [protoFilter, setProtoFilter] = useState<string[]>([]);
   const [dirFilter, setDirFilter] = useState<string[]>([]);
+  // Every byte of the selected frame, asked for when the preview is not all of it.
+  const [whole, setWhole] = useState<FramePayload | null>(null);
+  const [loading, setLoading] = useState(false);
   const pausedRef = useRef(paused);
   pausedRef.current = paused;
 
@@ -93,16 +98,29 @@ export function InspectView({ reveal }: { reveal?: { seq: number; at: number } |
     try { setStats(await api.inspectClear()); } catch { /* ignore */ }
   };
 
+  /** Every byte the engine kept of a frame; the same answer again for the same frame. */
+  const payloadOf = async (frame: Frame): Promise<FramePayload> =>
+    whole?.seq === frame.seq ? whole : await api.inspectPayload(frame.seq);
+  const showWhole = async (frame: Frame) => {
+    setLoading(true);
+    try { setWhole(await payloadOf(frame)); } catch (e) { pushError("inspect", e); } finally { setLoading(false); }
+  };
+
   /**
    * The reason to keep a frame is to send it again later, when the gear that
-   * produced it is not on this network any more.
+   * produced it is not on this network any more: its exact bytes, from the engine.
    */
-  const saveAsSignal = (frame: Frame) => {
+  const saveAsSignal = async (frame: Frame) => {
     const name = (frame.summary || `${frame.proto} #${frame.seq}`).slice(0, 48);
-    const signal = signalFromFrame(frame, library, name, t);
-    if (!signal) return;
-    setLibrary([...library, signal]);
-    pushLog("ok", "inspect", "log.signalCaptured", { seq: frame.seq, name: signal.name });
+    try {
+      const payload = await payloadOf(frame);
+      const signal = signalFromFrame(frame, payload.hex, library, name, t);
+      if (!signal) return;
+      setLibrary([...library, signal]);
+      pushLog("ok", "inspect", "log.signalCaptured", { seq: frame.seq, name: signal.name });
+    } catch (e) {
+      pushError("inspect", e);
+    }
   };
 
   const exportTo = async (format: "jsonl" | "txt") => {
@@ -143,9 +161,9 @@ export function InspectView({ reveal }: { reveal?: { seq: number; at: number } |
   );
 
   const picked = selected !== null ? rows.find((f) => f.seq === selected) ?? null : null;
-  // The dump stops at 1 KB. Half a packet is a different packet, so a frame it
-  // truncated cannot become a signal.
-  const canReplay = !!picked?.hex && !/more bytes/.test(picked.hex);
+  // Half a packet is a different packet: only a frame kept whole becomes a signal.
+  const canReplay = !!picked && wholeFrame(picked);
+  const shownWhole = !!picked && whole?.seq === picked.seq;
   const armed = stats?.enabled ?? false;
 
   return (
@@ -298,7 +316,13 @@ export function InspectView({ reveal }: { reveal?: { seq: number; at: number } |
               {picked.hex && (
                 <>
                   <p className="section-label" style={{ marginTop: 16 }}>{t("ins.rawBytes")}</p>
-                  <pre className="hex">{picked.hex}</pre>
+                  {picked.kept < picked.bytes && <p className="inspect-kept" data-tip={t("ins.keptHint")}>
+                    {t("ins.keptOf", { kept: fmtBytes(picked.kept), total: fmtBytes(picked.bytes) })}</p>}
+                  <pre className="hex">{shownWhole ? whole!.dump : picked.hex}</pre>
+                  {!shownWhole && picked.kept > PREVIEW_BYTES && <div className="btn-row">
+                    <button className="ghost sm" disabled={loading} data-tip={t("ins.showAllHint")} onClick={() => void showWhole(picked)}>
+                      {t("ins.showAll", { size: fmtBytes(picked.kept) })}</button>
+                  </div>}
                 </>
               )}
             </>

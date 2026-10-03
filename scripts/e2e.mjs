@@ -312,6 +312,7 @@ function plan(ports, fixtures, mode, dataDir, { feedbackHere }) {
       expect("the UDP sink received what the storm counted", counts.udp - at.udp >= data.udp * 0.95, `${counts.udp - at.udp} of ${data.udp}`);
       expect("the TCP sink received bytes", counts.tcpBytes - at.tcp > 0, `${counts.tcpBytes - at.tcp} B`);
     } },
+    { name: "inspectWhole" },
     { name: "scan", args: { port: ports.http } },
     { name: "http", args: { port: ports.http }, before: mark, after: (expect) => {
       expect("the API answered every request (GET, POST, 40 in the burst, 20 at a rate)", counts.http - at.http >= 62, `${counts.http - at.http} requests`);

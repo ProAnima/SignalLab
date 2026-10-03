@@ -699,6 +699,10 @@ export const ru: Dict = {
   "ins.sizeBytes": "{n, plural, one {# байт} few {# байта} many {# байт} other {# байта}}",
   "ins.decoded": "Декодировано",
   "ins.rawBytes": "Байты",
+  "ins.showAll": "Показать все {size}",
+  "ins.showAllHint": "В списке — первый КиБ каждого кадра; остальное хранит захват",
+  "ins.keptOf": "Сохранено {kept} из {total}",
+  "ins.keptHint": "Кадр хранит до 256 КиБ своих байтов, а весь захват — до 64 МиБ; место освобождают самые старые кадры",
 
   // ---- HTTP -----------------------------------------------------------
   "http.title": "HTTP",
@@ -1426,6 +1430,8 @@ export const ru: Dict = {
   "err.mqtt.topic_required": "Укажите топик для публикации",
   "err.scan.host_required": "Укажите хост для сканирования",
   "err.inspect.empty": "Захват пуст — сохранять нечего",
+  "err.inspect.frame_gone": "Кадра #{seq} уже нет в захвате: его место заняли более новые",
+  "err.inspect.no_payload": "Кадр #{seq} записал только размер, без самих байтов",
   "err.signals.json_invalid": "{path} — неверная библиотека сигналов: ошибка JSON в строке {line}, столбце {column} — исправьте или удалите файл",
   "err.signals.encode": "Не удалось записать библиотеку сигналов в JSON",
   "app.server": "Сервер",

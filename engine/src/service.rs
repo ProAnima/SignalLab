@@ -368,6 +368,11 @@ impl Service {
                 let a = args!(command, value, { format: String });
                 reply(self.capture().export(&a.format)?)
             }
+            // The bytes a frame keeps, past the preview its batch carried.
+            "inspect_payload" => {
+                let a = args!(command, value, { seq: u64 });
+                reply(self.capture().payload(a.seq)?)
+            }
 
             // ---- MQTT: one live connection per job, plus a one-shot publish
             "mqtt_connect" => {

@@ -192,30 +192,22 @@ export function signalFromMqttTopic(
   };
 }
 
+/** A frame keeps every one of its bytes: it can be sent again as it was. */
+export const wholeFrame = (frame: Frame) => frame.bytes > 0 && frame.kept === frame.bytes;
+
 /**
- * A captured frame, as a replayable signal. The bytes go back verbatim as hex
- * rather than being re-parsed out of the decoded summary — a round trip through
- * a display string is exactly where a replay stops being the same packet.
+ * A captured frame, as a replayable signal, from the bytes the engine kept of
+ * it (`inspect_payload`'s plain `hex`) — never re-parsed out of a display
+ * string, which is exactly where a replay stops being the same packet. Half a
+ * packet replayed is a different packet, so a frame not kept whole is refused.
  *
  * A received frame is replayed **to** the socket that received it: the point of
  * saving a reader's packet is to stand in for the reader later.
  */
-export function signalFromFrame(frame: Frame, taken: Signal[], name: string, t: Translate): Signal | null {
-  if (!frame.hex) return null;
-  // The dump stops at 1 KB and says so. Half a packet replayed is a different
-  // packet, so refuse rather than quietly ship a truncated one.
-  if (/more bytes/.test(frame.hex)) return null;
-  const hex = frame.hex
-    .split("\n")
-    // Rows are `offset  hex bytes  |ascii|`. Keep only real rows, then drop the
-    // offset and the ascii column — letters in the ascii would read as bytes.
-    .filter((line) => /^[0-9a-f]{4,}\s\s/i.test(line))
-    .map((line) => line.replace(/^[0-9a-f]{4,}\s+/i, "").replace(/\s*\|.*$/, ""))
-    .join(" ")
-    .replace(/[^0-9a-fA-F]+/g, " ")
-    .trim();
+export function signalFromFrame(frame: Frame, hex: string, taken: Signal[], name: string, t: Translate): Signal | null {
+  if (!wholeFrame(frame)) return null;
   const target = frame.dir === "rx" ? frame.local : frame.remote;
-  if (!hex || !target) return null;
+  if (!hex.trim() || !target) return null;
   const payload: RawPayload = { kind: "hex", hex };
   return {
     id: makeId(name, taken),

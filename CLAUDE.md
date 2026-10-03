@@ -440,6 +440,13 @@ src/components/FirewallBanner.tsx  the desktop app's firewall notice, with Allow
 - **Inspector frames are numbered under the ring's lock**, so the ring is in
   number order and `drain` ships each frame once; the view also drops a frame
   it already holds (snapshot and first batch overlap).
+- **A frame keeps its bytes; a batch never carries them.** `Frame::payload` keeps
+  the masked payload up to `FRAME_LIMIT` (256 KiB, `kept` says how much) and a
+  1 KiB hex preview; `data` is `serde(skip)`, so batches stay light, and
+  `inspect_payload` hands the rest out by number (binary search: the ring is in
+  number order). The ring is bounded by frames and by `RING_BYTES` (64 MiB).
+  *Save as signal* takes the engine's bytes, never a parsed dump, and refuses a
+  frame not kept whole.
 - **Waits read an `Inbox`.** A UDP `Listener` and an MQTT `Subscription`
   (`subscribe.rs`) each fill one; matching and consumption are the same.
   Subscriptions open before the first step, so their broker and topic take

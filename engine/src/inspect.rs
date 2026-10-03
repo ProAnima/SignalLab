@@ -5,6 +5,12 @@
 //! bounded ring buffer so nothing is lost to a busy UI, and a pump task ships
 //! batches to the front-end on `inspect://batch`. Capture is *armed* explicitly
 //! — while disarmed, `push` is a single atomic load and costs nothing.
+//!
+//! A frame keeps its payload's bytes (secrets masked), up to [`FRAME_LIMIT`]:
+//! a batch carries only the first [`HEX_LIMIT`] as a hex preview, the rest is
+//! asked for by number (`payload`) and written by `export`. The ring is bounded
+//! by frames ([`RING_CAPACITY`]) and by the bytes it holds ([`RING_BYTES`]);
+//! the oldest frames give way to either.
 
 use std::collections::VecDeque;
 use std::io::Write;
@@ -12,6 +18,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use base64::Engine as _;
 use serde::Serialize;
 use crate::host::Host;
 
@@ -23,8 +30,13 @@ pub const RING_CAPACITY: usize = 8192;
 /// Upper bound on frames handed to the webview per pump tick.
 const MAX_BATCH: usize = 250;
 const PUMP_INTERVAL_MS: u64 = 120;
-/// Bytes of payload kept for the hex pane.
-const HEX_LIMIT: usize = 1024;
+/// Bytes of payload shown as a hex preview with each frame.
+pub const HEX_LIMIT: usize = 1024;
+/// Bytes of payload a frame keeps: a whole UDP datagram (64 KiB at most), an
+/// ordinary HTTP body or WebSocket message; past it, the frame says how much.
+pub const FRAME_LIMIT: usize = 256 << 10;
+/// Bytes of payload the ring keeps in all; the oldest frames give way.
+pub const RING_BYTES: usize = 64 << 20;
 
 /// One captured packet / request, normalized across protocols.
 #[derive(Clone, Serialize)]
@@ -45,9 +57,16 @@ pub struct Frame {
     pub summary: String,
     /// Optional multi-line decode shown in the detail pane.
     pub detail: Option<String>,
+    /// A hex dump of the first [`HEX_LIMIT`] bytes, for the list's detail pane.
     pub hex: Option<String>,
     /// What happened to it: "dropped", "duplicated", "corrupted", "auto-reply"…
     pub verdict: Option<String>,
+    /// Of `bytes`, how many it keeps (`payload` hands them out): all, up to
+    /// [`FRAME_LIMIT`]; 0 when only the size was recorded.
+    pub kept: usize,
+    /// The payload as captured, secrets masked; never sent with a batch.
+    #[serde(skip)]
+    pub data: Option<Arc<[u8]>>,
 }
 
 impl Frame {
@@ -66,6 +85,8 @@ impl Frame {
             detail: None,
             hex: None,
             verdict: None,
+            kept: 0,
+            data: None,
         }
     }
 
@@ -107,11 +128,15 @@ impl Frame {
         self
     }
 
-    /// Record the payload: sets `bytes` and renders the hex pane. Secret
-    /// values in use are overwritten before the dump is made.
+    /// Record the payload: sets `bytes`, keeps them (up to [`FRAME_LIMIT`])
+    /// and renders the hex preview. Secret values in use are overwritten
+    /// before anything is kept.
     pub fn payload(mut self, bytes: &[u8]) -> Self {
+        let masked = super::secrets::mask_bytes(bytes, &super::secrets::active());
         self.bytes = bytes.len();
-        self.hex = Some(hex_dump(&super::secrets::mask_bytes(bytes, &super::secrets::active())));
+        self.kept = masked.len().min(FRAME_LIMIT);
+        self.hex = Some(hex_dump(&masked));
+        self.data = Some(Arc::from(&masked[..self.kept]));
         self
     }
 
@@ -132,7 +157,22 @@ struct Inner {
     skipped: AtomicU64,
     /// Highest seq handed to the UI.
     cursor: AtomicU64,
-    ring: Mutex<VecDeque<Frame>>,
+    ring: Mutex<Ring>,
+}
+
+/// The frames held, oldest first, and the payload bytes they keep.
+#[derive(Default)]
+struct Ring {
+    frames: VecDeque<Frame>,
+    held: usize,
+}
+
+impl Ring {
+    fn pop_oldest(&mut self) {
+        if let Some(frame) = self.frames.pop_front() {
+            self.held -= frame.kept;
+        }
+    }
 }
 
 /// Cheaply-cloneable handle to the capture bus (managed in Tauri state).
@@ -149,6 +189,9 @@ pub struct CaptureStats {
     pub skipped: u64,
     pub buffered: usize,
     pub capacity: usize,
+    /// Payload bytes the frames held keep, of [`RING_BYTES`].
+    pub held: usize,
+    pub held_limit: usize,
 }
 
 #[derive(Clone, Serialize)]
@@ -190,15 +233,16 @@ impl Capture {
         frame.seq = seq;
         self.inner.total.fetch_add(1, Ordering::Relaxed);
         self.inner.bytes.fetch_add(frame.bytes as u64, Ordering::Relaxed);
-        if ring.len() >= RING_CAPACITY {
-            ring.pop_front();
+        while !ring.frames.is_empty() && (ring.frames.len() >= RING_CAPACITY || ring.held + frame.kept > RING_BYTES) {
+            ring.pop_oldest();
         }
-        ring.push_back(frame);
+        ring.held += frame.kept;
+        ring.frames.push_back(frame);
         Some(seq)
     }
 
     pub fn clear(&self) {
-        self.inner.ring.lock().unwrap().clear();
+        *self.inner.ring.lock().unwrap() = Ring::default();
         self.inner.total.store(0, Ordering::Relaxed);
         self.inner.bytes.store(0, Ordering::Relaxed);
         self.inner.skipped.store(0, Ordering::Relaxed);
@@ -208,21 +252,43 @@ impl Capture {
     }
 
     pub fn stats(&self) -> CaptureStats {
+        let (buffered, held) = {
+            let ring = self.inner.ring.lock().unwrap();
+            (ring.frames.len(), ring.held)
+        };
         CaptureStats {
             enabled: self.is_enabled(),
             total: self.inner.total.load(Ordering::Relaxed),
             bytes: self.inner.bytes.load(Ordering::Relaxed),
             skipped: self.inner.skipped.load(Ordering::Relaxed),
-            buffered: self.inner.ring.lock().unwrap().len(),
+            buffered,
             capacity: RING_CAPACITY,
+            held,
+            held_limit: RING_BYTES,
         }
     }
 
     /// Newest `limit` frames, oldest first — used to repopulate the UI on mount.
     pub fn snapshot(&self, limit: usize) -> Vec<Frame> {
         let ring = self.inner.ring.lock().unwrap();
-        let skip = ring.len().saturating_sub(limit);
-        ring.iter().skip(skip).cloned().collect()
+        let skip = ring.frames.len().saturating_sub(limit);
+        ring.frames.iter().skip(skip).cloned().collect()
+    }
+
+    /// The frame numbered `seq`, while the ring still holds it.
+    pub fn frame(&self, seq: u64) -> Option<Frame> {
+        let ring = self.inner.ring.lock().unwrap();
+        // In number order, so a binary search finds it.
+        let at = ring.frames.binary_search_by_key(&seq, |frame| frame.seq).ok()?;
+        ring.frames.get(at).cloned()
+    }
+
+    /// The bytes a frame keeps: a whole dump and the plain hex, for the detail
+    /// pane and Save as signal. `inspect.frame_gone` once the ring let it go.
+    pub fn payload(&self, seq: u64) -> EngineResult<Payload> {
+        let frame = self.frame(seq).ok_or_else(|| EngineError::new("inspect.frame_gone").with("seq", seq))?;
+        let data = frame.data.ok_or_else(|| EngineError::new("inspect.no_payload").with("seq", seq))?;
+        Ok(Payload { seq, bytes: frame.bytes, kept: frame.kept, dump: hex_dump_all(&data), hex: plain_hex(&data) })
     }
 
     /// Take everything the UI hasn't seen, newest-capped at [`MAX_BATCH`].
@@ -230,7 +296,7 @@ impl Capture {
         let cursor = self.inner.cursor.load(Ordering::Relaxed);
         let fresh: Vec<Frame> = {
             let ring = self.inner.ring.lock().unwrap();
-            ring.iter().filter(|f| f.seq > cursor).cloned().collect()
+            ring.frames.iter().filter(|f| f.seq > cursor).cloned().collect()
         };
 
         let batch: Vec<Frame> = if fresh.len() > MAX_BATCH {
@@ -272,8 +338,9 @@ impl Capture {
 
         if ext == "jsonl" {
             for f in &frames {
-                // A frame is plain data, so this fails only as the writing does.
-                serde_json::to_writer(&mut out, f).map_err(|e| failed(&path, &e))?;
+                // The bytes it keeps go with it, base64; plain data, so this fails only as the writing does.
+                let line = Exported { frame: f, data: f.data.as_deref().map(|data| base64::engine::general_purpose::STANDARD.encode(data)) };
+                serde_json::to_writer(&mut out, &line).map_err(|e| failed(&path, &e))?;
                 writeln!(out).map_err(io)?;
             }
         } else {
@@ -295,14 +362,42 @@ impl Capture {
                 if let Some(d) = &f.detail {
                     writeln!(out, "  {}", d.replace('\n', "\n  ")).map_err(io)?;
                 }
-                if let Some(h) = &f.hex {
-                    write!(out, "{h}").map_err(io)?;
+                match (&f.data, &f.hex) {
+                    (Some(data), _) => {
+                        write!(out, "{}", hex_dump_all(data)).map_err(io)?;
+                        if f.kept < f.bytes {
+                            writeln!(out, "… {} more bytes not kept", f.bytes - f.kept).map_err(io)?;
+                        }
+                    }
+                    (None, Some(h)) => write!(out, "{h}").map_err(io)?,
+                    (None, None) => {}
                 }
             }
         }
         out.flush().map_err(io)?;
         Ok(path.to_string_lossy().into_owned())
     }
+}
+
+/// A frame as `export` writes it: with the bytes it keeps.
+#[derive(Serialize)]
+struct Exported<'a> {
+    #[serde(flatten)]
+    frame: &'a Frame,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    data: Option<String>,
+}
+
+/// What `inspect_payload` answers: the bytes a frame keeps, dumped and as plain hex.
+#[derive(Clone, Debug, Serialize)]
+pub struct Payload {
+    pub seq: u64,
+    pub bytes: usize,
+    pub kept: usize,
+    /// `offset  hex  |ascii|` rows, every one of them.
+    pub dump: String,
+    /// `48 65 6c …`: what a replay sends.
+    pub hex: String,
 }
 
 fn export_dir() -> std::path::PathBuf {
@@ -367,10 +462,35 @@ pub fn spawn_pump(host: Host) -> tokio::task::JoinHandle<()> {
 // Formatting helpers
 // ---------------------------------------------------------------------------
 
-/// `0000  48 65 6c 6c 6f 20 77 6f  72 6c 64 21   |Hello world!|`
+/// `0000  48 65 6c 6c 6f 20 77 6f  72 6c 64 21   |Hello world!|`, the first
+/// [`HEX_LIMIT`] bytes and a line saying how many more there are.
 pub fn hex_dump(bytes: &[u8]) -> String {
-    let shown = &bytes[..bytes.len().min(HEX_LIMIT)];
-    let mut out = String::with_capacity(shown.len() * 4);
+    let mut out = dump_rows(&bytes[..bytes.len().min(HEX_LIMIT)]);
+    if bytes.len() > HEX_LIMIT {
+        out.push_str(&format!("… {} more bytes\n", bytes.len() - HEX_LIMIT));
+    }
+    out
+}
+
+/// Every byte, dumped as `hex_dump` does.
+pub fn hex_dump_all(bytes: &[u8]) -> String {
+    dump_rows(bytes)
+}
+
+/// `48 65 6c 6c 6f`: bytes as a replay takes them.
+pub fn plain_hex(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 3);
+    for (index, byte) in bytes.iter().enumerate() {
+        if index > 0 {
+            out.push(' ');
+        }
+        out.push_str(&format!("{byte:02x}"));
+    }
+    out
+}
+
+fn dump_rows(shown: &[u8]) -> String {
+    let mut out = String::with_capacity(shown.len() * 4 + 16);
     for (row, chunk) in shown.chunks(16).enumerate() {
         out.push_str(&format!("{:04x}  ", row * 16));
         for (i, b) in chunk.iter().enumerate() {
@@ -394,9 +514,6 @@ pub fn hex_dump(bytes: &[u8]) -> String {
             });
         }
         out.push_str("|\n");
-    }
-    if bytes.len() > HEX_LIMIT {
-        out.push_str(&format!("… {} more bytes\n", bytes.len() - HEX_LIMIT));
     }
     out
 }
@@ -597,6 +714,47 @@ mod tests {
         assert_eq!(snap.len(), 3);
         assert_eq!(snap[0].summary, "#7");
         assert_eq!(snap[2].summary, "#9");
+    }
+
+    #[test]
+    fn a_frame_keeps_its_whole_payload_and_hands_it_out_by_number() {
+        let cap = Capture::new();
+        cap.set_enabled(true);
+        let datagram: Vec<u8> = (0..3000u32).map(|i| (i % 251) as u8).collect();
+        let seq = cap.push(Frame::rx("udp", "test").payload(&datagram)).unwrap();
+        let shown = cap.snapshot(1).remove(0);
+        assert_eq!((shown.bytes, shown.kept), (3000, 3000));
+        assert!(shown.hex.as_deref().unwrap().ends_with("… 1976 more bytes\n"), "the batch carries a preview");
+        let json = serde_json::to_value(&shown).unwrap();
+        assert!(json.get("data").is_none() && json["kept"] == 3000, "the bytes never travel with a batch");
+        let payload = cap.payload(seq).unwrap();
+        assert_eq!(payload.hex.split(' ').count(), 3000);
+        assert!(payload.hex.starts_with("00 01 02") && payload.hex.ends_with(&format!("{:02x}", 2999 % 251)));
+        assert!(payload.dump.contains("\n0bb0  ") && !payload.dump.contains("more bytes"), "every row");
+        assert!(cap.payload(seq + 1).unwrap_err().is("inspect.frame_gone"));
+        let sized = cap.push(Frame::rx("udp", "test").size(10)).unwrap();
+        assert!(cap.payload(sized).unwrap_err().is("inspect.no_payload"));
+    }
+
+    #[test]
+    fn a_frame_keeps_at_most_its_limit_and_the_ring_its_budget() {
+        let cap = Capture::new();
+        cap.set_enabled(true);
+        let big = vec![7u8; FRAME_LIMIT + 10];
+        let seq = cap.push(Frame::rx("http", "test").payload(&big)).unwrap();
+        let frame = cap.frame(seq).unwrap();
+        assert_eq!((frame.bytes, frame.kept), (FRAME_LIMIT + 10, FRAME_LIMIT), "past the limit, the frame says how much");
+        // Frames of the limit each: the ring holds what fits its budget, the oldest giving way.
+        let fits = RING_BYTES / FRAME_LIMIT;
+        for _ in 0..fits + 3 {
+            cap.push(Frame::rx("udp", "test").payload(&big[..FRAME_LIMIT]));
+        }
+        let stats = cap.stats();
+        assert_eq!(stats.buffered, fits);
+        assert!(stats.held <= RING_BYTES && stats.held == fits * FRAME_LIMIT, "{} of {}", stats.held, stats.held_limit);
+        assert!(cap.payload(seq).unwrap_err().is("inspect.frame_gone"), "the first went first");
+        cap.clear();
+        assert_eq!((cap.stats().buffered, cap.stats().held), (0, 0));
     }
 
     #[test]

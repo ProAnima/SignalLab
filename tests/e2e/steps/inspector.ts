@@ -11,6 +11,28 @@ export async function inspectArm(expect: Expect) {
   expect("capture is armed", !!shown.querySelector(".rec-dot.live"));
 }
 
+/** A storm's 3000-byte datagram: the list shows its first KiB, Show all every row, and it can become a signal. */
+export async function inspectWhole(expect: Expect) {
+  const shown = await openInspector();
+  const filter = shown.querySelector<HTMLInputElement>(`input[placeholder="${T("ins.filterPlaceholder")}"]`)!;
+  await type(filter, "storm");
+  await click(button(shown, "udp"));
+  const big = await until("a 3000-byte storm datagram", () => [...shown.querySelectorAll<HTMLElement>("tbody tr[data-frame]")]
+    .find((row) => [...row.querySelectorAll("td")].some((cell) => textOf(cell) === "3000")));
+  await click(big, "the frame");
+  const detail = panel(shown, T("ins.detail"));
+  const dump = () => { const dumps = detail.querySelectorAll("pre.hex"); return dumps[dumps.length - 1]?.textContent ?? ""; };
+  await until("its preview", () => dump().includes("more bytes"));
+  expect("the list carries the first KiB and says how much more there is", dump().includes("1976 more bytes") && !dump().includes("\n0bb0  "), dump().slice(-60));
+  expect("…and that the capture keeps all of it", !detail.querySelector(".inspect-kept"));
+  expect("a frame kept whole can become a signal", !button(detail, T("sig.fromFrame")).disabled);
+  await click(button(detail, T("ins.showAll", { size: "" }).trim(), { prefix: true }));
+  await until("every row", () => dump().includes("\n0bb0  "));
+  expect("Show all brings every byte, to the last row", dump().includes("\n0bb0  ") && !dump().includes("more bytes"), dump().slice(-80));
+  await click(button(shown, "udp"));
+  await type(filter, "");
+}
+
 export async function inspectCheck(expect: Expect, args: StepArgs) {
   const shown = await openInspector();
   const captured = numberIn(textOf([...shown.querySelectorAll(".tag-chip")][0]));

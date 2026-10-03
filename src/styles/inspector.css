@@ -67,3 +67,6 @@ pre.hex {
 .peer-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 8px; }
 .peer-dot.fresh { background: var(--accent); box-shadow: 0 0 7px var(--accent); }
 .peer-dot.stale { background: var(--text-faint); }
+
+/* "1 KiB of 300 KiB kept": a frame larger than it keeps says so above its bytes. */
+.inspect-kept { margin: 0 0 6px; font-size: 11px; color: var(--amber, var(--text-dim)); }

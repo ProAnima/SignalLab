@@ -40,7 +40,6 @@ This decides what we build and what we leave to others:
 
 - The impairment relay is UDP only; impairing a TCP stream (latency, throttling, reset, half-open) is still to come.
 - The HTTP burst runs at one fixed rate or as fast as its workers go; ramps, steps and spikes, thresholds and an HTTP node under load are milestone 7.
-- The Inspector ring truncates payloads at 1 KiB and holds 8192 frames: good for looking, not for replay.
 
 ## Delivery order
 

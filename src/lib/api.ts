@@ -532,8 +532,22 @@ export interface Frame {
   bytes: number;
   summary: string;
   detail: string | null;
+  /** A hex dump of the first KiB (`inspect_payload` has the rest). */
   hex: string | null;
   verdict: string | null;
+  /** Of `bytes`, how many the engine keeps: all, up to 256 KiB; 0 when it recorded only the size. */
+  kept: number;
+}
+
+/** The bytes a frame keeps (engine/src/inspect.rs `Payload`). */
+export interface FramePayload {
+  seq: number;
+  bytes: number;
+  kept: number;
+  /** Every row: `offset  hex  |ascii|`. */
+  dump: string;
+  /** `48 65 6c …`, what a replay sends. */
+  hex: string;
 }
 
 export interface CaptureStats {
@@ -543,6 +557,9 @@ export interface CaptureStats {
   skipped: number;
   buffered: number;
   capacity: number;
+  /** Payload bytes the frames held keep, of `held_limit`. */
+  held: number;
+  held_limit: number;
 }
 
 // ---- event payloads ----
@@ -720,6 +737,7 @@ export const api = {
   inspectSnapshot: (limit: number) => invoke<Frame[]>("inspect_snapshot", { limit }),
   inspectClear: () => invoke<CaptureStats>("inspect_clear"),
   inspectExport: (format: "jsonl" | "txt") => invoke<string>("inspect_export", { format }),
+  inspectPayload: (seq: number) => invoke<FramePayload>("inspect_payload", { seq }),
 
   /** A connection held open as a job; events `ws://state`, `ws://messages`. */
   wsConnect: (config: WsConfig) => invoke<JobInfo>("ws_connect", { config }),

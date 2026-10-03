@@ -702,6 +702,10 @@ export const en = {
   "ins.sizeBytes": "{n, plural, one {# byte} other {# bytes}}",
   "ins.decoded": "Decoded",
   "ins.rawBytes": "Bytes",
+  "ins.showAll": "Show all {size}",
+  "ins.showAllHint": "The list carries the first KiB of each frame; the capture keeps the rest",
+  "ins.keptOf": "{kept} of {total} kept",
+  "ins.keptHint": "A frame keeps up to 256 KiB of its bytes, and the capture up to 64 MiB in all — the oldest frames make room",
 
   // ---- HTTP -----------------------------------------------------------
   "http.title": "HTTP",
@@ -1429,6 +1433,8 @@ export const en = {
   "err.mqtt.topic_required": "Enter a topic to publish to",
   "err.scan.host_required": "Enter the host to scan",
   "err.inspect.empty": "The capture is empty — nothing to save",
+  "err.inspect.frame_gone": "Frame #{seq} is no longer in the capture: newer frames took its place",
+  "err.inspect.no_payload": "Frame #{seq} recorded only its size, not its bytes",
   "err.signals.json_invalid": "{path} is not a valid signal library: JSON error at line {line}, column {column} — fix the file or remove it",
   "err.signals.encode": "The signal library could not be written as JSON",
   "app.server": "Server",
