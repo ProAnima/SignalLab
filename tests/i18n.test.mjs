@@ -43,9 +43,13 @@ test("anything else in braces is text", () => {
 
 test("the language a person prefers, by base language", () => {
   const codes = LOCALES.map((locale) => locale.code);
-  assert.equal(pickLanguage(["de-DE", "ru-RU", "en"], codes, SOURCE), "ru");
+  assert.equal(pickLanguage(["nl-NL", "ru-RU", "en"], codes, SOURCE), "ru");
+  assert.equal(pickLanguage(["de-DE", "ru-RU"], codes, SOURCE), "de");
   assert.equal(pickLanguage(["en-GB"], codes, SOURCE), "en");
-  assert.equal(pickLanguage(["ja", "fr"], codes, SOURCE), "en");
+  assert.equal(pickLanguage(["ja", "fr"], codes, SOURCE), "ja");
+  assert.equal(pickLanguage(["zh-Hans-CN"], codes, SOURCE), "zh");
+  assert.equal(pickLanguage(["pt-PT"], codes, SOURCE), "pt", "Portuguese of Portugal gets the Brazilian one rather than English");
+  assert.equal(pickLanguage(["sv", "nl"], codes, SOURCE), "en");
   assert.equal(pickLanguage([], codes, SOURCE), "en");
 });
 

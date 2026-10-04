@@ -10,7 +10,8 @@ function Slider({ label, tip, value, onChange, min, max, step, unit, disabled }:
   const id = useId();
   return (
     <div className="field">
-      <label htmlFor={id} data-tip={tip} style={{ display: "flex", justifyContent: "space-between" }}>
+      {/* The full width: a tooltip's label is only as wide as its text (tooltips.css), and the value goes at the far end. */}
+      <label htmlFor={id} data-tip={tip} style={{ display: "flex", justifyContent: "space-between", gap: 8, width: "100%" }}>
         <span>{label}</span>
         <span style={{ fontFamily: "var(--mono)", color: "var(--accent)" }}>{value}{unit}</span>
       </label>

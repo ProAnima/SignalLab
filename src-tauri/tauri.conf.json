@@ -58,13 +58,14 @@
     "windows": {
       "nsis": {
         "installMode": "both",
-        "languages": ["English", "Russian"],
+        "languages": ["English", "Russian", "Spanish", "French", "German", "PortugueseBR", "SimpChinese", "Japanese", "Korean", "Hindi", "Arabic"],
         "displayLanguageSelector": true,
         "installerIcon": "icons/icon.ico",
         "sidebarImage": "installer/nsis-sidebar.bmp",
         "headerImage": "installer/nsis-header.bmp",
         "uninstallerHeaderImage": "installer/nsis-header.bmp",
-        "installerHooks": "installer/hooks.nsh"
+        "installerHooks": "installer/hooks.nsh",
+        "customLanguageFiles": { "Hindi": "installer/Hindi.nsh", "Korean": "installer/Korean.nsh" }
       },
       "wix": {
         "bannerPath": "installer/wix-banner.bmp",

@@ -12,7 +12,7 @@
  */
 import { pageErrors } from "./page";
 import { closeOverlays, type Check, type Expect, type StepArgs } from "./dsl";
-import { cleanup, russian, shell } from "./steps/shell";
+import { cleanup, languages, russian, shell } from "./steps/shell";
 import { inspectArm, inspectCheck, inspectWhole } from "./steps/inspector";
 import { broadcast, http, mqtt, netsimCheck, netsimTcp, netsimStart, osc, oscStop, scan, storm } from "./steps/tools";
 import { library, signals } from "./steps/signals";
@@ -29,7 +29,7 @@ export type { Check };
 const STEPS: Record<string, (expect: Expect, args: StepArgs) => Promise<Record<string, unknown> | void>> = {
   shell, inspectArm, osc, signals, oscStop, mqtt, broadcast, netsimStart, netsimCheck, netsimTcp, storm, inspectWhole, scan, http, websocket,
   library, emulators, emulatorMqtt, experimentHttp, experimentOsc, experimentRepeat, experimentLoop, experimentLoad, experimentParallel, experimentEmulator, experimentFaults, experimentAuth, experimentWs, experimentSelection, experimentExport, layout,
-  inspectCheck, feedback, russian, cleanup,
+  inspectCheck, feedback, russian, languages, cleanup,
 };
 
 // ---- the runner's side --------------------------------------------------------------

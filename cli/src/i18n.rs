@@ -16,27 +16,61 @@ mod embedded {
 }
 pub use embedded::TEMPLATES;
 
+/// The languages of the interface (`src/lib/locales/index.ts`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
 pub enum Lang {
     En,
     Ru,
+    Es,
+    Fr,
+    De,
+    Pt,
+    Zh,
+    Ja,
+    Ko,
+    Hi,
+    Ar,
 }
+
+pub const LANGS: [Lang; 11] = [Lang::En, Lang::Ru, Lang::Es, Lang::Fr, Lang::De, Lang::Pt, Lang::Zh, Lang::Ja, Lang::Ko, Lang::Hi, Lang::Ar];
 
 impl Lang {
     pub fn code(self) -> &'static str {
         match self {
             Lang::En => "en",
             Lang::Ru => "ru",
+            Lang::Es => "es",
+            Lang::Fr => "fr",
+            Lang::De => "de",
+            Lang::Pt => "pt",
+            Lang::Zh => "zh",
+            Lang::Ja => "ja",
+            Lang::Ko => "ko",
+            Lang::Hi => "hi",
+            Lang::Ar => "ar",
         }
     }
 
-    /// A language tag or locale (`ru`, `ru-RU`, `ru_RU.UTF-8`), by its base language.
+    /// A language tag or locale (`ru`, `ru-RU`, `ru_RU.UTF-8`, `zh_CN`), by its base language.
     fn from_tag(tag: &str) -> Option<Lang> {
         let base: String = tag.trim().chars().take_while(|char| char.is_ascii_alphabetic()).collect::<String>().to_ascii_lowercase();
-        match base.as_str() {
-            "en" => Some(Lang::En),
-            "ru" => Some(Lang::Ru),
-            _ => None,
+        LANGS.into_iter().find(|lang| lang.code() == base)
+    }
+
+    /// The texts embedded for it.
+    fn texts(self) -> &'static [(&'static str, &'static str)] {
+        match self {
+            Lang::En => embedded::EN,
+            Lang::Ru => embedded::RU,
+            Lang::Es => embedded::ES,
+            Lang::Fr => embedded::FR,
+            Lang::De => embedded::DE,
+            Lang::Pt => embedded::PT,
+            Lang::Zh => embedded::ZH,
+            Lang::Ja => embedded::JA,
+            Lang::Ko => embedded::KO,
+            Lang::Hi => embedded::HI,
+            Lang::Ar => embedded::AR,
         }
     }
 
@@ -194,14 +228,22 @@ pub fn format_number(number: f64, lang: Lang) -> String {
     while frac.last() == Some(&0) {
         frac.pop();
     }
+    // The group and decimal signs; Spanish leaves four digits ungrouped, Hindi
+    // groups by two after the first three; Arabic (in Latin digits) marks a
+    // minus left to right — each as `Intl.NumberFormat` writes it.
     let (group, decimal) = match lang {
-        Lang::En => (",", "."),
+        Lang::En | Lang::Zh | Lang::Ja | Lang::Ko | Lang::Hi | Lang::Ar => (",", "."),
         Lang::Ru => ("\u{a0}", ","),
+        Lang::Fr => ("\u{202f}", ","),
+        Lang::Es | Lang::De | Lang::Pt => (".", ","),
     };
-    let mut out = String::new();
     let count = int_digits.len();
+    let grouped = count >= if lang == Lang::Es { 5 } else { 4 };
+    // Whether a group sign goes before the digit `left` places from the end.
+    let breaks = |left: usize| grouped && left > 0 && if lang == Lang::Hi { left == 3 || (left > 3 && (left - 3).is_multiple_of(2)) } else { left.is_multiple_of(3) };
+    let mut out = String::new();
     for (at, digit) in int_digits.iter().enumerate() {
-        if at > 0 && (count - at).is_multiple_of(3) {
+        if at > 0 && breaks(count - at) {
             out.push_str(group);
         }
         out.push((b'0' + digit) as char);
@@ -213,6 +255,9 @@ pub fn format_number(number: f64, lang: Lang) -> String {
     let zero = int_digits.iter().all(|digit| *digit == 0) && frac.is_empty();
     if negative && !zero {
         out.insert(0, '-');
+        if lang == Lang::Ar {
+            out.insert(0, '\u{200e}');
+        }
     }
     out
 }
@@ -241,6 +286,44 @@ pub fn plural_category(number: f64, lang: Lang) -> &'static str {
                 "few"
             } else {
                 "many"
+            }
+        }
+        Lang::De => {
+            if n == 1.0 {
+                "one"
+            } else {
+                "other"
+            }
+        }
+        // `one`: n = 1 (Spanish), the integer part 0 or 1 (French, Portuguese);
+        // `many`: whole millions.
+        Lang::Es | Lang::Fr | Lang::Pt => {
+            let one = if lang == Lang::Es { n == 1.0 } else { n.trunc() <= 1.0 };
+            if one {
+                "one"
+            } else if integer && n != 0.0 && n % 1_000_000.0 == 0.0 {
+                "many"
+            } else {
+                "other"
+            }
+        }
+        Lang::Zh | Lang::Ja | Lang::Ko => "other",
+        Lang::Hi => {
+            if n.trunc() == 0.0 || n == 1.0 {
+                "one"
+            } else {
+                "other"
+            }
+        }
+        Lang::Ar => {
+            let last_two = n % 100.0;
+            match n {
+                _ if n == 0.0 => "zero",
+                _ if n == 1.0 => "one",
+                _ if n == 2.0 => "two",
+                _ if integer && (3.0..=10.0).contains(&last_two) => "few",
+                _ if integer && (11.0..=99.0).contains(&last_two) => "many",
+                _ => "other",
             }
         }
     }
@@ -424,10 +507,7 @@ pub struct Texts {
 impl Texts {
     pub fn new(lang: Lang) -> Self {
         let english: HashMap<_, _> = embedded::EN.iter().copied().collect();
-        let own = match lang {
-            Lang::En => english.clone(),
-            Lang::Ru => embedded::RU.iter().copied().collect(),
-        };
+        let own = lang.texts().iter().copied().collect();
         Texts { lang, own, english }
     }
 
@@ -552,7 +632,7 @@ mod tests {
     #[test]
     fn the_extraction_finds_every_key_of_the_dictionaries() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../src/lib/locales");
-        for (lang, embedded) in [("en", embedded::EN), ("ru", embedded::RU)] {
+        for (lang, embedded) in LANGS.map(|lang| (lang.code(), lang.texts())) {
             let source = std::fs::read_to_string(root.join(format!("{lang}.ts"))).unwrap().replace("\r\n", "\n");
             // Every entry starts a line with two spaces and its quoted key.
             let lines = source.lines().filter(|line| line.starts_with("  \"") && line.contains("\":")).count();
@@ -635,6 +715,56 @@ mod tests {
         assert_eq!(format_number(0.1 + 0.2, Lang::En), "0.3");
     }
 
+    /// What `Intl.NumberFormat` and `Intl.PluralRules` give in Node for each
+    /// language of the interface (Arabic as `ar-u-nu-latn`, the interface's own).
+    #[test]
+    fn numbers_and_plurals_agree_with_intl_in_every_language() {
+        let numbers: [(Lang, [&str; 5]); 11] = [
+            (Lang::En, ["1,234", "12,345", "1,234,567.5", "-0.125", "123,456,789"]),
+            (Lang::Ru, ["1\u{a0}234", "12\u{a0}345", "1\u{a0}234\u{a0}567,5", "-0,125", "123\u{a0}456\u{a0}789"]),
+            (Lang::Es, ["1234", "12.345", "1.234.567,5", "-0,125", "123.456.789"]),
+            (Lang::Fr, ["1\u{202f}234", "12\u{202f}345", "1\u{202f}234\u{202f}567,5", "-0,125", "123\u{202f}456\u{202f}789"]),
+            (Lang::De, ["1.234", "12.345", "1.234.567,5", "-0,125", "123.456.789"]),
+            (Lang::Pt, ["1.234", "12.345", "1.234.567,5", "-0,125", "123.456.789"]),
+            (Lang::Zh, ["1,234", "12,345", "1,234,567.5", "-0.125", "123,456,789"]),
+            (Lang::Ja, ["1,234", "12,345", "1,234,567.5", "-0.125", "123,456,789"]),
+            (Lang::Ko, ["1,234", "12,345", "1,234,567.5", "-0.125", "123,456,789"]),
+            (Lang::Hi, ["1,234", "12,345", "12,34,567.5", "-0.125", "12,34,56,789"]),
+            (Lang::Ar, ["1,234", "12,345", "1,234,567.5", "\u{200e}-0.125", "123,456,789"]),
+        ];
+        for (lang, expected) in numbers {
+            let written = [1234.0, 12345.0, 1234567.5, -0.125, 123456789.0].map(|n| format_number(n, lang));
+            assert_eq!(written, expected, "{lang:?}");
+        }
+        let values = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 5.0, 10.0, 11.0, 12.0, 21.0, 99.0, 100.0, 101.0, 102.0, 103.0, 111.0, 1000.0, 1000000.0, 2000000.0, 1000001.0, 1.25];
+        let plurals: [(Lang, [&str; 22]); 11] = [
+            (Lang::En, ["other", "other", "one", "other", "other", "other", "other", "other", "other", "other", "other", "other", "other", "other", "other", "other", "other", "other", "other", "other", "other", "other"]),
+            (Lang::Ru, ["many", "other", "one", "other", "few", "few", "many", "many", "many", "many", "one", "many", "many", "one", "few", "few", "many", "many", "many", "many", "one", "other"]),
+            (Lang::Es, ["other", "other", "one", "other", "other", "other", "other", "other", "other", "other", "other", "other", "other", "other", "other", "other", "other", "other", "many", "many", "other", "other"]),
+            (Lang::Fr, ["one", "one", "one", "one", "other", "other", "other", "other", "other", "other", "other", "other", "other", "other", "other", "other", "other", "other", "many", "many", "other", "one"]),
+            (Lang::De, ["other", "other", "one", "other", "other", "other", "other", "other", "other", "other", "other", "other", "other", "other", "other", "other", "other", "other", "other", "other", "other", "other"]),
+            (Lang::Pt, ["one", "one", "one", "one", "other", "other", "other", "other", "other", "other", "other", "other", "other", "other", "other", "other", "other", "other", "many", "many", "other", "one"]),
+            (Lang::Zh, ["other"; 22]),
+            (Lang::Ja, ["other"; 22]),
+            (Lang::Ko, ["other"; 22]),
+            (Lang::Hi, ["one", "one", "one", "other", "other", "other", "other", "other", "other", "other", "other", "other", "other", "other", "other", "other", "other", "other", "other", "other", "other", "other"]),
+            (Lang::Ar, ["zero", "other", "one", "other", "two", "few", "few", "few", "many", "many", "many", "many", "other", "other", "other", "few", "many", "other", "other", "other", "other", "other"]),
+        ];
+        for (lang, expected) in plurals {
+            assert_eq!(values.map(|n| plural_category(n, lang)), expected, "{lang:?}");
+        }
+    }
+
+    /// `build.rs` embeds the languages `src/lib/locales/index.ts` lists, and this enum has each.
+    #[test]
+    fn the_languages_are_the_interface_s() {
+        let index = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../src/lib/locales/index.ts")).unwrap();
+        let listed: Vec<String> = index.split("{ code: \"").skip(1).map(|rest| rest.split('"').next().unwrap_or_default().to_string()).collect();
+        assert_eq!(listed, LANGS.map(|lang| lang.code().to_string()), "the same languages, in the same order");
+        assert_eq!(Lang::choose(None, |name| (name == "LANG").then(|| "zh_CN.UTF-8".to_string())), Lang::Zh);
+        assert_eq!(Lang::choose(None, |name| (name == "LC_ALL").then(|| "pt_BR".to_string())), Lang::Pt);
+    }
+
     #[test]
     fn plural_rules_are_cldr_s() {
         let ru = |n: f64| plural_category(n, Lang::Ru);
@@ -650,7 +780,8 @@ mod tests {
         assert_eq!(Lang::choose(None, env(&[("LANG", "ru_RU.UTF-8")])), Lang::Ru);
         assert_eq!(Lang::choose(None, env(&[("LC_ALL", "C"), ("LANG", "ru_RU.UTF-8")])), Lang::En, "LC_ALL wins, and C is English");
         assert_eq!(Lang::choose(None, env(&[("LC_ALL", ""), ("LC_MESSAGES", "ru_RU"), ("LANG", "en_US")])), Lang::Ru, "an empty one is skipped");
-        assert_eq!(Lang::choose(None, env(&[("SIGNALLAB_LANG", "de")])), Lang::En, "a language Signal Lab does not have");
+        assert_eq!(Lang::choose(None, env(&[("SIGNALLAB_LANG", "de")])), Lang::De);
+        assert_eq!(Lang::choose(None, env(&[("SIGNALLAB_LANG", "nl")])), Lang::En, "a language Signal Lab does not have");
         assert_eq!(Lang::choose(None, env(&[])), Lang::En);
     }
 

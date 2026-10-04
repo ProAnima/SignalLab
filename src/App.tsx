@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { StoreProvider, useStore, logText } from "./lib/store";
-import { I18nProvider, LANGS, useI18n, type TKey } from "./lib/i18n";
+import { I18nProvider, useI18n, type TKey } from "./lib/i18n";
+import { LanguageMenu } from "./components/LanguageMenu";
 import { Brand } from "./components/Brand";
 import { Palette } from "./components/Palette";
 import { TooltipLayer } from "./components/TooltipLayer";
@@ -44,28 +45,9 @@ const NAV: { key: ViewKey; glyph: string; label: TKey; short?: TKey; kinds: stri
   { key: "http", glyph: "⇄", label: "nav.http", kinds: ["http-burst"] },
   { key: "ws", glyph: "⇌", label: "nav.ws", short: "nav.short.ws", kinds: ["websocket"] },
   { key: "netsim", glyph: "⚡", label: "nav.netsim", short: "nav.short.netsim", kinds: ["netsim"] },
-  { key: "storm", glyph: "☰", label: "nav.storm", kinds: ["storm"] },
+  { key: "storm", glyph: "☰", label: "nav.storm", short: "nav.short.storm", kinds: ["storm"] },
   { key: "scan", glyph: "⊹", label: "nav.scan", kinds: ["scan"] },
 ];
-
-function LanguageSwitch() {
-  const { lang, setLang, t } = useI18n();
-  return (
-    <div className="lang-switch" role="group" aria-label={t("app.language")}>
-      {LANGS.map((l) => (
-        <button
-          key={l.code}
-          className={lang === l.code ? "on" : ""}
-          data-tip={l.label}
-          aria-pressed={lang === l.code}
-          onClick={() => setLang(l.code)}
-        >
-          {l.short}
-        </button>
-      ))}
-    </div>
-  );
-}
 
 const isView = (value: unknown) => NAV.some((item) => item.key === value);
 /** The console's height when open, until its handle moves it (double-click restores it). */
@@ -251,7 +233,7 @@ function Shell() {
         )}
         <button className="ghost sm header-icon" aria-label={t("feedback.open")} data-tip={t("feedback.open")} onClick={() => setDialog("feedback")}>✉</button>
         <button className="ghost sm header-icon" aria-label={t("about.open")} data-tip={t("about.open")} onClick={() => setDialog("about")}>?</button>
-        <LanguageSwitch />
+        <LanguageMenu />
         {signedIn && <button className="ghost sm" onClick={() => void signOut()}>{t("app.signOut")}</button>}
         <button className="danger sm" data-tip={t("app.stopAllHint")} onClick={stopAll} disabled={jobs.length === 0}>
           {t("app.stopAll")}

@@ -18,7 +18,7 @@
   box-shadow: var(--shadow-md);
   font: 400 11.5px/1.5 var(--sans);
   letter-spacing: 0;
-  text-align: left;
+  text-align: start;
   text-transform: none;
   white-space: pre-line;
   overflow-wrap: anywhere;

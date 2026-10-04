@@ -397,6 +397,7 @@ export const en = {
   "nav.short.broadcast": "Bcast",
   "nav.short.netsim": "Impair",
   "nav.short.ws": "WS",
+  "nav.short.storm": "Storm",
 
   "console.title": "Console",
   "dock.tabs": "Bottom panel",

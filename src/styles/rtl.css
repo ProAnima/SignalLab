@@ -1,0 +1,23 @@
+/* ---------- right to left, and letter spacing by script ---------- */
+
+/* Arabic reads right to left: <html dir="rtl"> mirrors the page (lib/i18n.tsx), the
+   rest of the stylesheet uses inline-start/end where a side follows the reading. What
+   is data stays left to right: the experiment canvas (its wires run from outputs on
+   the right to inputs on the left), hex dumps and code. A field shows what is typed
+   in it the way it reads — an Arabic name right to left, an address or a URL left to
+   right — whatever the page around it does. */
+[dir="rtl"] .experiment-canvas-scroll { direction: ltr; }
+[dir="rtl"] pre, [dir="rtl"] code, [dir="rtl"] kbd, [dir="rtl"] .hex { direction: ltr; unicode-bidi: isolate; text-align: left; }
+[dir="rtl"] input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), [dir="rtl"] textarea {
+  unicode-bidi: plaintext;
+  text-align: start;
+}
+/* The rail beside the active screen, and the glow that leads into it, face the other way. */
+[dir="rtl"] .nav-item.active::before { border-radius: 3px 0 0 3px; }
+[dir="rtl"] .nav-item.active { background: linear-gradient(270deg, var(--accent-soft), rgba(139, 124, 255, 0.05)); }
+
+/* Arabic letters join one to the next, and Devanagari's run under one headstroke:
+   spacing between letters tears both apart. Chinese, Japanese and Korean have no
+   capitals for the small caps labels' spacing to set off, and spaced out they read
+   as separate words. Latin and Cyrillic labels keep it; these five get none. */
+:is(:lang(ar), :lang(hi), :lang(zh), :lang(ja), :lang(ko)) { letter-spacing: 0 !important; }

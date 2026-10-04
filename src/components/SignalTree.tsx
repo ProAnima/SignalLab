@@ -105,7 +105,7 @@ export function SignalTree({ signals, searching, selectedId, onSelect, onFire, f
     if (event.key === "ArrowLeft" && isOpen(node.path) && !searching) { event.preventDefault(); toggle(node.path); }
   };
 
-  const indent = (depth: number) => ({ paddingLeft: 6 + depth * 14 });
+  const indent = (depth: number) => ({ paddingInlineStart: 6 + depth * 14 });
 
   const renderSignal = (signal: Signal, depth: number) => <button key={signal.id} data-signal={signal.id} style={indent(depth)}
     className={"sig-item" + (signal.id === selectedId ? " active" : "")} aria-current={signal.id === selectedId ? "true" : undefined}

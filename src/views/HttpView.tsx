@@ -290,11 +290,11 @@ export function HttpView({ onToExperiment, load, onShowSignal, onShowEmulator }:
                 </div>
               )}
               {pretty && (
-                <button className="ghost sm" style={{ marginBottom: 8, marginLeft: 6 }} aria-pressed={!raw} onClick={() => setRaw(!raw)}>
+                <button className="ghost sm" style={{ marginBottom: 8, marginInlineStart: 6 }} aria-pressed={!raw} onClick={() => setRaw(!raw)}>
                   {raw ? t("http.formatJson") : t("http.rawBody")}
                 </button>
               )}
-              {!resp.error && <span style={{ marginLeft: 6 }}><MockThis method={method} url={sentUrl} response={resp} onShow={onShowEmulator} /></span>}
+              {!resp.error && <span style={{ marginInlineStart: 6 }}><MockThis method={method} url={sentUrl} response={resp} onShow={onShowEmulator} /></span>}
               <textarea
                 readOnly
                 aria-label={t("http.response")}

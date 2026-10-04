@@ -367,6 +367,7 @@ function plan(ports, fixtures, mode, dataDir, { feedbackHere }) {
       expect("…and nothing of the data folder's path", !text.includes(dataDir), text.slice(0, 300));
     } },
     { name: "russian" },
+    { name: "languages" },
     { name: "cleanup" },
   ];
 }

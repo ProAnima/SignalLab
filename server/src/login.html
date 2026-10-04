@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="{{lang}}">
+<html lang="{{lang}}" dir="{{dir}}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -34,7 +34,7 @@
   {{error}}
   <form method="post" action="/login">
     <label for="token" data-tip="{{note}}">{{label}}</label>
-    <input id="token" name="token" type="password" autocomplete="current-password" spellcheck="false" autofocus required aria-describedby="token-help">
+    <input id="token" name="token" type="password" dir="ltr" autocomplete="current-password" spellcheck="false" autofocus required aria-describedby="token-help">
     <span id="token-help" class="sr-only">{{note}}</span>
     <button type="submit">{{button}}</button>
   </form>

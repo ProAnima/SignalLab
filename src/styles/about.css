@@ -92,7 +92,7 @@
 .feedback-shot .feedback-remove {
   position: absolute;
   top: 4px;
-  right: 4px;
+  inset-inline-end: 4px;
   min-width: 22px;
   height: 22px;
   padding: 0;

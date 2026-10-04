@@ -31,7 +31,7 @@
   box-shadow: var(--shadow-md);
 }
 .firewall-banner .firewall-error { flex-basis: 100%; color: var(--red); }
-.firewall-banner .firewall-actions { display: flex; gap: 6px; margin-left: auto; }
+.firewall-banner .firewall-actions { display: flex; gap: 6px; margin-inline-start: auto; }
 
 /* Floats under the header so the grid keeps its shape. */
 .connection-banner {

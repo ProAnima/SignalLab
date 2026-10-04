@@ -8,6 +8,7 @@
 .splitter.rows::after { left: 0; right: 0; top: 3px; height: 2px; }
 .splitter.columns { top: 0; bottom: 0; width: 8px; cursor: col-resize; }
 .splitter.columns::after { top: 0; bottom: 0; left: 3px; width: 2px; }
-.experiment-workspace > .splitter { right: var(--properties-col); transform: translateX(50%); }
+.experiment-workspace > .splitter { inset-inline-end: var(--properties-col); transform: translateX(50%); }
+[dir="rtl"] .experiment-workspace > .splitter { transform: translateX(-50%); }
 body.resizing-rows, body.resizing-rows * { cursor: row-resize !important; user-select: none; }
 body.resizing-columns, body.resizing-columns * { cursor: col-resize !important; user-select: none; }

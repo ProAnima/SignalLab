@@ -8,8 +8,9 @@ use std::path::{Path, PathBuf};
 #[path = "src/extract.rs"]
 mod extract;
 
-/// The languages of the interface, as in `src/lib/locales/index.ts`.
-const LANGUAGES: [&str; 2] = ["en", "ru"];
+/// The languages of the interface, as in `src/lib/locales/index.ts` (a test in
+/// `src/i18n.rs` keeps the two lists equal).
+const LANGUAGES: [&str; 11] = ["en", "ru", "es", "fr", "de", "pt", "zh", "ja", "ko", "hi", "ar"];
 
 fn main() {
     let root = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap()).join("..");

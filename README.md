@@ -18,8 +18,8 @@ interface also run **headless as a server, used from a browser** — on a rack P
 a Linux box next to the gear, or as the Docker image `ghcr.io/proanima/signallab`
 (see [Run as a server](#run-as-a-server-browser-docker)).
 
-The interface is a dark instrument panel and ships **bilingual (English /
-Russian)**; it picks the language from the OS on first run and remembers the
+The interface is a dark instrument panel in **11 languages** — English, Russian, Spanish, French, German, Portuguese (Brazilian), Chinese (Simplified), Japanese, Korean, Hindi and Arabic (right
+to left); it picks the language from the OS on first run and remembers the
 choice. See [Interface & localization](#interface--localization).
 
 > Runs on **Windows and Linux** — no macOS, iOS or Android builds (see
@@ -201,7 +201,9 @@ src/                     React + TypeScript UI (Vite)
   lib/translate.ts       placeholders, ICU plurals, numbers for a language (pure)
   lib/locales/index.ts   the list of languages
   lib/locales/en.ts      source-of-truth dictionary (every key)
-  lib/locales/ru.ts      Russian, typed against en.ts
+  lib/locales/<code>.ts  the other languages (ru, es, fr, de, pt, zh, ja, ko, hi, ar), typed against en.ts
+  lib/flags.ts           each language's flag on the switch
+  components/LanguageMenu.tsx  the header's language switch: flag, letters, the list of languages
   components/Scope.tsx   canvas oscilloscope / charts (no chart libs)
   components/OscArgs.tsx typed OSC argument editor (OSC + Broadcast + Signals)
   components/Palette.tsx Ctrl+K palette that fires a signal from any screen
@@ -284,16 +286,21 @@ Exports land in `~/Documents/SignalLab/capture-<epoch-ms>.jsonl`.
 
 ## Interface & localization
 
-The UI is fully bilingual (**English / Russian**), switched live from the header
-— no reload, and the console re-translates its backlog too. It works like this:
+The UI speaks **English, Russian, Spanish, French, German, Portuguese (Brazilian), Chinese (Simplified), Japanese, Korean, Hindi and Arabic**, switched live from the header — no reload, and
+the console re-translates its backlog too. The switch shows the current
+language's flag and letters and opens the list of every language, each by its
+flag and its own name; the arrows, a letter, Enter and Escape work in it. Arabic mirrors the whole page right to left, while what is
+data — addresses, hex dumps, code, the experiment canvas — stays left to right.
+It works like this:
 
 - `src/lib/locales/en.ts` is the **source of truth**. Its keys define the
-  `Dict` type; `ru.ts` is typed against it, so a missing or misspelled key is a
-  **compile error**, never a blank label at runtime.
+  `Dict` type; every other dictionary is typed against it, so a missing or
+  misspelled key is a **compile error**, never a blank label at runtime.
 - `t("key", { name })` fills `{name}` placeholders; counts use ICU plurals —
   `{n, plural, one {# signal} other {# signals}}` — chosen by each language's
-  own rules (`Intl.PluralRules`: Russian has *one*, *few*, *many*). Numbers and
-  sizes are written the language's way. Unknown keys fall back to English, then
+  own rules (`Intl.PluralRules`: Russian has *one*, *few*, *many*; Arabic six
+  forms; Chinese, Japanese and Korean one). Numbers and sizes are written the
+  language's way (Arabic in Latin digits, as the addresses beside them). Unknown keys fall back to English, then
   to the key string itself.
 - **Errors are translated too.** The engine never builds a sentence: every
   command and every job reports an `EngineError` — a stable `code`, values, the node and field it is
@@ -314,9 +321,11 @@ The UI is fully bilingual (**English / Russian**), switched live from the header
 - Help is in tooltips, in the current language, on hover and on keyboard focus —
   a field shows its label's.
 
-**Adding a language** is a dictionary and one line in `src/lib/locales/index.ts`;
+**Adding a language** is a dictionary, one line in `src/lib/locales/index.ts`, a
+flag, and its line in the command line, the sign-in page and the installer;
 [docs/localization.md](docs/localization.md) walks through it and lists what the
-checks catch (missing texts, other placeholders, missing plural forms).
+checks catch (missing texts, other placeholders, missing plural forms, English
+left on a screen).
 
 **Translating a label?** Keep single words short, or let them wrap — metric
 captions sit in ~112px cards. `.metric .k` uses `overflow-wrap: anywhere` as a
@@ -389,7 +398,7 @@ Produces two Windows installers under `target/release/bundle/`:
 
 | Artifact | Use |
 | --- | --- |
-| `nsis/Signal Lab_<version>_x64-setup.exe` | normal install: English or Russian, for you (no admin rights) or for everyone, *Run* and a desktop shortcut at the end; `/S` installs silently |
+| `nsis/Signal Lab_<version>_x64-setup.exe` | normal install in the system's language (any of the interface's 11, chosen in the setup's first dialog), for you (no admin rights) or for everyone, *Run* and a desktop shortcut at the end; `/S` installs silently |
 | `msi/Signal Lab_<version>_x64_en-US.msi` | unattended / group-policy deployment (`msiexec /i … /qn`) |
 
 `target/release/signal-lab.exe` is the bare executable and needs no
@@ -471,7 +480,7 @@ signallab emulate tests/payments-mock.json --for 120 &   # the dependency, while
 ```
 
 `0` all passed, `1` one failed, `2` invalid input, `3` could not run. Steps print as
-they happen in English or Russian, `--json` gives a JSON object per line, `--junit`
+they happen in the interface's language (any of its 11), `--json` gives a JSON object per line, `--junit`
 a report every CI system shows, and `--server` sends the runs to a lab PC that can
 reach the gear. It comes with the desktop app — the installers put it on `PATH`
 (`/usr/bin` on Linux) — and in the image; `signallab doctor` says what stands
@@ -577,7 +586,7 @@ MQTT publishing, **WebSocket connect / send / close**, Log, Delay, **Wait for OS
 **Wait for UDP**, **Wait for MQTT**, **Wait for WebSocket** and **Wait for HTTP request**, the **Emulator**, Extract, value checks and branches, status
 branching, parallel branch/join, **Loop**, and HTTP status/body/header/latency checks.
 The palette groups actions, waits (*Observe*), *Emulate*, data, checks and flow; search
-supports Russian/English labels and protocol names,
+finds a node by its name and description in the interface's language, by its type (`http`, `wait_osc`) and by protocol names,
 with arrow-key selection and Enter to insert. HTTP node forms include request
 headers, and OSC forms include typed arguments.
 

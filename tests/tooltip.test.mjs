@@ -62,9 +62,9 @@ function tipExpressions(text) {
   return found;
 }
 
-test("every tooltip has a Russian text of its own", async () => {
+test("every tooltip has a text of its own in every language", async () => {
   const { en } = await import("../src/lib/locales/en.ts");
-  const { ru } = await import("../src/lib/locales/ru.ts");
+  const { LOCALES } = await import("../src/lib/locales/index.ts");
   const keys = new Set();
   for (const file of sources()) {
     for (const expression of tipExpressions(readFileSync(file, "utf8"))) {
@@ -80,11 +80,17 @@ test("every tooltip has a Russian text of its own", async () => {
   assert.ok(keys.size > 60, `found ${keys.size} tooltip texts`);
   // A key combination reads the same in every language.
   const SAME_EVERYWHERE = new Set(["sig.fireHint"]);
-  const untranslated = [...keys].filter((key) => !SAME_EVERYWHERE.has(key) && (!ru[key] || ru[key] === en[key] || !/[а-яё]/i.test(ru[key])));
-  assert.deepEqual(untranslated, [], "a tooltip in Russian is Russian");
+  // A language in a script of its own writes its tooltips in it; one in Latin letters, not as English does.
+  const SCRIPT = { ru: /[а-яё]/i, zh: /\p{Script=Han}/u, ja: /[\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Han}]/u, ko: /\p{Script=Hangul}/u, hi: /\p{Script=Devanagari}/u, ar: /\p{Script=Arabic}/u };
   // {name} is filled in; {{name}} is template syntax shown as it is.
   const placeholders = (text) => [...text.matchAll(/(?<!\{)\{(\w+)\}(?!\})/g)].map((found) => found[1]).sort().join();
-  assert.deepEqual([...keys].filter((key) => placeholders(en[key]) !== placeholders(ru[key])), [], "both languages fill in the same values");
+  for (const { code, dict } of LOCALES) {
+    if (code === "en") continue;
+    // Units are notation: `ms` reads the same in most languages.
+    const untranslated = [...keys].filter((key) => !SAME_EVERYWHERE.has(key) && !key.startsWith("unit.") && (!dict[key] || dict[key] === en[key] || (SCRIPT[code] && !SCRIPT[code].test(dict[key]))));
+    assert.deepEqual(untranslated, [], `${code}: a tooltip is in the language`);
+    assert.deepEqual([...keys].filter((key) => placeholders(en[key]) !== placeholders(dict[key])), [], `${code}: the same values as English`);
+  }
 });
 
 test("no tooltip text is written into the markup in one language", () => {

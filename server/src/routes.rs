@@ -233,6 +233,8 @@ async fn download(Query(query): Query<FileQuery>) -> Response {
 
 struct LoginText {
     lang: &'static str,
+    /// `rtl` for a language read right to left.
+    dir: &'static str,
     title: &'static str,
     label: &'static str,
     button: &'static str,
@@ -242,6 +244,7 @@ struct LoginText {
 
 const ENGLISH: LoginText = LoginText {
     lang: "en",
+    dir: "ltr",
     title: "Sign in",
     label: "Access token",
     button: "Sign in",
@@ -251,6 +254,7 @@ const ENGLISH: LoginText = LoginText {
 
 const RUSSIAN: LoginText = LoginText {
     lang: "ru",
+    dir: "ltr",
     title: "Вход",
     label: "Токен доступа",
     button: "Войти",
@@ -258,8 +262,98 @@ const RUSSIAN: LoginText = LoginText {
     wrong: "Токен не подходит.",
 };
 
-/// The sign-in page in every language the interface has (src/lib/locales/index.ts).
-const LOGIN_TEXTS: [&LoginText; 2] = [&ENGLISH, &RUSSIAN];
+const SPANISH: LoginText = LoginText {
+    lang: "es",
+    dir: "ltr",
+    title: "Iniciar sesión",
+    label: "Token de acceso",
+    button: "Iniciar sesión",
+    note: "El token se configura donde se ejecuta el servidor (SIGNALLAB_TOKEN o --token-file). Este navegador mantiene la sesión iniciada durante 7 días.",
+    wrong: "Ese token no es correcto.",
+};
+
+const FRENCH: LoginText = LoginText {
+    lang: "fr",
+    dir: "ltr",
+    title: "Connexion",
+    label: "Jeton d’accès",
+    button: "Se connecter",
+    note: "Le jeton est défini là où le serveur s’exécute (SIGNALLAB_TOKEN ou --token-file). Ce navigateur reste connecté pendant 7 jours.",
+    wrong: "Ce jeton n’est pas valide.",
+};
+
+const GERMAN: LoginText = LoginText {
+    lang: "de",
+    dir: "ltr",
+    title: "Anmelden",
+    label: "Zugriffstoken",
+    button: "Anmelden",
+    note: "Das Token wird dort festgelegt, wo der Server läuft (SIGNALLAB_TOKEN oder --token-file). Dieser Browser bleibt 7 Tage lang angemeldet.",
+    wrong: "Dieses Token ist nicht richtig.",
+};
+
+const PORTUGUESE: LoginText = LoginText {
+    lang: "pt",
+    dir: "ltr",
+    title: "Entrar",
+    label: "Token de acesso",
+    button: "Entrar",
+    note: "O token é definido onde o servidor é executado (SIGNALLAB_TOKEN ou --token-file). Este navegador permanece conectado por 7 dias.",
+    wrong: "Esse token não está correto.",
+};
+
+const CHINESE: LoginText = LoginText {
+    lang: "zh",
+    dir: "ltr",
+    title: "登录",
+    label: "访问令牌",
+    button: "登录",
+    note: "令牌在运行服务器的地方设置（SIGNALLAB_TOKEN 或 --token-file）。此浏览器将保持登录 7 天。",
+    wrong: "该令牌不正确。",
+};
+
+const JAPANESE: LoginText = LoginText {
+    lang: "ja",
+    dir: "ltr",
+    title: "サインイン",
+    label: "アクセストークン",
+    button: "サインイン",
+    note: "トークンはサーバーを実行している環境で設定します（SIGNALLAB_TOKEN または --token-file）。このブラウザーは 7 日間サインインしたままになります。",
+    wrong: "トークンが正しくありません。",
+};
+
+const KOREAN: LoginText = LoginText {
+    lang: "ko",
+    dir: "ltr",
+    title: "로그인",
+    label: "액세스 토큰",
+    button: "로그인",
+    note: "토큰은 서버가 실행되는 곳에서 설정합니다(SIGNALLAB_TOKEN 또는 --token-file). 이 브라우저는 7일 동안 로그인 상태로 유지됩니다.",
+    wrong: "토큰이 올바르지 않습니다.",
+};
+
+const HINDI: LoginText = LoginText {
+    lang: "hi",
+    dir: "ltr",
+    title: "साइन इन",
+    label: "एक्सेस टोकन",
+    button: "साइन इन करें",
+    note: "टोकन वहीं सेट किया जाता है जहाँ सर्वर चलता है (SIGNALLAB_TOKEN या --token-file)। यह ब्राउज़र 7 दिनों तक साइन इन रहेगा।",
+    wrong: "यह टोकन सही नहीं है।",
+};
+
+const ARABIC: LoginText = LoginText {
+    lang: "ar",
+    dir: "rtl",
+    title: "تسجيل الدخول",
+    label: "رمز الوصول",
+    button: "تسجيل الدخول",
+    note: "يُضبط الرمز حيث يعمل الخادم (SIGNALLAB_TOKEN أو --token-file). يبقى هذا المتصفح مسجَّل الدخول لمدة 7 أيام.",
+    wrong: "هذا الرمز غير صحيح.",
+};
+
+/// The sign-in page in every language the interface has (src/lib/locales/index.ts, in its order).
+const LOGIN_TEXTS: [&LoginText; 11] = [&ENGLISH, &RUSSIAN, &SPANISH, &FRENCH, &GERMAN, &PORTUGUESE, &CHINESE, &JAPANESE, &KOREAN, &HINDI, &ARABIC];
 
 /// The language of the sign-in page: the most preferred one of
 /// `Accept-Language` (by its `q` weights, then order) that the page has, by
@@ -297,6 +391,7 @@ fn login_html(text: &LoginText, wrong: bool) -> String {
     let error = if wrong { format!(r#"<p class="error" role="alert">{}</p>"#, text.wrong) } else { String::new() };
     include_str!("login.html")
         .replace("{{lang}}", text.lang)
+        .replace("{{dir}}", text.dir)
         .replace("{{title}}", text.title)
         .replace("{{label}}", text.label)
         .replace("{{button}}", text.button)

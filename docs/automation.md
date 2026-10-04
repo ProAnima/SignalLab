@@ -8,7 +8,7 @@ Signal Lab runs them without a person in three ways: the **command line**
 Claude Code, Claude Desktop, Cursor or VS Code, through `signallab mcp`) and the
 **HTTP API** of `signal-lab-server`. Both go through the engine's own command table, so a run
 in a pipeline is the run the app would make — same steps, same report, same
-messages in English or Russian.
+messages in the interface's languages (`--lang`).
 
 ## 1. The command line
 
@@ -115,7 +115,7 @@ is exit code 2, before any traffic.
 
 ### Language
 
-`--lang en|ru`, else `SIGNALLAB_LANG`, else the locale (`LC_ALL`,
+`--lang en|ru|es|fr|de|pt|zh|ja|ko|hi|ar`, else `SIGNALLAB_LANG`, else the locale (`LC_ALL`,
 `LC_MESSAGES`, `LANG`), else English. The texts are the interface's own
 (`src/lib/locales/*.ts`, embedded at build time), plural forms included.
 

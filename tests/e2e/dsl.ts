@@ -269,6 +269,17 @@ export const result = (root: ParentNode) => root.querySelector<HTMLElement>(".se
 /** Lines in the console strip, newest last. */
 export const logLines = () => [...document.querySelectorAll(".log-list .log-line .msg")].map(textOf);
 
+/** The interface in `code`, chosen from the header's language menu as a person does. */
+export async function chooseLanguage(code: string) {
+  const opener = document.querySelector<HTMLButtonElement>(".lang-menu-button");
+  if (!opener) throw new Error("no language menu in the header");
+  if (document.documentElement.lang === code) return;
+  await click(opener, "the language menu");
+  const item = await until(`${code} in the language menu`, () => document.querySelector<HTMLButtonElement>(`.lang-menu-list:popover-open [data-lang="${code}"]`));
+  await click(item, `the language ${code}`);
+  await until(`the interface in ${code}`, () => document.documentElement.lang === code);
+}
+
 export function closeOverlays() {
   // Menus, popovers and dialogs all close on Escape; a modal <dialog> also on its cancel.
   for (const dialog of document.querySelectorAll("dialog[open]")) dialog.dispatchEvent(new Event("cancel", { cancelable: true }));

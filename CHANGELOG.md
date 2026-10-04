@@ -12,6 +12,15 @@ release notes — so what is written here is what users read. See
 
 ### Added
 
+- **Nine more languages.** The interface, its tooltips and errors, the command
+  line, the server's sign-in page and the installer now speak Spanish, French,
+  German, Portuguese (Brazilian), Chinese (Simplified), Japanese, Korean, Hindi
+  and Arabic besides English and Russian. Arabic mirrors the page right to left;
+  addresses, hex dumps, code and the experiment canvas stay left to right.
+- **A language switch with flags.** The header shows the current language's flag
+  and letters and opens the list of every language, each by its flag and its own
+  name; the arrows, a letter, Enter and Escape work in it.
+
 - **TCP impairment.** The Impairment screen and the experiment's Impairment node
   take a protocol: over TCP each connection to the relay is joined to one of its
   own to the target, and both streams are delayed (in order, whatever the
@@ -333,6 +342,8 @@ release notes — so what is written here is what users read. See
 
 ### Fixed
 
+- The Impairment sliders' values sat against their labels (“Latency40 ms”) instead
+  of at the far end of the row.
 - The Inspector had no MQTT filter chip, although it captures MQTT.
 - A job that ended before it was registered — a burst of one against a refused port —
   stayed in the console strip's list for good.

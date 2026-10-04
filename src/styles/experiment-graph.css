@@ -5,7 +5,7 @@
 .app.sidebar-compact .brand-text, .app.sidebar-compact .nav-item .label, .app.sidebar-compact .foot { display: none; }
 .app.sidebar-compact .nav-item { justify-content: center; padding-inline: 0; }
 .app.sidebar-compact .nav-item .glyph { margin: 0; }
-.app.sidebar-compact .nav-item .badge { position: absolute; right: 3px; top: 3px; min-width: 12px; height: 12px; padding: 0 2px; font-size: 8px; }
+.app.sidebar-compact .nav-item .badge { position: absolute; inset-inline-end: 3px; top: 3px; min-width: 12px; height: 12px; padding: 0 2px; font-size: 8px; }
 .nav-toggle { flex: 0 0 auto; font-size: 16px; }
 .app.experiment-active .main { overflow: hidden; padding: 0; }
 .app.experiment-focus { display: block; height: 100vh; }
@@ -21,10 +21,10 @@
 .experiment-canvas-tools .fill { flex: 1; }
 .experiment-canvas-tools button { min-width: 26px; }
 .experiment-canvas-tools > button { flex-shrink: 0; white-space: nowrap; }
-.experiment-tool-group { display: flex; flex-shrink: 0; gap: 2px; padding-right: 6px; margin-right: 2px; border-right: 1px solid var(--border); }
+.experiment-tool-group { display: flex; flex-shrink: 0; gap: 2px; padding-inline-end: 6px; margin-inline-end: 2px; border-inline-end: 1px solid var(--border); }
 .experiment-tool-group button { font-size: 17px; line-height: 1; }
-.experiment-canvas-hint { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-left: 8px; color: var(--text-faint); font-size: 10px; }
-.experiment-node-count { margin-left: 4px; color: var(--text-faint); font: 10px var(--mono); }
+.experiment-canvas-hint { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-inline-start: 8px; color: var(--text-faint); font-size: 10px; }
+.experiment-node-count { margin-inline-start: 4px; color: var(--text-faint); font: 10px var(--mono); }
 .experiment-node-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 12px; }
 .experiment-node-actions .experiment-delete { margin-top: 0; color: var(--red); }
 .experiment-finder { max-width: calc(100vw - 32px); }
@@ -106,7 +106,7 @@
   width: 100%;
 }
 /* The type takes the room; the badges (×10, ↻3, the state) sit at the right. */
-.experiment-node-header > .experiment-node-type { margin-right: auto; }
+.experiment-node-header > .experiment-node-type { margin-inline-end: auto; }
 .node-status-badge {
   display: inline-flex;
   align-items: center;
@@ -159,14 +159,14 @@
 .experiment-properties fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
 .experiment-connection { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 5px 0; border-top: 1px solid var(--border); color: var(--text-dim); font-size: 11px; }
 .experiment-timeline-title { justify-content: flex-start; gap: 12px; }
-.experiment-timeline-title strong { margin-left: auto; }
+.experiment-timeline-title strong { margin-inline-start: auto; }
 .experiment-view.timeline-closed .experiment-timeline { height: 36px; min-height: 36px; }
 .experiment-view.timeline-closed .experiment-timeline-title { flex: 1; }
 .experiment-menu-backdrop { position: fixed; inset: 0; z-index: 100; }
 .experiment-add-menu { position: fixed; width: min(312px, calc(100vw - 16px)); max-height: calc(100vh - 16px); padding: 8px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface-2); box-shadow: var(--shadow-md); }
 .experiment-add-menu input { width: 100%; margin-bottom: 7px; }
 .experiment-add-menu > div { display: flex; flex-direction: column; max-height: min(370px, calc(100vh - 80px)); overflow: auto; }
-.experiment-add-menu button { display: flex; align-items: center; gap: 9px; width: 100%; padding: 7px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--text); text-align: left; font-size: 11px; }
+.experiment-add-menu button { display: flex; align-items: center; gap: 9px; width: 100%; padding: 7px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--text); text-align: start; font-size: 11px; }
 .experiment-add-menu button:hover, .experiment-add-menu button:focus-visible { background: var(--accent-soft); }
 @media (max-width: 900px) { .experiment-toolbar { flex-wrap: wrap; } .experiment-heading { min-width: 160px; } .experiment-save { display: none; } }
 
@@ -179,7 +179,7 @@
 [data-group="emulate"] { --node-color: var(--node-emulate); }
 [data-group="fault"] { --node-color: var(--node-fault); }
 .experiment-node-type { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
-.experiment-node-type::before { content: ""; display: inline-block; width: 5px; height: 12px; margin-right: var(--space-2); border-radius: var(--radius-xs); background: var(--node-color); vertical-align: -1px; }
+.experiment-node-type::before { content: ""; display: inline-block; width: 5px; height: 12px; margin-inline-end: var(--space-2); border-radius: var(--radius-xs); background: var(--node-color); vertical-align: -1px; }
 .experiment-add-menu .experiment-kind { flex: 0 0 26px; height: 26px; border-radius: var(--radius-xs); color: var(--node-color); background: var(--surface-3); font-size: 14px; }
 .experiment-catalog-results h3 { padding: var(--space-2); margin: var(--space-1) 0 0; font-size: 10px; font-weight: 600; color: var(--text-dim); }
 .experiment-catalog-results button { white-space: normal; border-radius: var(--radius-xs); padding: var(--space-2); }

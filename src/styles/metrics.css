@@ -31,4 +31,4 @@
 .metric .v.accent { color: var(--accent); }
 .metric .v.amber { color: var(--amber); }
 .metric .v.red { color: var(--red); }
-.metric .v small { font-size: 11px; color: var(--text-faint); font-weight: 400; margin-left: 2px; }
+.metric .v small { font-size: 11px; color: var(--text-faint); font-weight: 400; margin-inline-start: 2px; }

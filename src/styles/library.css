@@ -37,7 +37,7 @@
   background: transparent;
   color: var(--text-dim);
   font: inherit;
-  text-align: left;
+  text-align: start;
   cursor: pointer;
   transition: background 0.15s var(--ease), color 0.15s var(--ease);
 }
@@ -88,17 +88,17 @@
 
 /* Folders: a row that opens and closes, its count, and tools shown on hover or focus. */
 .sig-tree-tools { display: flex; align-items: center; gap: 4px; margin: 0 0 6px; min-height: 22px; }
-.sig-current-folder { margin-left: auto; max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: 10.5px; }
+.sig-current-folder { margin-inline-start: auto; max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: 10.5px; }
 .sig-list.drop { box-shadow: inset 0 0 0 1px var(--accent); border-radius: var(--radius-sm); }
 .sig-folder-row { display: flex; align-items: center; gap: 2px; margin-bottom: 2px; border-radius: var(--radius-sm); }
 .sig-folder-row.current { background: rgba(255, 255, 255, 0.03); }
 .sig-folder-row.drop { background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); }
-.sig-folder { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; padding: 5px 6px; border: 0; background: transparent; color: var(--text-dim); font: inherit; font-size: 12px; font-weight: 600; text-align: left; cursor: pointer; }
+.sig-folder { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; padding: 5px 6px; border: 0; background: transparent; color: var(--text-dim); font: inherit; font-size: 12px; font-weight: 600; text-align: start; cursor: pointer; }
 .sig-folder:hover { color: var(--text); background: transparent; }
 .sig-folder:active { transform: none; }
 .sig-folder-twist { width: 10px; color: var(--text-faint); font-family: var(--mono); }
 .sig-folder-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sig-folder-count { margin-left: auto; padding: 1px 7px; border-radius: 999px; background: var(--surface-3); color: var(--text-faint); font: 9.5px var(--mono); }
+.sig-folder-count { margin-inline-start: auto; padding: 1px 7px; border-radius: 999px; background: var(--surface-3); color: var(--text-faint); font: 9.5px var(--mono); }
 .sig-folder-tools { display: flex; gap: 2px; opacity: 0; transition: opacity 0.12s var(--ease); }
 .sig-folder-row:hover .sig-folder-tools, .sig-folder-row:focus-within .sig-folder-tools, .sig-folder-row.current .sig-folder-tools { opacity: 1; }
 .sig-folder-rename { flex: 1; min-width: 0; padding: 3px 6px; font-size: 12px; }

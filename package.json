@@ -24,6 +24,7 @@
     "@tauri-apps/plugin-opener": "^2.7.0",
     "@tauri-apps/plugin-process": "^2.4.0",
     "@tauri-apps/plugin-updater": "^2.13.1",
+    "flag-icons": "^7.5.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },

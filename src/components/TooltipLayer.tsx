@@ -133,16 +133,23 @@ export function TooltipLayer() {
     };
   }, []);
 
-  // A tooltip follows its element's text, e.g. when the language changes.
+  // A tooltip follows its element: its text when the language changes, and its place
+  // when the page turns round (Arabic mirrors it), measured again.
   useEffect(() => {
     if (!shown) return;
-    const observer = new MutationObserver(() => {
+    const follow = (moved: boolean) => {
       const text = shown.target.dataset.tip?.trim();
       if (!text) { current.current = null; setShown(null); }
-      else if (text !== shown.text) { current.current = { ...shown, text }; setShown(current.current); }
-    });
-    observer.observe(shown.target, { attributes: true, attributeFilter: ["data-tip"] });
-    return () => observer.disconnect();
+      else if (moved || text !== shown.text) { current.current = { ...shown, text }; setShown(current.current); }
+    };
+    // Focus can come back to the language menu's button before the language it chose is
+    // drawn: the text read then is the old one, and its change came before this observer.
+    follow(false);
+    const own = new MutationObserver(() => follow(false));
+    own.observe(shown.target, { attributes: true, attributeFilter: ["data-tip"] });
+    const page = new MutationObserver(() => follow(true));
+    page.observe(document.documentElement, { attributes: true, attributeFilter: ["dir", "lang"] });
+    return () => { own.disconnect(); page.disconnect(); };
   }, [shown]);
 
   // Described by the tooltip while it shows — unless it only repeats the element's name.
@@ -171,7 +178,12 @@ export function TooltipLayer() {
     tip.style.left = "0px";
     tip.style.top = "0px";
     const box = shown.target.getBoundingClientRect();
-    setPlace(placeTip(box, { width: tip.offsetWidth, height: tip.offsetHeight }, { width: window.innerWidth, height: window.innerHeight }));
+    const next = placeTip(box, { width: tip.offsetWidth, height: tip.offsetHeight }, { width: window.innerWidth, height: window.innerHeight });
+    // Written here as well: measured again in the same place, React sees the style it last
+    // rendered and would leave the tooltip at the origin it was just measured at.
+    tip.style.left = `${next.left}px`;
+    tip.style.top = `${next.top}px`;
+    setPlace(next);
   }, [shown]);
 
   if (!shown) return null;

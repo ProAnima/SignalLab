@@ -3,14 +3,14 @@ import {
   type ReactNode,
 } from "react";
 import { en, type TKey } from "./locales/en";
-import { CODES, dictOf, LOCALES, SOURCE, type Lang } from "./locales/index";
+import { CODES, dictOf, dirOf, intlOf, LOCALES, SOURCE, type Lang } from "./locales/index";
 import { format, pickLanguage, type Params } from "./translate";
 import { setFormatLanguage } from "./format";
 
 export type { TKey, Lang };
 
-/** The languages, for the switch: code, own name, two letters. */
-export const LANGS = LOCALES.map(({ code, name, short }) => ({ code, label: name, short }));
+/** The languages, for the switch: code, own name, two letters, which way it reads. */
+export const LANGS = LOCALES.map((locale) => ({ code: locale.code, label: locale.name, short: locale.short, dir: dirOf(locale.code) }));
 
 const STORAGE_KEY = "signal-lab.lang";
 
@@ -42,7 +42,8 @@ export function translator(lang: Lang): Translate {
   const source = en as Record<string, string | undefined>;
   // Unknown key → the source language, then the key itself (which is how raw
   // engine strings pass through untouched).
-  return (key, params) => format(dict[key] ?? source[key] ?? key, params, lang);
+  const intl = intlOf(lang);
+  return (key, params) => format(dict[key] ?? source[key] ?? key, params, intl);
 }
 
 interface I18n {
@@ -58,6 +59,8 @@ export function I18nProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     document.documentElement.lang = lang;
+    // A right-to-left language mirrors the page; styles/rtl.css keeps the data in it left to right.
+    document.documentElement.dir = dirOf(lang);
   }, [lang]);
 
   const setLang = useCallback((next: Lang) => {
@@ -71,7 +74,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
 
   const t = useMemo(() => translator(lang), [lang]);
   // Before the children render, so their numbers and sizes are in this language.
-  setFormatLanguage(lang, { b: t("unit.b"), kb: t("unit.kb"), mb: t("unit.mb"), gb: t("unit.gb") });
+  setFormatLanguage(intlOf(lang), { b: t("unit.b"), kb: t("unit.kb"), mb: t("unit.mb"), gb: t("unit.gb") });
 
   const value = useMemo(() => ({ lang, setLang, t }), [lang, setLang, t]);
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

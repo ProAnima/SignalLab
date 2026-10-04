@@ -5,7 +5,7 @@
 .experiment-test-result > span { min-width: 0; overflow-wrap: anywhere; }
 .experiment-test-result.ok > span { color: var(--accent); }
 .experiment-test-result.fail > span { color: var(--red); }
-.experiment-test-result time { margin-left: auto; flex-shrink: 0; color: var(--text-faint); }
+.experiment-test-result time { margin-inline-start: auto; flex-shrink: 0; color: var(--text-faint); }
 .experiment-test-body { margin-top: var(--space-2); font-size: 11px; color: var(--text-dim); }
 .experiment-test-body summary { cursor: pointer; }
 .experiment-test-body pre { max-height: 220px; overflow: auto; margin: var(--space-2) 0 0; padding: var(--space-2); border: 1px solid var(--border); border-radius: var(--radius-xs); background: var(--bg-input); font: 10.5px/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
@@ -16,7 +16,7 @@
 .template-suggestions { position: absolute; z-index: 20; left: 0; right: 0; top: calc(100% + 4px); display: flex; flex-direction: column; max-height: 260px; overflow: auto; padding: var(--space-1); border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface-2); box-shadow: var(--shadow-md); }
 .template-suggestion-row { display: flex; flex-direction: column; }
 .template-suggestion-group { padding: 6px 7px 2px; color: var(--text-faint); font-size: 9.5px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; }
-.template-suggestions button { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; width: 100%; padding: 5px 7px; border: 0; border-radius: var(--radius-xs); background: transparent; text-align: left; white-space: normal; }
+.template-suggestions button { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; width: 100%; padding: 5px 7px; border: 0; border-radius: var(--radius-xs); background: transparent; text-align: start; white-space: normal; }
 .template-suggestions button.active, .template-suggestions button:hover { background: var(--accent-soft); }
 .template-suggestions code { color: var(--accent); font: 11px var(--mono); }
 .template-suggestions small { color: var(--text-dim); font-size: 10.5px; font-weight: 400; overflow-wrap: anywhere; }
@@ -55,7 +55,7 @@
 .experiment-profile-tabs button { padding: 4px 10px; border: 1px solid var(--border); border-radius: 999px; background: transparent; color: var(--text-dim); font-size: 11px; }
 .experiment-profile-tabs button.selected { border-color: var(--accent-deep); background: var(--accent-soft); color: var(--text); }
 .experiment-profile-tabs .experiment-profile-add { border-style: dashed; }
-.experiment-active-dot { margin-right: 5px; color: var(--accent); font-size: 8px; vertical-align: 1px; }
+.experiment-active-dot { margin-inline-end: 5px; color: var(--accent); font-size: 8px; vertical-align: 1px; }
 .experiment-profile-warning { color: var(--amber); }
 .experiment-profile-head { display: flex; align-items: center; gap: var(--space-2); margin-bottom: var(--space-2); }
 .experiment-profile-head input { flex: 1; min-width: 0; font-weight: 600; }
@@ -70,8 +70,8 @@
 
 /* Run and Run with… as one control. */
 .experiment-run-group { display: flex; flex-shrink: 0; }
-.experiment-run-group > button:first-child:not(:only-child) { border-top-right-radius: 0; border-bottom-right-radius: 0; }
-.experiment-run-more { padding-inline: 8px; border-left: 1px solid rgba(4, 20, 14, .35); border-top-left-radius: 0; border-bottom-left-radius: 0; }
+.experiment-run-group > button:first-child:not(:only-child) { border-start-end-radius: 0; border-end-end-radius: 0; }
+.experiment-run-more { padding-inline: 8px; border-inline-start: 1px solid rgba(4, 20, 14, .35); border-start-start-radius: 0; border-end-start-radius: 0; }
 .experiment-run-with { position: fixed; z-index: 101; display: flex; flex-direction: column; gap: var(--space-2); width: min(360px, calc(100vw - 16px)); max-height: calc(100vh - 80px); overflow: auto; padding: var(--space-3); border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface-2); box-shadow: var(--shadow-md); }
 .experiment-run-with header { display: flex; align-items: center; justify-content: space-between; }
 .experiment-run-with header strong { font-size: 13px; }

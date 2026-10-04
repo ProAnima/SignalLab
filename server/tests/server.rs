@@ -126,9 +126,18 @@ async fn with_a_token_everything_but_health_and_sign_in_needs_it() {
     assert!(english.contains(r#"data-tip="The token is set where the server runs"#), "{english}");
     assert!(!english.contains("{{"), "every placeholder is filled in");
     // The most preferred language the page has, by weight — not just the first tag.
-    for (accept, lang) in [("de-DE,ru;q=0.9,en;q=0.8", "ru"), ("en;q=0.5, ru", "ru"), ("ru;q=0, en", "en"), ("fr, ja", "en"), ("", "en")] {
+    for (accept, lang) in [("de-DE,ru;q=0.9,en;q=0.8", "de"), ("nl-NL,ru;q=0.9", "ru"), ("en;q=0.5, ru", "ru"), ("ru;q=0, en", "en"), ("fr, ja", "fr"), ("sv, nl", "en"), ("zh-CN", "zh"), ("", "en")] {
         let page = client().get(format!("{}/login", running.url)).header("accept-language", accept).send().await.unwrap().text().await.unwrap();
-        assert!(page.contains(&format!(r#"<html lang="{lang}">"#)), "{accept}: {lang}");
+        assert!(page.contains(&format!(r#"<html lang="{lang}" dir="ltr">"#)), "{accept}: {lang}");
+    }
+    // Arabic reads right to left.
+    let arabic = client().get(format!("{}/login", running.url)).header("accept-language", "ar-SA").send().await.unwrap().text().await.unwrap();
+    assert!(arabic.contains(r#"<html lang="ar" dir="rtl">"#) && arabic.contains("رمز الوصول"), "{arabic}");
+    // Every language of the interface has its sign-in page (src/lib/locales/index.ts).
+    let index = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../src/lib/locales/index.ts")).unwrap();
+    for code in index.split("{ code: \"").skip(1).map(|rest| rest.split('"').next().unwrap_or_default()) {
+        let page = client().get(format!("{}/login", running.url)).header("accept-language", code).send().await.unwrap().text().await.unwrap();
+        assert!(page.contains(&format!(r#"<html lang="{code}""#)), "{code} has no sign-in page");
     }
 
     // Signing in sets an HttpOnly, SameSite=Strict session cookie; signing out ends it.

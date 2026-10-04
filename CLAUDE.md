@@ -66,7 +66,9 @@ src/                      React UI
   lib/i18n.tsx            language provider, detection, t()
   lib/translate.ts        {placeholder} and ICU {n, plural, …} filling, numbers per language (pure)
   lib/locales/index.ts    LOCALES: the languages; adding one = a dictionary + a line (docs/localization.md)
-  lib/locales/en.ts       source of truth for every string; ru.ts is typed against it
+  lib/locales/en.ts       source of truth for every string; ru, es, fr, de, pt, zh, ja, ko, hi, ar are typed against it
+  lib/flags.ts            each language's flag (flag-icons, MIT; Spain's civil flag drawn in assets/flags)
+  components/LanguageMenu.tsx  the header's language switch: flag + letters, a popover list, arrows/letters/Enter/Escape
   components/Scope.tsx    canvas oscilloscope (no chart library)
   components/OscArgs.tsx  typed OSC argument editor (OSC + Broadcast + Signals share it)
   components/Palette.tsx  Ctrl+K signal palette, mounted once in the shell
@@ -201,7 +203,8 @@ action.yml                the GitHub Action: signallab from the image, a JUnit r
 Dockerfile, deploy/compose.yaml, scripts/image.mjs   the server image and its smoke test
 deploy/install.sh         the server on a Linux host in one command (Docker, host network, token)
 src-tauri/installer/      the installers' artwork (generated, committed; tests/installer.test.mjs),
-                          hooks.nsh + path.ps1 (setup: signallab.exe, PATH, firewall), cli.wxs (MSI)
+                          hooks.nsh + path.ps1 (setup: signallab.exe, PATH, firewall), cli.wxs (MSI),
+                          Hindi.nsh, Korean.nsh (setup messages Tauri or NSIS lack in them)
 scripts/cli-bundle.mjs    builds signallab for the installers (beforeBundleCommand)
 src/components/FirewallBanner.tsx  the desktop app's firewall notice, with Allow
 ```
@@ -337,14 +340,20 @@ src/components/FirewallBanner.tsx  the desktop app's firewall notice, with Allow
   to `engine::inspect`. Capture is armed explicitly; while disarmed the publish
   path is a single atomic load. High-rate sources go through the rate gate and
   report what wasn't drawn as *"N not shown"*.
-- **`en.ts` defines the `Dict` type.** A key missing from `ru.ts` is a compile
-  error, so `npm run build` is the translation check; `tests/i18n.test.mjs`
+- **`en.ts` defines the `Dict` type.** A key missing from another dictionary is
+  a compile error, so `npm run build` is the translation check; `tests/i18n.test.mjs`
   adds that every language asks for the same values, has every plural form its
   rules need, and that every literal key in the code exists. Console lines store
   key + params, never finished text — that's what makes live language switching
   re-render the backlog. A count is a plural (`{n, plural, one {# x} other {# xs}}`)
   and gets the number itself, not `fmtNum(n)`; numbers and sizes go through
-  `fmtNum`/`fmtBytes`, which follow the language. See docs/localization.md.
+  `fmtNum`/`fmtBytes`, which follow the language. A language is in five places
+  besides its dictionary — `LOCALES`, `flags.ts`, the CLI's `Lang` (plural rules
+  and number style, tested against `Intl`), the server's `LoginText`, NSIS's
+  `languages` — and the tests fail on one that lacks it. Arabic reads right to
+  left: write sides as inline-start/end (`margin-inline-start`, `text-align:
+  start`, `inset-inline-end`), never left/right unless it is data that stays
+  left to right (`styles/rtl.css`: the canvas, hex, code). See docs/localization.md.
 - **Every clickable thing is a real `<button>`**, sidebar nav and filter chips
   included; they need focus rings and Space/Enter. Never put a click target
   inside a `<label>`. `--text-faint` carries the 9.5px labels and is tuned to

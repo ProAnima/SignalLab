@@ -8,7 +8,7 @@
 .error-message p { margin: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px var(--space-2); }
 .error-where { color: var(--text); font-weight: 600; }
 .error-where::after { content: " —"; color: var(--text-faint); font-weight: 400; }
-.error-show { margin-left: auto; }
+.error-show { margin-inline-start: auto; }
 .error-detail { margin-top: 2px; color: var(--text-dim); }
 .error-detail summary { width: fit-content; cursor: pointer; color: var(--text-faint); }
 .error-detail summary:focus-visible { outline: none; box-shadow: var(--ring); border-radius: var(--radius-xs); }

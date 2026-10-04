@@ -201,7 +201,7 @@ export function MqttView({ onWaitFor, load, onShowSignal }: {
       <div key={node.path}>
         <button
           className={"topic-row" + (picked === node.path ? " active" : "")}
-          style={{ paddingLeft: 8 + depth * 14 }}
+          style={{ paddingInlineStart: 8 + depth * 14 }}
           onClick={() => { setPicked(node.last ? node.path : picked); if (kids.length) toggle(node.path); }}
         >
           <span className="topic-twist">{kids.length ? (open ? "▾" : "▸") : "·"}</span>

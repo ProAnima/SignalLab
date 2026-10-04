@@ -394,6 +394,7 @@ export const ru: Dict = {
   "nav.short.broadcast": "Эфир",
   "nav.short.netsim": "Помехи",
   "nav.short.ws": "WS",
+  "nav.short.storm": "Шторм",
 
   "console.title": "Консоль",
   "dock.tabs": "Нижняя панель",

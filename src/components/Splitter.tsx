@@ -11,7 +11,9 @@ const STEP = 16;
  * that says how big the pane is, so a screen reader can tell.
  *
  * The pane it sizes is the one *after* the handle — below a horizontal one,
- * to the right of a vertical one — so dragging up or left makes it bigger.
+ * after a vertical one in reading order (to its right, or its left in a
+ * right-to-left page) — so dragging up, or towards the reading's start, makes
+ * it bigger.
  */
 export function Splitter({ orientation, label, size, min, max, initial, onSize }: {
   /** `horizontal`: a bar that sizes a height; `vertical`: one that sizes a width. */
@@ -35,6 +37,8 @@ export function Splitter({ orientation, label, size, min, max, initial, onSize }
   const horizontal = orientation === "horizontal";
   const clamp = (value: number) => Math.round(Math.min(Math.max(value, min), Math.max(min, max())));
   const position = (event: PointerEvent) => horizontal ? event.clientY : event.clientX;
+  // A vertical handle in a right-to-left page sizes the pane on its left: the other way round.
+  const rtl = () => !horizontal && !!handle.current && getComputedStyle(handle.current).direction === "rtl";
   const cursor = horizontal ? "resizing-rows" : "resizing-columns";
 
   const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
@@ -49,7 +53,7 @@ export function Splitter({ orientation, label, size, min, max, initial, onSize }
   };
   const onPointerMove = (event: PointerEvent<HTMLDivElement>) => {
     const d = drag.current;
-    if (d) resize(clamp(d.size - (position(event) - d.start)));
+    if (d) resize(clamp(d.size - (position(event) - d.start) * (rtl() ? -1 : 1)));
   };
   const end = () => {
     drag.current = null;
@@ -58,8 +62,8 @@ export function Splitter({ orientation, label, size, min, max, initial, onSize }
   };
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     const step = event.shiftKey ? STEP * 4 : STEP;
-    const grow = horizontal ? "ArrowUp" : "ArrowLeft";
-    const shrink = horizontal ? "ArrowDown" : "ArrowRight";
+    const grow = horizontal ? "ArrowUp" : rtl() ? "ArrowRight" : "ArrowLeft";
+    const shrink = horizontal ? "ArrowDown" : rtl() ? "ArrowLeft" : "ArrowRight";
     const current = latest.current;
     const next = event.key === grow ? current + step : event.key === shrink ? current - step
       : event.key === "Home" ? min : event.key === "End" ? max() : event.key === "Enter" ? initial : null;

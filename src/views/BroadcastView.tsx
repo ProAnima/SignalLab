@@ -481,7 +481,7 @@ export function BroadcastView() {
             </div>
 
             {respond && (
-              <div style={{ borderLeft: "2px solid var(--border-strong)", paddingLeft: 12, marginBottom: 12 }}>
+              <div style={{ borderInlineStart: "2px solid var(--border-strong)", paddingInlineStart: 12, marginBottom: 12 }}>
                 <PayloadEditor value={response} onChange={setResponse} disabled={!!discJob} t={t} />
                 <div className="row">
                   <div className="field">

@@ -31,11 +31,45 @@ test("the installers' artwork exists at the sizes NSIS and WiX draw it", () => {
   assert.ok(existsSync(join("src-tauri", windows.nsis.installerIcon)), "the installer has the app's icon");
 });
 
-test("installing takes few steps and both languages", () => {
+test("installing takes few steps, in the interface's languages", () => {
   assert.equal(conf.bundle.licenseFile, undefined, "MIT asks for no acceptance, so there is no license page to click through");
-  assert.deepEqual(windows.nsis.languages, ["English", "Russian"]);
+  // NSIS's own names for the languages of src/lib/locales/index.ts, in its order.
+  assert.deepEqual(windows.nsis.languages, ["English", "Russian", "Spanish", "French", "German", "PortugueseBR", "SimpChinese", "Japanese", "Korean", "Hindi", "Arabic"]);
   assert.equal(windows.nsis.displayLanguageSelector, true);
   assert.equal(windows.nsis.installMode, "both", "per user without admin rights, or for every user of a show PC");
+});
+
+test("the installer's messages Tauri or NSIS lack: Tauri's in Hindi, the who-to-install-for page in Korean", () => {
+  // Tauri's English.nsh: every name it uses, with the values NSIS fills in.
+  const TAURI = {
+    addOrReinstall: [], alreadyInstalled: [], alreadyInstalledLong: ["${PRODUCTNAME}", "${VERSION}"],
+    appRunning: ["{{product_name}}"], appRunningOkKill: ["{{product_name}}", "$\\n"], chooseMaintenanceOption: [],
+    choowHowToInstall: ["${PRODUCTNAME}"], createDesktop: [], dontUninstall: [], dontUninstallDowngrade: [],
+    failedToKillApp: ["{{product_name}}"], installingWebview2: [], newerVersionInstalled: ["${PRODUCTNAME}"], older: [],
+    olderOrUnknownVersionInstalled: ["$R4", "${PRODUCTNAME}"], silentDowngrades: ["$\\n"], unableToUninstall: [],
+    uninstallApp: ["${PRODUCTNAME}"], uninstallBeforeInstalling: [], unknown: [], webview2AbortError: [],
+    webview2DownloadError: ["$0"], webview2DownloadSuccess: [], webview2Downloading: [], webview2InstallError: ["$1"],
+    webview2InstallSuccess: [], deleteAppData: [],
+  };
+  // NSIS's Korean.nsh has no MultiUser page and falls back to English for it.
+  const MULTIUSER = {
+    MULTIUSER_TEXT_INSTALLMODE_TITLE: [], MULTIUSER_TEXT_INSTALLMODE_SUBTITLE: ["$(^NameDA)"],
+    MULTIUSER_INNERTEXT_INSTALLMODE_TOP: ["$(^NameDA)", "$(^ClickNext)"],
+    MULTIUSER_INNERTEXT_INSTALLMODE_ALLUSERS: [], MULTIUSER_INNERTEXT_INSTALLMODE_CURRENTUSER: [],
+  };
+  const OURS = { Hindi: [/\p{Script=Devanagari}/u, TAURI], Korean: [/\p{Script=Hangul}/u, { ...TAURI, ...MULTIUSER }] };
+  assert.deepEqual(Object.keys(windows.nsis.customLanguageFiles ?? {}).sort(), Object.keys(OURS).sort());
+  for (const [language, [script, names]] of Object.entries(OURS)) {
+    const bytes = readFileSync(join("src-tauri", windows.nsis.customLanguageFiles[language]));
+    assert.notEqual(bytes.subarray(0, 3).toString("hex"), "efbbbf", `${language}: plain UTF-8 — Tauri adds the BOM as it copies the file, and makensis stops at a second one`);
+    const id = new RegExp(String.raw`^LangString (\w+) \$\{LANG_${language.toUpperCase()}\} "(.*)"$`, "gm");
+    const texts = new Map([...bytes.toString("utf8").matchAll(id)].map((found) => [found[1], found[2]]));
+    assert.deepEqual([...texts.keys()].sort(), Object.keys(names).sort(), `${language}: every message, once`);
+    for (const [name, values] of Object.entries(names)) {
+      for (const value of values) assert.ok(texts.get(name).includes(value), `${language} ${name} keeps ${value}`);
+      assert.match(texts.get(name), script, `${language} ${name} is in the language`);
+    }
+  }
 });
 
 test("the command line comes with the app: in the setup, the MSI and the Linux packages", () => {
