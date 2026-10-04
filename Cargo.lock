@@ -3964,7 +3964,7 @@ dependencies = [
 
 [[package]]
 name = "signal-lab"
-version = "0.3.1"
+version = "1.0.0"
 dependencies = [
  "serde_json",
  "signal-lab-engine",
@@ -3978,7 +3978,7 @@ dependencies = [
 
 [[package]]
 name = "signal-lab-cli"
-version = "0.3.1"
+version = "1.0.0"
 dependencies = [
  "clap",
  "futures-util",
@@ -3994,7 +3994,7 @@ dependencies = [
 
 [[package]]
 name = "signal-lab-engine"
-version = "0.3.1"
+version = "1.0.0"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -4019,7 +4019,7 @@ dependencies = [
 
 [[package]]
 name = "signal-lab-server"
-version = "0.3.1"
+version = "1.0.0"
 dependencies = [
  "axum",
  "clap",
