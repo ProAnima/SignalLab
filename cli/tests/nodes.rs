@@ -143,7 +143,8 @@ fn the_document_uses_every_kind_of_node() {
     for kind in KINDS {
         assert!(catalogue.contains(&format!("\"exp.node.{kind}\":")), "{kind} is a node the interface knows");
     }
-    let engine = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../engine/src/experiment.rs")).unwrap();
+    // As checked out: a Windows checkout ends its lines with CRLF.
+    let engine = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../engine/src/experiment.rs")).unwrap().replace("\r\n", "\n");
     let start = engine.find("pub enum NodeKind {").unwrap();
     let body = &engine[start..start + engine[start..].find("\n}\n").unwrap()];
     let variants = body.lines().filter(|line| line.starts_with("    ") && !line.starts_with("     ") && line.trim_start().starts_with(|c: char| c.is_ascii_uppercase())).count();

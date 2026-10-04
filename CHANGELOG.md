@@ -344,6 +344,8 @@ release notes — so what is written here is what users read. See
 
 ### Fixed
 
+- The GitHub Action with `fail-on-error: "false"` still failed its step on a failed
+  run and handed on no `exit-code` to branch on.
 - The Impairment sliders' values sat against their labels (“Latency40 ms”) instead
   of at the far end of the row.
 - The Inspector had no MQTT filter chip, although it captures MQTT.

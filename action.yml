@@ -138,13 +138,15 @@ runs:
         done < <(env | sed -n 's/^\(SIGNALLAB_SECRET_[A-Za-z0-9_]*\)=.*/\1/p')
 
         # As the runner's user, so the report in the workspace belongs to the job.
+        # The code is an output either way; the next step fails the job with it (a step
+        # that fails here would not hand its outputs to the workflow). Read with ||: the
+        # runner starts this shell with -e, which would end it at a failing run.
+        code=0
         docker run --rm --network host "${pass[@]}" \
           --user "$(id -u):$(id -g)" \
           -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" -w "$PWD" \
-          --entrypoint signallab "$INPUT_IMAGE:$INPUT_VERSION" "${args[@]}"
-        # The code is an output either way; the next step fails the job with it (a step
-        # that fails here would not hand its outputs to the workflow).
-        echo "exit-code=$?" >> "$GITHUB_OUTPUT"
+          --entrypoint signallab "$INPUT_IMAGE:$INPUT_VERSION" "${args[@]}" || code=$?
+        echo "exit-code=$code" >> "$GITHUB_OUTPUT"
 
     - name: Fail when signallab did
       if: steps.run.outputs.exit-code != '0' && inputs.fail-on-error != 'false'
