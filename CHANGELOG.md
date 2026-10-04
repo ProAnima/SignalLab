@@ -157,7 +157,8 @@ release notes — so what is written here is what users read. See
   or **Digest**: the server's 401 challenge is answered (RFC 7616: MD5 and SHA-256, their
   `-sess` variants, `qop=auth` and `auth-int`) and the request sent again; a burst
   answers one challenge for all its requests — in parallel too, never sending a count
-  twice — and a stale nonce once more. Behind a redirect the URL that asks is the one
+  twice — and a stale nonce again, a few times at most, as under load a new nonce can
+  run out before a request that met it is answered. Behind a redirect the URL that asks is the one
   answered; a challenge from another origin is not. The credentials go only into the
   request: nothing in the Inspector, a step or a report shows them, a node's password
   can be `{{secret.NAME}}`, and a secret is masked in Basic's base64 too. A request

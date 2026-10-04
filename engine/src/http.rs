@@ -72,6 +72,11 @@ const MAX_BODY_PREVIEW: usize = 256 * 1024;
 /// Redirects followed, as reqwest's own default.
 const MAX_REDIRECTS: usize = 10;
 
+/// Answers to one request's Digest challenges after the first, while the server
+/// says the nonce ran out or asks with another: under load a new nonce can wear
+/// out before a request that met it is answered.
+const DIGEST_ROUNDS: usize = 3;
+
 /// A client for `req`: a Digest request follows its redirects itself, so the
 /// URL that asks is the one answered.
 pub(crate) fn build_client(req: &HttpRequest, jar: Option<Arc<CookieJar>>) -> EngineResult<reqwest::Client> {
@@ -169,6 +174,11 @@ async fn exchange(client: &reqwest::Client, out: &Outgoing<'_>, authorization: O
     }
 }
 
+/// The `WWW-Authenticate` values of a response, for `http_auth::digest_challenge`.
+fn challenges(response: &HttpResponse) -> impl Iterator<Item = &str> {
+    response.headers.iter().filter(|(name, _)| name.eq_ignore_ascii_case("www-authenticate")).map(|(_, value)| value.as_str())
+}
+
 /// The request target a Digest answer hashes: the URL's path and query.
 fn request_target(url: &reqwest::Url) -> String {
     match url.query() {
@@ -190,7 +200,7 @@ pub(crate) async fn execute(client: &reqwest::Client, req: &HttpRequest, memory:
 
 /// A Digest request. The 401's challenge is answered and the request sent
 /// again — or, when `memory` holds what this origin asked an earlier request,
-/// answered at once; a stale or new challenge is answered once more. Redirects
+/// answered at once; a stale or new challenge is answered again (`DIGEST_ROUNDS`). Redirects
 /// are followed here, as reqwest follows them, so the URL that asks is the one
 /// answered, with its own path and the method that reached it; a challenge
 /// from another origin than the request's is not answered (`answerable`).
@@ -219,21 +229,36 @@ async fn digest(client: &reqwest::Client, req: &HttpRequest, username: &str, pas
             outcome.get_or_insert(DigestOutcome { challenged: false, error: None });
         }
         if response.status == 401 {
-            let offered = response.headers.iter().filter(|(name, _)| name.eq_ignore_ascii_case("www-authenticate")).map(|(_, value)| value.as_str());
             let refused = |error: EngineError| Some(DigestOutcome { challenged: false, error: Some(error) });
-            match http_auth::digest_challenge(offered) {
+            match http_auth::digest_challenge(challenges(&response)) {
                 Ok(Some(_)) if !answerable_here => {
                     return HttpResponse { latency_ms, digest: refused(EngineError::new("http.digest_other_origin").with("origin", &here)), ..response };
                 }
                 Ok(Some(challenge)) => {
-                    let answering = memory.remember(&here, challenge);
-                    let second = exchange(client, &out, Some(&answer(&answering))).await;
-                    latency_ms += second.latency_ms;
-                    if second.status == 401 {
-                        memory.forget(&here, &answering.challenge.nonce);
+                    let mut asked = challenge;
+                    let mut rounds = 0;
+                    loop {
+                        let answering = memory.remember(&here, asked);
+                        response = exchange(client, &out, Some(&answer(&answering))).await;
+                        latency_ms += response.latency_ms;
+                        if response.status != 401 {
+                            break;
+                        }
+                        // Asked again because the nonce ran out, or because the server has
+                        // another by now: answered again, a few times at most. Refused with
+                        // the nonce just answered, it is the credentials that are wrong.
+                        match http_auth::digest_challenge(challenges(&response)) {
+                            Ok(Some(next)) if rounds < DIGEST_ROUNDS && (next.stale || next.nonce != answering.challenge.nonce) => {
+                                asked = next;
+                                rounds += 1;
+                            }
+                            _ => {
+                                memory.forget(&here, &answering.challenge.nonce);
+                                break;
+                            }
+                        }
                     }
                     outcome = Some(DigestOutcome { challenged: true, error: None });
-                    response = second;
                 }
                 Ok(None) => return HttpResponse { latency_ms, digest: refused(EngineError::new("http.digest_not_offered")), ..response },
                 Err(error) => return HttpResponse { latency_ms, digest: refused(error), ..response },

@@ -275,22 +275,34 @@ impl Answering {
     }
 }
 
-/// The Digest challenge of one origin, remembered across the requests of a
-/// burst so each one after the first answers it at once — one round trip, as
-/// a browser does. Every answer to one nonce counts on with one client nonce
-/// (which `-sess` hashes into its first hash), so requests in flight together
-/// that meet the same new nonce never send the same count twice.
+/// How many of one origin's nonces are kept: those the requests of a burst in
+/// flight together may still be answering when the server has moved on.
+const KEPT_NONCES: usize = 8;
+
+/// The Digest challenges of one origin, remembered across the requests of a
+/// burst so each one after the first answers at once — one round trip, as a
+/// browser does — with the nonce asked for last. Every answer to one nonce
+/// counts on with that nonce's client nonce (which `-sess` hashes into its
+/// first hash) for as long as it is kept: requests in flight together never
+/// send the same count twice, and one that meets a nonce again — a late reply,
+/// the server gone on to the next — counts on with it instead of starting it
+/// over with another client nonce, which a `-sess` server would refuse.
 #[derive(Default)]
 pub struct DigestMemory(Mutex<Option<Remembered>>);
 
 struct Remembered {
     origin: String,
+    /// Newest last: what a request answers before it is asked.
+    nonces: Vec<Counted>,
+}
+
+struct Counted {
     challenge: Challenge,
     nc: u32,
     cnonce: String,
 }
 
-impl Remembered {
+impl Counted {
     fn answer(&mut self) -> Answering {
         self.nc += 1;
         Answering { challenge: self.challenge.clone(), nc: self.nc, cnonce: self.cnonce.clone() }
@@ -301,26 +313,34 @@ impl DigestMemory {
     /// The next answer to what `origin` asked last, if it asked.
     pub fn next(&self, origin: &str) -> Option<Answering> {
         let mut held = self.0.lock().unwrap();
-        Some(held.as_mut().filter(|held| held.origin == origin)?.answer())
+        Some(held.as_mut().filter(|held| held.origin == origin)?.nonces.last_mut()?.answer())
     }
 
-    /// The answer to a challenge `origin` just gave: its nonce counted on when
-    /// it is the one held, else counted from 1 with a new client nonce.
+    /// The answer to a challenge `origin` just gave, which becomes what is
+    /// answered at once: a nonce already kept counts on, a new one from 1 with
+    /// a client nonce of its own.
     pub fn remember(&self, origin: &str, challenge: Challenge) -> Answering {
         let mut held = self.0.lock().unwrap();
-        if let Some(same) = held.as_mut().filter(|held| held.origin == origin && held.challenge.realm == challenge.realm && held.challenge.nonce == challenge.nonce) {
-            same.challenge = challenge;
-            return same.answer();
+        if !held.as_ref().is_some_and(|held| held.origin == origin) {
+            *held = Some(Remembered { origin: origin.into(), nonces: Vec::new() });
         }
-        let fresh = held.insert(Remembered { origin: origin.into(), challenge, nc: 0, cnonce: cnonce() });
-        fresh.answer()
+        let nonces = &mut held.as_mut().expect("just set").nonces;
+        let counted = match nonces.iter().position(|kept| kept.challenge.realm == challenge.realm && kept.challenge.nonce == challenge.nonce) {
+            Some(at) => Counted { challenge, ..nonces.remove(at) },
+            None => Counted { challenge, nc: 0, cnonce: cnonce() },
+        };
+        nonces.push(counted);
+        if nonces.len() > KEPT_NONCES {
+            nonces.remove(0);
+        }
+        nonces.last_mut().expect("just pushed").answer()
     }
 
-    /// An answer to `nonce` was refused: forgotten, unless a newer one is held by now.
+    /// An answer to `nonce` was refused: it is forgotten, the others kept.
     pub fn forget(&self, origin: &str, nonce: &str) {
         let mut held = self.0.lock().unwrap();
-        if held.as_ref().is_some_and(|held| held.origin == origin && held.challenge.nonce == nonce) {
-            *held = None;
+        if let Some(held) = held.as_mut().filter(|held| held.origin == origin) {
+            held.nonces.retain(|kept| kept.challenge.nonce != nonce);
         }
     }
 }
@@ -414,12 +434,24 @@ mod tests {
         let again = memory.remember(LAB, challenge.clone());
         assert_eq!((again.nc, again.cnonce.as_str()), (3, first.cnonce.as_str()));
         let stale = digest_challenge(["Digest realm=\"r\", nonce=\"m\", stale=true"]).unwrap().unwrap();
-        let fresh = memory.remember(LAB, stale);
+        let fresh = memory.remember(LAB, stale.clone());
         assert!(fresh.nc == 1 && fresh.cnonce != first.cnonce, "a new nonce counts from 1");
+        assert_eq!(memory.next(LAB).map(|answer| (answer.challenge.nonce, answer.nc)), Some(("m".into(), 2)), "the newest is answered at once");
+        // A late reply asks with the old nonce: it counts on with its own client nonce, never from 1 again.
+        let late = memory.remember(LAB, challenge.clone());
+        assert_eq!((late.challenge.nonce.as_str(), late.nc, late.cnonce.as_str()), ("n", 4, first.cnonce.as_str()));
+        let back = memory.remember(LAB, stale);
+        assert_eq!((back.nc, back.cnonce.as_str()), (3, fresh.cnonce.as_str()), "and so does the newer one, met again");
         memory.forget(LAB, "n");
-        assert_eq!(memory.next(LAB).map(|answer| answer.nc), Some(2), "a refusal of the old nonce leaves the new one");
+        assert_eq!(memory.next(LAB).map(|answer| answer.nc), Some(4), "a refusal of the old nonce leaves the new one");
         memory.forget(LAB, "m");
         assert!(memory.next(LAB).is_none());
+        // Only the last few nonces are kept.
+        for nonce in 0..KEPT_NONCES + 2 {
+            memory.remember(LAB, digest_challenge([format!("Digest realm=\"r\", nonce=\"k{nonce}\"").as_str()]).unwrap().unwrap());
+        }
+        let oldest = memory.remember(LAB, digest_challenge(["Digest realm=\"r\", nonce=\"k0\""]).unwrap().unwrap());
+        assert_eq!(oldest.nc, 1, "k0 was let go and starts over");
         assert_eq!(cnonce().len(), 32);
         assert_eq!(serde_json::to_value(Auth::Digest { username: "u".into(), password: "p".into() }).unwrap(), serde_json::json!({ "scheme": "digest", "username": "u", "password": "p" }));
         assert!(serde_json::from_value::<Auth>(serde_json::json!({ "scheme": "none" })).unwrap().is_none());

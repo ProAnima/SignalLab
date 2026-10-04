@@ -290,9 +290,12 @@ src/components/FirewallBanner.tsx  the desktop app's firewall notice, with Allow
   header, and a node's credentials are templated fields (`{{secret.NAME}}`,
   masked — Basic's base64 of one too, `experiment_data::derived_masks`). Digest
   answers a 401's challenge and sends again (`http::digest`, which follows
-  redirects itself: the URL that asks is answered, never another origin); a
-  burst shares one `DigestMemory` — one origin, a count per nonce that never
-  repeats, one cnonce — so one challenge serves all its requests. The RFC
+  redirects itself: the URL that asks is answered, never another origin), and
+  again while the server says stale or names another nonce (`DIGEST_ROUNDS`; a
+  refusal of the nonce just answered is final); a burst shares one
+  `DigestMemory` — one origin, its last few nonces, each with a count that never
+  repeats and a cnonce of its own, kept when a late reply meets it again — so
+  one challenge serves all its requests. The RFC
   2617/7616 examples are unit tests, and the e2e fixture checks answers
   (uri included) with hashing of its own.
 - **Cookies are a jar a person can see.** `cookies::CookieJar` is reqwest's

@@ -1,8 +1,9 @@
 //! HTTP authentication and cookies against a loopback server that checks
 //! them itself: Basic, Bearer, Digest (MD5 and SHA-256, a nonce that goes
-//! stale) verified by its own hashing, a burst answering one challenge for all
-//! its requests — in parallel too, against a server that refuses a count used
-//! twice and keeps `-sess`'s first hash — Digest behind redirects, the HTTP
+//! stale) verified by its own hashing, a nonce that runs out again answered
+//! again a few times, a burst answering one challenge for all its requests —
+//! in parallel too, against a server that refuses a count used twice and keeps
+//! `-sess`'s first hash — Digest behind redirects, the HTTP
 //! screen's cookie jar, and a run's — off for a file from before version 8,
 //! which ran without one — and Basic's base64 masked like the secret in it.
 
@@ -47,6 +48,10 @@ struct Counts {
     replays: AtomicU32,
     /// Requests that carried an Authorization header.
     authorized: AtomicU32,
+    /// /restless's and /endless's nonces so far, and the requests to either.
+    restless: AtomicU32,
+    endless: AtomicU32,
+    restless_requests: AtomicU32,
     /// /strict's (nonce, nc) pairs so far, and each nonce's first `-sess` hash.
     seen: Mutex<HashSet<(String, String)>>,
     sess: Mutex<HashMap<String, String>>,
@@ -98,6 +103,8 @@ fn digest_check(header: &str, method: &str, password: &str, sha256: bool, sess: 
 /// Answers by path: /basic, /bearer, /digest (MD5), /digest256 (SHA-256) — a
 /// nonce good for 5 uses, then stale — /digest512 (an algorithm nobody speaks),
 /// /strict (MD5-sess, a nonce good for 20, a count used twice refused),
+/// /restless (a nonce good for one answer, stale after it, until the third),
+/// /endless (the same, never let through),
 /// /old (302 to /digest?from=old), /post-old (303 to /digest), /away?to=URL
 /// (302 there), /loop (302 to itself), /echo (the Authorization it got, as the
 /// body and as X-Echo), /login (sets a session cookie) and /me (wants it).
@@ -195,6 +202,24 @@ async fn server() -> (String, Arc<Counts>) {
                                 }
                             }
                         }
+                        "/restless" | "/endless" => {
+                            counts.restless_requests.fetch_add(1, Ordering::SeqCst);
+                            let (round, through) = if path == "/restless" { (&counts.restless, 2) } else { (&counts.endless, u32::MAX) };
+                            let number = round.load(Ordering::SeqCst);
+                            let challenge = |fresh: u32, stale: bool| format!("WWW-Authenticate: Digest realm=\"lab\", nonce=\"r{fresh}\", qop=\"auth\", algorithm=MD5{}\r\n", if stale { ", stale=true" } else { "" });
+                            match digest_ok(&authorization, method, "secret", false) {
+                                Some(params) if params["nonce"] == format!("r{number}") && params["uri"] == target => {
+                                    if number < through {
+                                        round.fetch_add(1, Ordering::SeqCst);
+                                        ("401 Unauthorized", challenge(number + 1, true), String::new())
+                                    } else {
+                                        counts.granted.fetch_add(1, Ordering::SeqCst);
+                                        ("200 OK", String::new(), "restless ok".into())
+                                    }
+                                }
+                                _ => ("401 Unauthorized", challenge(number, false), String::new()),
+                            }
+                        }
                         "/old" => ("302 Found", "Location: /digest?from=old\r\n".into(), String::new()),
                         "/post-old" => ("303 See Other", "Location: /digest\r\n".into(), String::new()),
                         "/away" => ("302 Found", format!("Location: {}\r\n", target.split_once("?to=").map(|(_, to)| to).unwrap_or("/")), String::new()),
@@ -248,6 +273,26 @@ async fn basic_bearer_and_digest_are_answered_as_the_server_checks_them() {
     let plain = request(&service, format!("{base}/basic"), json!({ "scheme": "digest", "username": "lab", "password": "secret" }), false).await;
     assert_eq!(plain["digest"]["error"]["code"], "http.digest_not_offered", "Basic only: said so, not guessed");
     assert!(counts.granted.load(Ordering::SeqCst) >= 2);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_nonce_that_runs_out_again_is_answered_again_a_few_times_and_a_refusal_once() {
+    let (service, _) = service();
+    let (base, counts) = server().await;
+    let lab = json!({ "scheme": "digest", "username": "lab", "password": "secret" });
+    let requests = || counts.restless_requests.load(Ordering::SeqCst);
+    // Asked, then three answers: two to nonces that ran out as they were used, one let through.
+    let through = request(&service, format!("{base}/restless"), lab.clone(), false).await;
+    assert_eq!((through["status"].as_u64(), through["body"].as_str(), through["digest"]["challenged"].as_bool()), (Some(200), Some("restless ok"), Some(true)), "{through}");
+    assert_eq!(requests(), 4);
+    // A wrong password is refused with the nonce it answered: asked, answered, no more.
+    let refused = request(&service, format!("{base}/restless"), json!({ "scheme": "digest", "username": "lab", "password": "nope" }), false).await;
+    assert_eq!(refused["status"], 401);
+    assert_eq!(requests(), 6);
+    // A nonce that always runs out: asked, then the first answer and three more, then the 401 stays.
+    let endless = request(&service, format!("{base}/endless"), lab, false).await;
+    assert_eq!((endless["status"].as_u64(), endless["digest"]["challenged"].as_bool()), (Some(401), Some(true)), "{endless}");
+    assert_eq!(requests(), 11);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
