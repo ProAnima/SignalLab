@@ -2,7 +2,7 @@
 //! store and only names appear in documents; nothing here hands a value to the
 //! interface. While a run or a *Send now* uses values, they are masked in
 //! everything the engine reports, the Inspector included. Specified in
-//! `docs/milestone-3-data.md`, section 11.
+//! `docs/develop/design-data.md`, section 11.
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;

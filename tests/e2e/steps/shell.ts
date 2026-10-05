@@ -2,6 +2,7 @@
 import { en } from "../../../src/lib/locales/en";
 import { ru } from "../../../src/lib/locales/ru";
 import { LOCALES } from "../../../src/lib/locales/index";
+import { SCREEN_PAGES, docsPath } from "../../../src/lib/docs";
 import { format } from "../../../src/lib/translate";
 import { T, sleep, squash, textOf, numberIn, visible, until, control, button, buttonWith, panel, unnamed, untipped, click, NAV, TITLES, go, closeOverlays, openInspector, firewall, chooseLanguage, type Key, type Words, type StepArgs, type Expect } from "../dsl";
 
@@ -175,6 +176,26 @@ export async function languages(expect: Expect) {
   await sleep(100);
   const stale = staleTip();
   expect("back in English from Arabic: a tooltip still showing is English, by its element", !stale, stale ?? "");
+}
+
+/**
+ * The documentation inside the app and the server: the header's button, and a
+ * screen's page in every language, served beside the interface (the desktop
+ * app's own files, a server's /docs/) — what F1 opens, offline.
+ */
+export async function docs(expect: Expect) {
+  const button = document.querySelector<HTMLButtonElement>(`.header button[aria-label="${T("app.docs")}"]`);
+  expect("the header has the documentation's button", !!button && button.dataset.tip === T("app.docsHint"));
+  const misses: string[] = [];
+  for (const [screen, page] of Object.entries(SCREEN_PAGES)) {
+    for (const { code } of LOCALES) {
+      const path = docsPath(page, code);
+      const response = await fetch(`/docs/${path}`);
+      const html = response.ok ? await response.text() : "";
+      if (!response.ok || !html.includes(`lang="${code}"`) || /<script(?![^>]*\bsrc=)[^>]*>\s*\S/.test(html)) misses.push(`${screen} ${path}: ${response.status}`);
+    }
+  }
+  expect("every screen's page is there in every language, with no inline script", misses.length === 0, misses.slice(0, 6).join(" | "));
 }
 
 export async function cleanup(expect: Expect) {

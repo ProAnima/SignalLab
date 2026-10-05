@@ -106,6 +106,7 @@ impl Subscription {
         };
         let (mut stream, broker) = mqtt_dial::dial(&config).await.map_err(|failure| mqtt_error(failure, &broker))?;
         let peer: SocketAddr = stream.peer_addr().unwrap_or_else(|_| SocketAddr::from(([0, 0, 0, 0], port)));
+        let local = stream.local_addr().map(|address| address.to_string()).unwrap_or_default();
         let lost = |error: std::io::Error| EngineError::new("wait.receive_failed").with("target", &broker).because(error).in_field(Field::new("broker"));
         stream.write_all(&encode_subscribe(1, &[(filter.to_string(), 0)])).await.map_err(lost)?;
 
@@ -163,7 +164,7 @@ impl Subscription {
                                             continue;
                                         }
                                         let frame = if inspect::armed(&host) {
-                                            inspect::publish(&host, Frame::rx("mqtt", "experiment-wait").remote(peer).payload(&payload).summary(summarize(&topic, &payload, qos, retain)))
+                                            inspect::publish(&host, Frame::rx("mqtt", "experiment-wait").local(&local).remote(peer).payload(&payload).publish(&target, &topic, qos, retain).summary(summarize(&topic, &payload, qos, retain)))
                                         } else {
                                             None
                                         };

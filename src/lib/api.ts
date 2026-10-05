@@ -605,6 +605,19 @@ export interface Frame {
   verdict: string | null;
   /** Of `bytes`, how many the engine keeps: all, up to 256 KiB; 0 when it recorded only the size. */
   kept: number;
+  /** An MQTT PUBLISH: where and how it was published (absent for anything else). */
+  publish?: FramePublish;
+}
+
+/** What an MQTT PUBLISH frame says of itself (engine/src/inspect.rs `Publish`); its bytes are the message's. */
+export interface FramePublish {
+  /** host:port of the broker it went through. */
+  broker: string;
+  topic: string;
+  qos: number;
+  retain: boolean;
+  /** The bytes are UTF-8 text, as an MQTT signal's payload is. */
+  text: boolean;
 }
 
 /** The bytes a frame keeps (engine/src/inspect.rs `Payload`). */
@@ -670,7 +683,10 @@ export interface ScanProgress { job_id: number; ts: number; done: number; total:
 /** Experiments end with an `EngineError`; the other jobs with text. */
 export interface JobEnded { job_id: number; kind: string; error: EngineError | null; }
 export interface EmitStat {
-  job_id: number; ts: number; rounds: number; packets: number;
+  job_id: number; ts: number;
+  /** Destinations each round goes to. */
+  targets: number;
+  rounds: number; packets: number;
   bytes: number; errors: number; pps: number;
 }
 export interface PeerReport {
@@ -734,7 +750,7 @@ export interface AppInfo {
   arch: string;
 }
 
-/** The feedback form (engine/src/feedback.rs), sent to the studio's hub (docs/hub.md). */
+/** The feedback form (engine/src/feedback.rs), sent to the studio's hub (docs/develop/hub.md). */
 export interface FeedbackForm {
   message: string;
   email?: string;

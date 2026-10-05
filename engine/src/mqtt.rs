@@ -23,14 +23,14 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
-use super::error::{EngineError, EngineResult};
+use super::error::{EngineError, EngineResult, Field};
 use super::inspect::{self, Frame, Gate};
 use super::jobs::{now_ms, JobInfo, JobRegistry};
 use super::mqtt_codec::{
     decode, encode_pingreq, encode_puback, encode_pubcomp, encode_publish, encode_pubrec, encode_pubrel, encode_subscribe,
     encode_unsubscribe, summarize, Packet, Will,
 };
-use super::mqtt_dial::{broker_of, dial};
+use super::mqtt_dial::{broker_of, dial, validate_publish_topic};
 use super::transport::{self, Cause};
 
 /// One subscription: a filter and the QoS we ask the broker for.
@@ -186,7 +186,15 @@ impl MqttHub {
         }
     }
 
+    /// Hand `cmd` to connection `id`. A publish to a topic with a wildcard (or
+    /// none) is refused here, as the one-shot publish refuses it; a
+    /// subscription takes filters.
     pub fn send(&self, id: u64, cmd: Cmd) -> EngineResult<()> {
+        if let Cmd::Publish { topic, .. } = &cmd {
+            if let Some(refused) = validate_publish_topic(topic) {
+                return Err(refused.in_field(Field::new("topic")));
+            }
+        }
         let closed = || EngineError::new("mqtt.not_connected").with("id", id);
         let map = self.inner.lock().map_err(|_| closed())?;
         let tx = map.get(&id).ok_or_else(closed)?;
@@ -343,12 +351,13 @@ async fn run(
                                             qos, retain, dup,
                                         });
                                         if inspect::armed(host) && gate.allow() {
-                                            inspect::publish(host, Frame::rx("mqtt", "mqtt")
+                                            inspect::publish(host, gate.mark(Frame::rx("mqtt", "mqtt")
                                                 .job(id)
                                                 .local(&local)
                                                 .remote(broker)
                                                 .payload(&payload)
-                                                .summary(summarize(&topic, &payload, qos, retain)));
+                                                .publish(broker, &topic, qos, retain)
+                                                .summary(summarize(&topic, &payload, qos, retain))));
                                         }
                                     }
                                     let reply = match qos {
@@ -418,11 +427,13 @@ async fn run(
                         if qos > 0 { pending_pub.insert(pid, topic.clone()); }
                         let framed = encode_publish(&topic, &payload, qos, retain, pid, false);
                         if inspect::armed(host) {
+                            // The message's own bytes, as every MQTT frame keeps them: what a signal sends again.
                             inspect::publish(host, Frame::tx("mqtt", "mqtt")
                                 .job(id)
                                 .local(&local)
                                 .remote(broker)
-                                .payload(&framed)
+                                .payload(&payload)
+                                .publish(broker, &topic, qos, retain)
                                 .summary(summarize(&topic, &payload, qos, retain))
                                 .verdict(if payload.is_empty() && retain { "clears retained" } else { "publish" }));
                         }
@@ -478,6 +489,24 @@ mod tests {
         assert_eq!(next_packet_id(&mut counter), u16::MAX);
         assert_eq!(next_packet_id(&mut counter), 1, "must wrap past zero");
     }
+    #[test]
+    fn the_live_connection_refuses_a_publish_to_a_wildcard_and_subscribes_to_one() {
+        let hub = MqttHub::new();
+        let (tx, mut rx) = unbounded_channel();
+        hub.insert(7, tx);
+        let publish = |topic: &str| Cmd::Publish { topic: topic.into(), payload: b"1".to_vec(), qos: 0, retain: false };
+        for (topic, code) in [("zone/+/level", "node.topic_wildcard"), ("zone/#", "node.topic_wildcard"), ("", "mqtt.topic_required")] {
+            let refused = hub.send(7, publish(topic)).unwrap_err();
+            assert_eq!((refused.code.as_str(), refused.field.as_ref().map(|field| field.key.as_str())), (code, Some("topic")), "{topic:?}");
+        }
+        assert!(rx.try_recv().is_err(), "nothing reached the connection");
+        hub.send(7, publish("zone/1/level")).unwrap();
+        hub.send(7, Cmd::Subscribe(vec![Sub { filter: "zone/#".into(), qos: 1 }])).unwrap();
+        assert!(matches!(rx.try_recv(), Ok(Cmd::Publish { .. })) && matches!(rx.try_recv(), Ok(Cmd::Subscribe(_))));
+        assert!(hub.send(8, publish("a/#")).unwrap_err().is("node.topic_wildcard"), "checked before the connection is looked up");
+        assert!(hub.send(8, publish("a/b")).unwrap_err().is("mqtt.not_connected"));
+    }
+
     #[tokio::test]
     async fn a_closed_port_and_a_missing_client_id_are_refused_before_any_job() {
         let host = Host::new(crate::host::Recorder::new(), crate::inspect::Capture::new());

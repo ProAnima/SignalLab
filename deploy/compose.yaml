@@ -10,7 +10,7 @@
 # Host networking lets OSC, UDP, broadcast, multicast and discovery reach the
 # physical network, and lets waits and monitors listen on real ports. It works
 # on Linux hosts only; on Windows and macOS use the desktop app.
-# More: docs/delivery.md, section 7.
+# More: docs/develop/delivery.md, section 7.
 
 name: signallab
 

@@ -7,7 +7,7 @@
 # for linux/amd64 and linux/arm64, each built natively, smoke-tested before it
 # is pushed, with an SBOM, BuildKit provenance and a signed GitHub attestation.
 # Publishing the draft (release.yml) is a person's decision; this follows it,
-# so nothing reaches the registry that was not reviewed. See docs/delivery.md.
+# so nothing reaches the registry that was not reviewed. See docs/develop/delivery.md.
 name: Image
 
 on:

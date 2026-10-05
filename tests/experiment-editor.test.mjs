@@ -5,6 +5,8 @@ import { addAfter, addBranch, anchorAfter, arrangeNodes, connect, createNode, di
 import { ADDABLE_NODES, NODE_CATALOG } from "../src/lib/experimentCatalog.ts";
 import { jsonPath, suggestVariableName, templateAt, variablesBefore, isIdent, effectiveParams, renameParam, removeParam, setParamValue, addProfile, renameProfile, removeProfile, secretNames, replyFields, writtenVariable, canRepeat, canRetry, defaultReply, DEFAULT_REPEAT, DEFAULT_RETRY } from "../src/lib/experimentData.ts";
 import { describeError, failureNode, fieldLabel, isEngineError, messageParams, responseFailure } from "../src/lib/errors.ts";
+import { canSendNow, secretsTip } from "../src/lib/experimentText.ts";
+import { readFileSync } from "node:fs";
 import { en } from "../src/lib/locales/en.ts";
 import { ru } from "../src/lib/locales/ru.ts";
 
@@ -527,3 +529,35 @@ test("repeat is for the steps that send", () => {
   assert.ok(DEFAULT_REPEAT.interval_ms >= 10 && DEFAULT_REPEAT.count >= 2, "the default is one the engine accepts");
 });
 
+test("Send now is offered on every node the engine sends or listens with on its own, TCP included", () => {
+  // experiment_send_node performs what NodeKind::is_action or is_wait names.
+  const engine = readFileSync(new URL("../engine/src/experiment.rs", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  const body = (name) => engine.slice(engine.indexOf(`pub fn ${name}(&self) -> bool {`)).split("\n    }\n")[0];
+  const kinds = (name) => [...body(name).matchAll(/NodeKind::(\w+)/g)].map((found) => found[1].replace(/(?<!^)([A-Z])/g, "_$1").toLowerCase());
+  const performed = [...kinds("is_action"), ...kinds("is_wait")].sort();
+  assert.ok(performed.includes("tcp") && performed.includes("wait_ws"), performed.join(" "));
+  assert.deepEqual(ADDABLE_NODES.filter((type) => canSendNow(createNode(type, 0, 0))).sort(), performed);
+});
+
+test("the Secrets tip tells where secrets live on this machine: the Windows store, a server's files, or nothing on Linux", () => {
+  assert.equal(secretsTip({ secrets_writable: true, os: "windows" }), "exp.secretsHint");
+  assert.equal(secretsTip({ secrets_writable: false, os: "linux" }), "exp.secretsReadOnly", "a server wins over its system");
+  assert.equal(secretsTip({ secrets_writable: true, os: "linux" }), "exp.secretsUnavailable", "the Linux app has no credential store");
+  assert.equal(secretsTip(null), "exp.secretsHint", "until app_info answers");
+  for (const key of ["exp.secretsHint", "exp.secretsReadOnly", "exp.secretsUnavailable"]) assert.ok(en[key] && ru[key], key);
+  assert.ok(!/macOS|Keychain/.test(en["err.secret.unsupported"] + en["exp.secretsHint"] + en["exp.secretsUnavailable"]), "there is no macOS build");
+});
+
+test("the import's tip says what the engine opens: its own version and every older one, up to its size limit", () => {
+  const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8").replaceAll("\r\n", "\n");
+  const model = read("engine/src/experiment.rs");
+  const version = Number(/pub const VERSION: u32 = (\d+);/.exec(model)[1]);
+  const legacy = /pub const LEGACY_VERSIONS: &\[u32\] = &\[([\d, ]+)\];/.exec(model)[1].split(",").map(Number);
+  assert.deepEqual(legacy, Array.from({ length: version - 1 }, (_, index) => index + 1), "every version before this one is upgraded on opening");
+  const limit = /MAX_DOCUMENT_BYTES: usize = (\d+) \* 1024 \* 1024;/.exec(read("engine/src/experiment_files.rs"))[1];
+  assert.ok(read("src/components/ExperimentDocuments.tsx").includes(`file.size > ${limit} * 1024 * 1024`), "the screen checks the engine's size");
+  for (const locale of [en, ru]) assert.ok(locale["exp.importHint"].includes(`${limit} `), "the tip names the limit");
+  assert.ok(!/Version 1|Версия 1/.test(en["exp.importHint"] + ru["exp.importHint"]), "it no longer claims version 1 only");
+  assert.ok(/UDP/.test(en["exp.description.impairment"]) && /TCP/.test(en["exp.description.impairment"]), "an Impairment node relays UDP or TCP");
+  assert.ok(/bit/.test(en["ns.corruptHint"]), "corruption flips a bit");
+});

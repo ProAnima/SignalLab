@@ -31,3 +31,9 @@ artifacts/
 
 # Tokens and secrets next to deploy/compose.yaml are someone's credentials
 deploy/*.txt
+
+# The documentation's build and its generated pages (scripts/docs.mjs)
+docs/.vitepress/cache/
+docs/.vitepress/dist/
+docs/reference/errors.md
+docs/*/reference/errors.md

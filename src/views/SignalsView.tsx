@@ -3,7 +3,7 @@ import type { HttpRequest, Signal, SignalBody } from "../lib/api";
 import { useStore } from "../lib/store";
 import { useT } from "../lib/i18n";
 import { useFieldIds } from "../lib/hooks";
-import { describeError } from "../lib/errors";
+import { ErrorMessage } from "../components/ErrorMessage";
 import { fmtTime } from "../lib/format";
 import { OscArgsEditor, fromOscArg, toOscArg, type ArgRow } from "../components/OscArgs";
 import { HttpAuthFields } from "../components/HttpAuthFields";
@@ -40,6 +40,8 @@ export function SignalsView({ onOpen, reveal }: { onOpen?: (signal: Signal) => v
   const [args, setArgs] = useState<ArgRow[]>([]);
 
   const selected = library.find((s) => s.id === selectedId) ?? null;
+  // The file cannot be read: it is being fixed, so nothing here may write it until Reload reads it.
+  const locked = libraryError !== null;
 
   // Reload the argument rows only when the selection itself changes.
   useEffect(() => {
@@ -177,16 +179,17 @@ export function SignalsView({ onOpen, reveal }: { onOpen?: (signal: Signal) => v
               placeholder={t("sig.search")}
               onChange={(e) => setQuery(e.target.value)}
             />
-            <button className="ghost sm" style={{ flex: "0 0 auto" }} onClick={create} data-tip={t("sig.newHint")}>
+            <button className="ghost sm" style={{ flex: "0 0 auto" }} onClick={create} disabled={locked} data-tip={t("sig.newHint")}>
               {t("sig.new")}
             </button>
           </div>
 
+          {locked && <ErrorMessage className="sig-blocked" error={libraryError} />}
           <SignalTree signals={filtered} searching={query.trim() !== ""} selectedId={selectedId} onSelect={select} onFire={(s) => void fire(s)}
             folder={folder} onFolder={setFolder} reveal={reveal?.id ?? null} onNewFolder={newFolder} />
-          {filtered.length === 0 && (library.length > 0 || !everyFolder.length) && (
+          {!locked && filtered.length === 0 && (library.length > 0 || !everyFolder.length) && (
             <div className="empty-state">
-              {libraryError ? describeError(libraryError, t).text : library.length === 0 ? t("sig.empty") : t("sig.emptyFiltered")}
+              {library.length === 0 ? t("sig.empty") : t("sig.emptyFiltered")}
             </div>
           )}
 
@@ -197,7 +200,7 @@ export function SignalsView({ onOpen, reveal }: { onOpen?: (signal: Signal) => v
             {saveState === "saved" && <span className="ok">{t("sig.saved")}</span>}
             {/* Always offered: the file is meant to be edited by hand and swapped
                 between machines, and the app has no way to notice that itself. */}
-            <button className="ghost sm" onClick={reloadLibrary} data-tip={libraryPath}>
+            <button className={locked ? "primary sm" : "ghost sm"} onClick={reloadLibrary} data-tip={libraryPath}>
               {t("sig.reload")}
             </button>
           </div>
@@ -208,6 +211,7 @@ export function SignalsView({ onOpen, reveal }: { onOpen?: (signal: Signal) => v
           {!selected && <div className="empty-state">{t("sig.pick")}</div>}
           {selected && body && (
             <>
+              <fieldset className="sig-fields" disabled={locked}>
               <div className="row">
                 <div className="field">
                   <label htmlFor="sig-name">{t("sig.name")}</label>
@@ -379,6 +383,7 @@ export function SignalsView({ onOpen, reveal }: { onOpen?: (signal: Signal) => v
                   onChange={(e) => patch({ note: e.target.value })}
                 />
               </div>
+              </fieldset>
 
               <div className="btn-row">
                 <button className="primary" onClick={() => void fire(selected)} data-tip={t("sig.fireHint")}>
@@ -389,10 +394,11 @@ export function SignalsView({ onOpen, reveal }: { onOpen?: (signal: Signal) => v
                     {t("sig.openIn", { screen: t(OPENS_IN[selected.body.transport]!) })}
                   </button>
                 )}
-                <button className="ghost" onClick={duplicate}>{t("sig.duplicate")}</button>
+                <button className="ghost" onClick={duplicate} disabled={locked}>{t("sig.duplicate")}</button>
                 {/* Two steps, because the file is written the moment you click. */}
                 <button
                   className="danger"
+                  disabled={locked}
                   onClick={() => (confirmDelete ? remove() : setConfirmDelete(true))}
                 >
                   {confirmDelete ? t("sig.confirmDelete") : t("sig.delete")}

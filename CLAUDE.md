@@ -24,16 +24,18 @@ npm run check:image        # server image built + smoke-tested in Docker
 npm run check:webkit       # tooltips in WebKitGTK (the Linux webview), in Docker; CI runs it natively
 npm run e2e                # every screen end to end: desktop app (WebView2) + server (Edge) -> artifacts/e2e/
 npm run e2e:linux          # the same on Linux in Docker (WebKitGTK); -- --image signallab:dev tours the image
-npm run release -- X.Y.Z --dry-run   # then --push; see docs/delivery.md
+npm run release -- X.Y.Z --dry-run   # then --push; see docs/develop/delivery.md
 cargo test --workspace     # engine, desktop shell and server tests
 cargo run -p signal-lab-server   # server on 127.0.0.1:1430 serving dist/ (npm run build first)
-cargo run -p signal-lab-cli -- run empty   # signallab, the command line (docs/automation.md)
+cargo run -p signal-lab-cli -- run empty   # signallab, the command line (docs/automation/cli.md)
+npm run docs:dev           # the documentation with live reload, http://localhost:5173/docs/
+npm run docs:build         # the documentation -> dist/docs (npm run build does it too)
 python scripts/gen-icon.py && npx tauri icon src-tauri/icons/icon-1024.png  # app icon
 python scripts/gen-installer-art.py   # installer sidebar/header/dialog/banner from the icon
 node scripts/install-test.mjs --image signallab:dev   # deploy/install.sh end to end on this Docker
 ```
 
-**Delivery** ([docs/delivery.md](docs/delivery.md)): `scripts/check.mjs` is the one
+**Delivery** ([docs/develop/delivery.md](docs/develop/delivery.md)): `scripts/check.mjs` is the one
 list of checks — CI (`.github/workflows/ci.yml`, Windows + Linux) runs that file, so
 add a check there, not in YAML. clippy runs with `-D warnings` and `--locked`: no
 new warnings, no lock-file drift. The version is written only in `package.json`
@@ -51,7 +53,8 @@ call fails there** — no Tauri runtime and no server behind it. Use it only to
 look at layout/CSS; anything functional needs `npm run tauri dev`, or
 `npm run build` + `cargo run -p signal-lab-server` for the browser path.
 
-Prerequisites: Node 18+, Rust stable, MSVC build tools, WebView2 (ships with
+Prerequisites: Node 22.18+ (CI and the images use 24; tests and scripts import `.ts` with
+Node's type stripping), Rust as pinned in `rust-toolchain.toml`, MSVC build tools, WebView2 (ships with
 Win 10/11). All present on this machine as of the initial setup.
 
 ## Layout
@@ -65,7 +68,7 @@ src/                      React UI
   lib/store.tsx           shared jobs + console state, app_info, connection state
   lib/i18n.tsx            language provider, detection, t()
   lib/translate.ts        {placeholder} and ICU {n, plural, …} filling, numbers per language (pure)
-  lib/locales/index.ts    LOCALES: the languages; adding one = a dictionary + a line (docs/localization.md)
+  lib/locales/index.ts    LOCALES: the languages; adding one = a dictionary + a line (docs/develop/localization.md)
   lib/locales/en.ts       source of truth for every string; ru, es, fr, de, pt, zh, ja, ko, hi, ar are typed against it
   lib/flags.ts            each language's flag (flag-icons, MIT; Spain's civil flag drawn in assets/flags)
   components/LanguageMenu.tsx  the header's language switch: flag + letters, a popover list, arrows/letters/Enter/Escape
@@ -163,7 +166,7 @@ engine/src/               signal-lab-engine — no Tauri, no window
   emulator_files.rs       the emulator library (emulators.json) and its starter set
   firewall.rs             Windows Firewall per program: status (COM, any language), allow (UAC)
   feedback.rs             feedback_send: the form to the studio's hub, its limits checked first
-  hub.rs                  where the hub is (SIGNALLAB_HUB_URL) and Signal Lab's project on it (docs/hub.md)
+  hub.rs                  where the hub is (SIGNALLAB_HUB_URL) and Signal Lab's project on it (docs/develop/hub.md)
 engine/tests/burst.rs     the HTTP burst against loopback: closed, paced, missed, stopped
 engine/tests/load.rs      a node under load: a ramp failing p95 for the right reason, progress, statuses and
                           causes, missed, Stop, validation, two runs compared
@@ -175,7 +178,7 @@ tests/e2e/tour.ts         the end-to-end tour, run inside the page: every screen
   dsl.ts, steps/*.ts      finding by label, clicking, waiting; the steps by screen (STEPS in tour.ts)
 scripts/e2e.mjs           its runner: builds, starts the app / server + a browser, steps, screenshots
 scripts/e2e/fixtures.mjs  loopback stand-ins the tour talks to: HTTP API, UDP/TCP sinks, OSC device, MQTT broker
-src-tauri/src/lib.rs      the desktop shell: one `engine` command + Tauri events
+src-tauri/src/lib.rs      the desktop shell: one `engine` command + Tauri events; `open_docs`, the documentation's window
 server/src/               signal-lab-server (axum)
   config.rs               options + env vars, checked once (no token => loopback only)
   auth.rs                 token, sessions, Host/Origin rules
@@ -183,8 +186,16 @@ server/src/               signal-lab-server (axum)
   events.rs               engine events fanned out to every page's WebSocket
   run.rs                  POST /api/run: a run waited for, or its steps as NDJSON lines
 server/tests/server.rs    the server end to end, like a browser and a script (run.rs: /api/run)
-docs/api/openapi.json     the API described (served at /api/openapi.json; a test checks it)
-cli/                      `signallab`, the command line for scripts and CI (docs/automation.md)
+docs/                     the documentation, a VitePress site: every page in every language, built into
+                          dist/docs (the app and the server serve it at /docs/, offline) and onto GitHub Pages
+  <section>/<page>.md     English, the source; <code>/<section>/<page>.md the other ten languages
+  develop/                for contributors, English only: delivery, localization, hub, writing-docs, design notes
+  .vitepress/             structure.ts (the pages; F1's map), i18n.ts (the site's own texts), config.mts, theme/
+  api/openapi.json        the API described (served at /api/openapi.json; a test checks it)
+scripts/docs.mjs          the generated pages (reference/errors, from the dictionaries), lint, the build
+src/lib/docs.ts           which page F1 opens on each screen; platform.ts openDocs, the shell's open_docs
+tests/docs.test.mjs       the documentation against the code: languages, ids, labels, commands, events, nodes
+cli/                      `signallab`, the command line for scripts and CI (docs/automation/cli.md)
   src/run.rs              run / validate / templates, in this process or on a server (remote.rs)
   src/send.rs             send osc|udp|http|mqtt, fire a library signal — the app's own commands
   src/i18n.rs             the interface's dictionaries (build.rs embeds them) and translate.ts in Rust
@@ -319,7 +330,7 @@ src/components/FirewallBanner.tsx  the desktop app's firewall notice, with Allow
   asks the studio's hub first (`/v1/signal-lab/update/…`: the release its stable
   channel offers this install, or `204` — then it looks no further, so a pause
   or a partial rollout holds), and GitHub's `releases/latest/download/latest.json`
-  only when the hub cannot be reached (docs/hub.md); `tests/delivery.test.mjs`
+  only when the hub cannot be reached (docs/develop/hub.md); `tests/delivery.test.mjs`
   ties that list to `engine/src/hub.rs`. Either way it installs nothing whose
   signature fails against `plugins.updater.pubkey`; only the release workflow
   signs (`tauri.updater.conf.json` + the two `TAURI_SIGNING_*` secrets), so local
@@ -350,13 +361,15 @@ src/components/FirewallBanner.tsx  the desktop app's firewall notice, with Allow
   key + params, never finished text — that's what makes live language switching
   re-render the backlog. A count is a plural (`{n, plural, one {# x} other {# xs}}`)
   and gets the number itself, not `fmtNum(n)`; numbers and sizes go through
-  `fmtNum`/`fmtBytes`, which follow the language. A language is in five places
+  `fmtNum`/`fmtBytes`, which follow the language. A language is in these places
   besides its dictionary — `LOCALES`, `flags.ts`, the CLI's `Lang` (plural rules
   and number style, tested against `Intl`), the server's `LoginText`, NSIS's
-  `languages` — and the tests fail on one that lacks it. Arabic reads right to
+  `languages`, and the documentation (`docs/<code>/`, its `TEXT` in
+  `docs/.vitepress/i18n.ts`, `LANGUAGES` in `docs/.vitepress/theme/index.ts`) —
+  and the tests fail on one that lacks it. Arabic reads right to
   left: write sides as inline-start/end (`margin-inline-start`, `text-align:
   start`, `inset-inline-end`), never left/right unless it is data that stays
-  left to right (`styles/rtl.css`: the canvas, hex, code). See docs/localization.md.
+  left to right (`styles/rtl.css`: the canvas, hex, code). See docs/develop/localization.md.
 - **Every clickable thing is a real `<button>`**, sidebar nav and filter chips
   included; they need focus rings and Space/Enter. Never put a click target
   inside a `<label>`. `--text-faint` carries the 9.5px labels and is tuned to
@@ -378,7 +391,10 @@ src/components/FirewallBanner.tsx  the desktop app's firewall notice, with Allow
 - **MQTT is 3.1.1, plain TCP, clean session, QoS 0/1/2.** Show and installation
   gear routinely uses QoS 2 for subscribe, publish *and* its last-will, so none
   of that is optional; clean sessions are why there is no offline queue to
-  persist. No MQTT 5, no TLS — adding either is a decision, not a detail. The
+  persist. The MQTT screen alone lets a person turn *Clean session* off (the flag
+  goes to the broker as set, so a broker may replay what it kept); the node,
+  waits, signals and the command line always connect clean. No MQTT 5, no TLS —
+  adding either is a decision, not a detail. The
   broker emulator (`emulator_mqtt.rs`) is the other side of the same rules,
   on the same codec (`mqtt_codec`'s broker side): a client asking to keep its
   session gets a fresh one.
@@ -411,7 +427,9 @@ src/components/FirewallBanner.tsx  the desktop app's firewall notice, with Allow
   are errors, never empty strings. A new templated field goes in
   `experiment_data::texts_mut` — validation, preview and execution all read it.
 - **Secret values never leave the engine.** They live in the OS credential
-  store on a desktop, and in read-only files (`/run/secrets/signallab/<NAME>`)
+  store on a Windows desktop (keyring is built for Windows, and macOS, which no
+  release ships; the Linux desktop has no store and answers `secret.unsupported`),
+  and in read-only files (`/run/secrets/signallab/<NAME>`)
   or `SIGNALLAB_SECRET_<NAME>` on a server (`engine/src/secrets.rs`); a server
   refuses to set one (`secret.read_only`). No command returns one, and while a
   run or a *Send now* uses them every string it reports is passed through
@@ -495,6 +513,23 @@ src/components/FirewallBanner.tsx  the desktop app's firewall notice, with Allow
   the wait), shared per bind, and dropped with the run. A wait counts datagrams
   since the latest action on its branch and consumes the one it matches.
 
+- **The documentation is part of the change.** `docs/` is a page per subject in
+  every language of the interface (`docs/develop/writing-docs.md` is the guide):
+  a change users see changes its English page and every translation in the same
+  commit. Pages name the interface as `[[ui:key]]` — the dictionary's text in the
+  page's language, a missing key fails the build — and give every heading an
+  explicit `{#id}`, the same in every language (links and F1 rely on it).
+  `tests/docs.test.mjs` fails on a language missing a page, an id or a label, and
+  on a reference page that lacks an API command (`Service::invoke`), an event
+  (`EV`), a kind of node, a command of `signallab` or an option of the server;
+  `reference/errors.md` is written from the dictionaries (`scripts/docs.mjs`).
+  The site obeys the server's CSP: `scripts/docs.mjs` moves VitePress's inline
+  scripts into files, and nothing in the site's config is a function (site data
+  reaches the browser, and a function there would need `eval`) — the search's
+  tokenizer is given to the build's MiniSearch and to the browser's separately.
+  In the desktop app the documentation is a window of its own (`open_docs`) that
+  shows only the app's pages — links out go to the system's browser — and cannot
+  call the engine (`engine` answers only the `main` window).
 - **Keep `cargo test --workspace` green**: it covers the OSC codec, the
   CIDR/target resolver, socket-option paths, the capture ring, the signal
   library, an experiment run end to end, and the server's security rules.

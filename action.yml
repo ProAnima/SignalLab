@@ -10,7 +10,7 @@
 #     env:
 #       SIGNALLAB_SECRET_API_TOKEN: ${{ secrets.API_TOKEN }}
 #
-# More: docs/automation.md.
+# More: docs/automation/cli.md.
 name: Signal Lab
 description: Run Signal Lab experiments — OSC, UDP, HTTP, MQTT checks — and fail the job when one fails; writes a JUnit report.
 author: ProAnimaStudio
@@ -67,7 +67,7 @@ inputs:
     required: false
     default: ghcr.io/proanima/signallab
   lang:
-    description: Language of the messages, en or ru.
+    description: Language of the messages and the report - en, ru, es, fr, de, pt, zh, ja, ko, hi or ar.
     required: false
     default: en
   fail-on-error:
@@ -105,7 +105,7 @@ runs:
       run: |
         set -uo pipefail
         if [ "${RUNNER_OS:-Linux}" != "Linux" ]; then
-          echo "::error title=Signal Lab::this action runs the Linux image; on ${RUNNER_OS} runners download signallab from the release instead (docs/automation.md)"
+          echo "::error title=Signal Lab::this action runs the Linux image; on ${RUNNER_OS} runners download signallab from the release instead (docs/automation/cli.md)"
           exit 2
         fi
         args=(run)

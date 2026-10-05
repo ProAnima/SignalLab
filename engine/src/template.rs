@@ -1,7 +1,7 @@
 //! The template language of experiment fields: `{{token}}`, `{{params.api}}`,
 //! `{{items[0].id}}`, `{{random_int(1, 100)}}`. Pure — no runtime, no I/O — so
 //! the editor preview, *Send now* and the runner resolve a field identically.
-//! Specified in `docs/milestone-3-data.md`; errors are `EngineError` codes.
+//! Specified in `docs/develop/design-data.md`; errors are `EngineError` codes.
 
 use std::collections::BTreeMap;
 

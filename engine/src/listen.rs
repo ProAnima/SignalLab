@@ -3,7 +3,7 @@
 //! execution reaches the wait is already queued. Each socket keeps a bounded
 //! queue; a wait takes the first queued datagram its matcher accepts, so two
 //! waits never match the same message. Specified in
-//! `docs/milestone-4-reactive.md`, section 3.
+//! `docs/develop/design-reactive.md`, section 3.
 
 use std::collections::{HashMap, VecDeque};
 use std::io;

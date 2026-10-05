@@ -72,7 +72,9 @@ pub struct Options {
     pub ui_dir: Option<PathBuf>,
 
     /// Host names the server may be reached by, comma-separated, as a guard against DNS
-    /// rebinding. Loopback names are always allowed. Without a token only loopback names are.
+    /// rebinding. These and the loopback names are always allowed, with a token or without.
+    /// Left empty, a server with a token answers to any name and one without a token to
+    /// loopback names only.
     #[arg(long = "allowed-host", env = "SIGNALLAB_ALLOWED_HOSTS", value_delimiter = ',')]
     pub allowed_hosts: Vec<String>,
 
@@ -344,5 +346,17 @@ mod tests {
         let mut options = options("127.0.0.1:1430");
         options.allowed_hosts = vec![" Lab.Example ".into(), "".into()];
         assert_eq!(options.resolve().unwrap().allowed_hosts, ["lab.example"]);
+    }
+
+    /// The help says what `auth::Auth::host_allowed` does (its test pins the rules): listed
+    /// names pass with a token or without; the empty list means any name only with a token.
+    #[test]
+    fn the_allowed_host_help_tells_what_the_server_does() {
+        use clap::CommandFactory;
+        let help = Cli::command().render_long_help().to_string();
+        let help = help.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(help.contains("These and the loopback names are always allowed, with a token or without."), "{help}");
+        assert!(help.contains("a server with a token answers to any name and one without a token to loopback names only"), "{help}");
+        assert!(!help.contains("Without a token only loopback names are."), "the old wording left out the listed names");
     }
 }

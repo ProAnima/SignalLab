@@ -6,7 +6,7 @@
 !engine/**
 !server/**
 !cli/**
-!docs/api/**
+!docs/**
 !src-tauri/Cargo.toml
 !experiments/**
 !src/**
@@ -17,3 +17,9 @@
 !tsconfig.json
 !tsconfig.node.json
 !vite.config.ts
+!CHANGELOG.md
+!scripts/docs.mjs
+!scripts/lib.mjs
+# The documentation's local build and cache: the image builds its own.
+docs/.vitepress/cache/
+docs/.vitepress/dist/

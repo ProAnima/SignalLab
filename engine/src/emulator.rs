@@ -83,7 +83,9 @@ pub struct Outage {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DownFault {
-    /// 503 with `Retry-After` set to when it is back.
+    /// Status 503. While an `Outage` schedule holds it down the answer carries `Retry-After`,
+    /// set to when it is back; an *Emulator down* node (or a person) takes it down for an
+    /// unknown time, so then there is no `Retry-After`.
     #[default]
     Unavailable,
     /// The connection is closed without an answer.

@@ -27,7 +27,8 @@ pub(crate) fn library(path: Option<&Path>) -> Result<(PathBuf, EmulatorLibrary),
     let text = match std::fs::read_to_string(&path) {
         Ok(text) => text,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Err(Failure::invalid(EngineError::new("file.not_found").with("path", path.display())));
+            // Not `file.not_found`, which speaks of a server's data folder.
+            return Err(Failure::invalid(EngineError::new("cli.library_missing").with("path", path.display())));
         }
         Err(error) => return Err(Failure::invalid(EngineError::new("file.io").with("path", path.display()).because(error))),
     };
@@ -262,6 +263,7 @@ pub fn emulators(ctx: &Ctx, args: EmulatorsArgs) -> Exit {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::i18n::{Lang, Texts};
 
     #[test]
     fn arguments_name_files_or_library_entries() {
@@ -278,7 +280,9 @@ mod tests {
         let missing = resolve(&["nothing".to_string()], Some(&library_path)).err().unwrap();
         assert_eq!((missing.error.code.as_str(), missing.exit), ("cli.emulator_unknown", Exit::Invalid));
         let no_library = resolve(&["x".to_string()], Some(&dir.join("absent.json"))).err().unwrap();
-        assert_eq!(no_library.error.code, "file.not_found");
+        assert_eq!((no_library.error.code.as_str(), no_library.exit), ("cli.library_missing", Exit::Invalid));
+        let said = Texts::new(Lang::En).describe(&no_library.error, &["cli.err."], &|_| None).text;
+        assert!(said.contains("There is no library at") && !said.contains("server"), "{said}");
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

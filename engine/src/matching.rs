@@ -1,7 +1,7 @@
 //! Deciding whether a received datagram is the reply a *Wait* step is waiting
 //! for, and what the step then knows about it. Pure: no sockets, no clock —
 //! the listener supplies datagrams, the runner supplies resolved rules.
-//! Specified in `docs/milestone-4-reactive.md`, section 3.
+//! Specified in `docs/develop/design-reactive.md`, section 3.
 
 use std::net::SocketAddr;
 use std::time::Instant;

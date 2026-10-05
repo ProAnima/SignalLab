@@ -3,12 +3,13 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type DownloadEvent } from "@tauri-apps/plugin-updater";
+import { DOCS_ONLINE, docsPath } from "./docs";
 import { isDesktop } from "./transport";
 
 /**
  * What differs between the desktop app and a browser, in one place: the
- * window, files the engine wrote, links that leave the app, signing out, and
- * updating — which only an installed app does. Screens ask here instead of
+ * window, files the engine wrote, links that leave the app, the documentation,
+ * signing out, and updating — which only an installed app does. Screens ask here instead of
  * checking where they run.
  */
 
@@ -102,6 +103,20 @@ export async function openExternal(url: string): Promise<void> {
   if (isDesktop) return openUrl(url);
   if (url.startsWith("mailto:")) window.location.href = url;
   else window.open(url, "_blank", "noopener,noreferrer");
+}
+
+/**
+ * The documentation at `page` (`protocols/osc`) in `lang`, beside the
+ * interface: the pages built into the app or the server (`/docs/`), so it is
+ * there offline. The desktop app shows it in a window of its own, which sends
+ * links out of it to the system's browser; a browser in a tab of its own. A
+ * development build has none inside and opens the published pages.
+ */
+export async function openDocs(page: string, lang: string): Promise<void> {
+  const path = docsPath(page, lang);
+  if (import.meta.env.DEV) return openExternal(`${DOCS_ONLINE}${path}`);
+  if (isDesktop) return tauriInvoke("open_docs", { page: `docs/${path}` });
+  window.open(`/docs/${path}`, "signal-lab-docs");
 }
 
 // ---- updates: the desktop app only ------------------------------------------------

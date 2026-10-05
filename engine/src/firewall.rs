@@ -10,7 +10,7 @@
 //! inbound rules with one allow rule, after the system asks for administrator
 //! rights (UAC) — never silently. Elsewhere there is nothing per program to
 //! read (`applies: false`): ufw and firewalld work by port, which the server's
-//! install script and docs/delivery.md cover.
+//! install script and docs/develop/delivery.md cover.
 
 #[cfg(any(windows, test))]
 use std::path::Path;

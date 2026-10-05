@@ -197,7 +197,17 @@ fn sends_arrive_as_the_app_would_send_them() {
     assert_eq!(received(&socket), [0xde, 0xad, 0xbe, 0xef]);
     assert!(out(&udp).contains("sent 4 bytes →"), "{}", out(&udp));
 
+    // A host name, its IPv4 address taken (`localhost` may list ::1 first; this listens on IPv4).
+    let named = format!("localhost:{}", address.port());
+    let osc = signallab(&["send", "osc", &named, "/cue/go"]);
+    assert_eq!(code(&osc), 0, "{}", err(&osc));
+    assert!(received(&socket).starts_with(b"/cue/go\0"));
+    let udp = signallab(&["send", "udp", &named, "--text", "hi"]);
+    assert_eq!(code(&udp), 0, "{}", err(&udp));
+    assert_eq!(received(&socket), b"hi");
+
     assert_eq!(code(&signallab(&["send", "osc", "127.0.0.1", "/x"])), 2, "a target without a port is the invocation's fault");
+    assert_eq!(code(&signallab(&["send", "osc", &address.to_string(), "cue/go"])), 2, "an OSC address starts with /");
     assert_eq!(code(&signallab(&["send", "osc", &address.to_string(), "/x", "i:nope"])), 2);
     // Nothing listens on this port: the request fails, which is the send failing.
     let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();

@@ -249,7 +249,8 @@ pub(crate) fn check_node(kind: &NodeKind, params: &BTreeMap<String, String>) -> 
             if let Some(address) = fixed(address).filter(|address| !address.starts_with('/')) {
                 return Err(EngineError::new("node.osc_address").with("value", address).in_field(Field::new("address")));
             }
-            if let Some(target) = fixed(target).filter(|target| target.trim().parse::<SocketAddr>().is_err()) {
+            // `IP:port` or `host:port`; a name is looked up when the node sends.
+            if let Some(target) = fixed(target).filter(|target| !crate::transport::is_target(target)) {
                 return Err(EngineError::new("node.target_invalid").with("value", target).in_field(Field::new("target")));
             }
         }

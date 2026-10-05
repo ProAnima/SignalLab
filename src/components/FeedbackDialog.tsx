@@ -17,7 +17,7 @@ function consoleText(entries: LogEntry[], where: { host: HostInfo | null; dataDi
 }
 
 /**
- * A message to the developers, mailed by the studio's hub (docs/hub.md): the
+ * A message to the developers, mailed by the studio's hub (docs/develop/hub.md): the
  * text, an address for the answer, screenshots —
  * pasted with Ctrl+V anywhere in the dialog, picked or dropped — and the logs
  * that help, attached on their own, each shown and removable before sending.

@@ -2,7 +2,7 @@ import type { AppInfo, FeedbackForm, HostInfo, JobInfo } from "./api";
 import type { Lang } from "./i18n";
 
 /**
- * What the feedback form attaches and sends (docs/hub.md): the limits of the
+ * What the feedback form attaches and sends (docs/develop/hub.md): the limits of the
  * studio's hub, checked before anything is uploaded; screenshots read as the
  * hub takes them; and the logs that help — the console, in English for the
  * developers, and what the app runs on. Neither carries this machine's name,

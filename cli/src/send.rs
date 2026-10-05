@@ -259,7 +259,8 @@ pub(crate) fn library(path: Option<PathBuf>) -> Result<(PathBuf, Library), Failu
     let text = match std::fs::read_to_string(&path) {
         Ok(text) => text,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Err(Failure::invalid(EngineError::new("file.not_found").with("path", path.display())));
+            // Not `file.not_found`, which speaks of a server's data folder.
+            return Err(Failure::invalid(EngineError::new("cli.library_missing").with("path", path.display())));
         }
         Err(error) => return Err(Failure::invalid(EngineError::new("file.io").with("path", path.display()).because(error))),
     };

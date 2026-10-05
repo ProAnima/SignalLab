@@ -567,6 +567,26 @@ mod tests {
         jobs.stop(id);
     }
 
+    /// An *Emulator down* step (or a person) takes it down for a time nobody knows, so its 503 carries
+    /// no `Retry-After`; an outage's schedule knows when it is back, and says so.
+    #[tokio::test]
+    async fn a_forced_take_down_answers_503_without_a_retry_after() {
+        let port = free_port();
+        let (jobs, hub, id, base) = started(json!({
+            "name": "Forced", "bind": format!("127.0.0.1:{port}"), "protocol": "http",
+            "routes": [{ "path": "/health", "responses": [{ "body": "ok" }] }]
+        }))
+        .await;
+        let client = client();
+        hub.force(id, Some(DownFault::Unavailable)).unwrap();
+        let down = client.get(format!("{base}/health")).send().await.unwrap();
+        assert_eq!(down.status().as_u16(), 503);
+        assert!(down.headers().get("retry-after").is_none(), "{:?}", down.headers());
+        hub.force(id, None).unwrap();
+        assert_eq!(client.get(format!("{base}/health")).send().await.unwrap().status().as_u16(), 200, "brought up again");
+        jobs.stop(id);
+    }
+
     #[tokio::test]
     async fn an_outage_answers_503_until_it_is_back_then_routes_again() {
         let port = free_port();

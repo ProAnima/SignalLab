@@ -120,8 +120,8 @@ async fn security_headers(request: Request, next: Next) -> Response {
     headers.insert(header::REFERRER_POLICY, HeaderValue::from_static("same-origin"));
     headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
     headers.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static(CSP));
-    // Built assets carry a content hash in their name and never change.
-    let cache = if path.starts_with("/assets/") {
+    // Built assets carry a content hash in their name and never change (the interface's and the documentation's).
+    let cache = if path.starts_with("/assets/") || path.starts_with("/docs/assets/") {
         "public, max-age=31536000, immutable"
     } else if path.starts_with("/api/") || path == "/login" {
         "no-store"

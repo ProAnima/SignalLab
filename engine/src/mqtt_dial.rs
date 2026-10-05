@@ -140,7 +140,7 @@ pub(crate) async fn dial(cfg: &MqttConfig) -> Result<(TcpStream, String), MqttFa
 
 /// Publishing to a filter is a typo that costs a connection and comes back as a
 /// confusing broker-side error, so it is refused before dialling.
-fn validate_publish_topic(topic: &str) -> Option<EngineError> {
+pub(crate) fn validate_publish_topic(topic: &str) -> Option<EngineError> {
     if topic.trim().is_empty() {
         return Some(EngineError::new("mqtt.topic_required"));
     }
@@ -204,7 +204,8 @@ pub async fn publish(
             Frame::tx("mqtt", "mqtt-send")
                 .local(local)
                 .remote(&broker)
-                .payload(&framed)
+                .payload(&bytes)
+                .publish(&broker, &topic, qos, retain)
                 .summary(summarize(&topic, &bytes, qos, retain))
                 .verdict(if bytes.is_empty() && retain {
                     "clears retained"

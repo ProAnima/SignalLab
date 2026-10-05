@@ -20,6 +20,10 @@ test("the starter set: the same emulators as the engine, a name and a note for e
   for (const { code, dict } of LOCALES) {
     for (const id of ids) assert.ok(dict[`seed.emu.${id}.name`] && dict[`seed.emu.${id}.note`], `${code}: seed.emu.${id}`);
   }
+  // The engine writes the notes in English until the interface renames them; they say what en.ts says.
+  const notes = [...seed.matchAll(/stored\(\s*"([^"]+)",\s*"((?:[^"\\]|\\.)*)"/g)].map((found) => [found[1], found[2]]);
+  assert.equal(notes.length, ids.length, "a note for every starter emulator");
+  for (const [id, note] of notes) assert.equal(note, en[`seed.emu.${id}.note`], `the engine's note of ${id} is the interface's English one`);
   const text = (key) => ({ "seed.emu.demo-api.name": "Демо API", "seed.emu.demo-api.note": "заметка" })[key] ?? null;
   const [demo, mine] = localizeEmulatorSeed([stored("demo-api", "http", "127.0.0.1:8080"), stored("mine", "http", "127.0.0.1:8081")], text);
   assert.equal(demo.emulator.name, "Демо API");

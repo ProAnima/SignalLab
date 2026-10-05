@@ -1,0 +1,56 @@
+name: Documentation
+
+# The documentation site on GitHub Pages (https://proanima.github.io/SignalLab/),
+# built from main whenever its pages, the interface's texts (labels and error
+# messages come from them) or the site change. The app and the server carry the
+# same pages inside, built by `npm run build`; CI's checks build and test them.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "src/lib/locales/**"
+      - "src/lib/docs.ts"
+      - "scripts/docs.mjs"
+      - "CHANGELOG.md"
+      - "package-lock.json"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build the site
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: The site, for GitHub Pages
+        run: node scripts/docs.mjs build --pages
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: artifacts/docs-pages
+
+  deploy:
+    name: Publish
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

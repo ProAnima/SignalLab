@@ -5,7 +5,7 @@ the MSI dialog background and banner.
 
 The mark comes from src-tauri/icons/icon-1024.png (scripts/gen-icon.py draws
 it), the colours from src/styles/tokens.css. Images carry no words but the product
-name, because one installer speaks English and Russian.
+name, because one installer speaks every language of the interface.
 
 Sizes are the ones the installers draw them at (96 DPI): NSIS's Welcome/Finish
 sidebar 164x314 and page header 150x57, WiX's dialog 493x312 (artwork on the

@@ -5,6 +5,7 @@ import { useT } from "../lib/i18n";
 import { usePersistentState } from "../lib/hooks";
 import { allFolders, canonicalBody, normalizeFolder, signalPlace } from "../lib/library";
 import { makeId } from "../lib/signals";
+import { describeError } from "../lib/errors";
 
 /**
  * Ctrl+S inside a sender saves it, as the Save button there would: an update
@@ -21,7 +22,8 @@ export function saveShortcut(event: KeyboardEvent<HTMLElement>) {
  * library. Once saved — or opened from the library — the sender is bound to
  * that signal: Save updates it, Save as… makes another, and the chip says
  * where it lives and opens it there. `signalId` is the sender's to keep, so
- * the binding survives a restart.
+ * the binding survives a restart. While the library file cannot be read,
+ * nothing here writes it: the buttons are off and say why.
  */
 export function SaveSignal({ body, signalId, onSignalId, suggestName, onShow }: {
   /** What the sender would send right now. */
@@ -34,10 +36,12 @@ export function SaveSignal({ body, signalId, onSignalId, suggestName, onShow }: 
   onShow?: (id: string) => void;
 }) {
   const t = useT();
-  const { library, setLibrary, pushLog } = useStore();
+  const { library, setLibrary, pushLog, libraryError } = useStore();
   const [asking, setAsking] = useState(false);
   const bound = signalId ? library.find((signal) => signal.id === signalId) ?? null : null;
   const changed = !!bound && canonicalBody(bound.body) !== canonicalBody(body);
+  // The file is being fixed: what is wrong with it, instead of what the button would do.
+  const blocked = libraryError !== null ? describeError(libraryError, t).text : null;
 
   const update = () => {
     if (!bound) { setAsking(true); return; }
@@ -48,10 +52,10 @@ export function SaveSignal({ body, signalId, onSignalId, suggestName, onShow }: 
 
   return <span className="save-signal">
     {bound
-      ? <button className="ghost" disabled={!changed} data-tip={changed ? `${t("sig.saveHint", { name: signalPlace(bound) })} · Ctrl+S` : t("sig.savedHint")} onClick={update} data-save-signal>
+      ? <button className="ghost" disabled={!changed || !!blocked} data-tip={blocked ?? (changed ? `${t("sig.saveHint", { name: signalPlace(bound) })} · Ctrl+S` : t("sig.savedHint"))} onClick={update} data-save-signal>
         {changed ? t("sig.save") : `✓ ${t("sig.savedState")}`}</button>
-      : <button className="ghost" data-tip={`${t("sig.saveNewHint")} · Ctrl+S`} onClick={() => setAsking(true)} data-save-signal>{t("sig.saveNew")}</button>}
-    {bound && <button className="ghost sm" data-tip={t("sig.saveAsHint")} onClick={() => setAsking(true)}>{t("sig.saveAs")}</button>}
+      : <button className="ghost" disabled={!!blocked} data-tip={blocked ?? `${t("sig.saveNewHint")} · Ctrl+S`} onClick={() => setAsking(true)} data-save-signal>{t("sig.saveNew")}</button>}
+    {bound && <button className="ghost sm" disabled={!!blocked} data-tip={blocked ?? t("sig.saveAsHint")} onClick={() => setAsking(true)}>{t("sig.saveAs")}</button>}
     {bound && <button className="link-btn save-signal-chip" data-tip={t("sig.showInLibrary")} aria-label={`${t("sig.showInLibrary")}: ${signalPlace(bound)}`}
       onClick={() => onShow?.(bound.id)}>❖ {signalPlace(bound)}{changed && <em> · {t("sig.changed")}</em>}</button>}
     {asking && <SaveDialog body={body} suggestName={bound?.name ?? suggestName} folder={bound?.group}
@@ -68,7 +72,7 @@ function SaveDialog({ body, suggestName, folder, onClose, onSaved }: {
   onSaved: (signal: Signal) => void;
 }) {
   const t = useT();
-  const { library, folders, setLibrary, pushLog } = useStore();
+  const { library, folders, setLibrary, pushLog, libraryError } = useStore();
   // Where the last one went is where the next one usually goes.
   const [lastFolder, setLastFolder] = usePersistentState("signal-lab.save.folder", "");
   const [name, setName] = useState(suggestName);
@@ -85,6 +89,7 @@ function SaveDialog({ body, suggestName, folder, onClose, onSaved }: {
   }, []);
 
   const save = () => {
+    if (libraryError !== null) return;
     const clean = name.trim();
     if (!clean) { nameField.current?.focus(); return; }
     const group = normalizeFolder(place);
@@ -110,7 +115,8 @@ function SaveDialog({ body, suggestName, folder, onClose, onSaved }: {
       </div>
       <footer className="btn-row">
         <button type="button" className="ghost" onClick={onClose}>{t("common.cancel")}</button>
-        <button type="submit" className="primary">{t("sig.saveConfirm")}</button>
+        <button type="submit" className="primary" disabled={libraryError !== null}
+          data-tip={libraryError !== null ? describeError(libraryError, t).text : undefined}>{t("sig.saveConfirm")}</button>
       </footer>
     </form>
   </dialog>;

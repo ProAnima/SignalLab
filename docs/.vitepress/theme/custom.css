@@ -1,0 +1,111 @@
+/* Signal Lab's colours (src/styles/tokens.css) on VitePress's theme. */
+
+:root {
+  --vp-c-brand-1: #0f8a66;
+  --vp-c-brand-2: #12936d;
+  --vp-c-brand-3: #17a67c;
+  --vp-c-brand-soft: rgba(23, 166, 124, 0.14);
+}
+
+.dark {
+  --vp-c-bg: #070a0f;
+  --vp-c-bg-alt: #0e131b;
+  --vp-c-bg-elv: #141a25;
+  --vp-c-bg-soft: #141a25;
+  --vp-c-text-1: #e3e9f2;
+  --vp-c-text-2: #93a1b5;
+  --vp-c-text-3: #7d8a9e;
+  --vp-c-divider: rgba(255, 255, 255, 0.07);
+  --vp-c-border: rgba(255, 255, 255, 0.14);
+  --vp-c-gutter: #0e131b;
+  --vp-c-brand-1: #3ee6b0;
+  --vp-c-brand-2: #2fd3a0;
+  --vp-c-brand-3: #17a67c;
+  --vp-c-brand-soft: rgba(62, 230, 176, 0.12);
+  --vp-code-bg: #0e131b;
+}
+
+:root {
+  --vp-home-hero-name-color: transparent;
+  --vp-home-hero-name-background: linear-gradient(120deg, #3ee6b0 20%, #38c9ec 60%, #8b7cff);
+}
+
+/* What the interface calls a button, a field or a screen: as it reads in the app. */
+.ui-label {
+  font-weight: 600;
+  padding: 0 0.3em;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 4px;
+  background: var(--vp-c-bg-soft);
+  white-space: nowrap;
+}
+
+/* Keyboard keys. */
+.vp-doc kbd {
+  font: 600 0.85em var(--vp-font-family-mono);
+  padding: 0.1em 0.4em;
+  border: 1px solid var(--vp-c-border);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--vp-c-bg-soft);
+}
+
+/* Arabic reads right to left; code, addresses and commands stay left to right. */
+[dir="rtl"] .vp-doc :is(pre, code, kbd) {
+  direction: ltr;
+  unicode-bidi: isolate;
+}
+
+/* Right to left the sidebar is on the right. VitePress places it, and what makes
+   room for it, by physical sides: mirrored here, breakpoint by breakpoint. */
+html[dir="rtl"] .VPSidebar {
+  left: auto;
+  right: 0;
+  transform: translate(100%);
+}
+html[dir="rtl"] .VPSidebar.open {
+  transform: translate(0);
+}
+@media (min-width: 960px) {
+  html[dir="rtl"] .VPSidebar {
+    transform: translate(0);
+  }
+  html[dir="rtl"] .VPSidebar .curtain {
+    left: auto;
+    right: 0;
+  }
+  html[dir="rtl"] .VPContent.has-sidebar,
+  html[dir="rtl"] .VPLocalNav.has-sidebar,
+  html[dir="rtl"] .VPNavBar.has-sidebar .divider {
+    padding-left: 0;
+    padding-right: var(--vp-sidebar-width);
+  }
+  html[dir="rtl"] .VPNavBar.has-sidebar .title {
+    left: auto;
+    right: 0;
+  }
+  html[dir="rtl"] .VPNavBar.has-sidebar .content {
+    padding-left: 32px;
+    padding-right: var(--vp-sidebar-width);
+  }
+}
+@media (min-width: 1440px) {
+  html[dir="rtl"] .VPSidebar,
+  html[dir="rtl"] .VPNavBar.has-sidebar .title {
+    padding-left: 32px;
+    padding-right: max(32px, calc((100% - (var(--vp-layout-max-width) - 64px)) / 2));
+  }
+  html[dir="rtl"] .VPContent.has-sidebar {
+    padding-left: calc((100vw - var(--vp-layout-max-width)) / 2);
+    padding-right: calc((100vw - var(--vp-layout-max-width)) / 2 + var(--vp-sidebar-width));
+  }
+  html[dir="rtl"] .VPLocalNav.has-sidebar,
+  html[dir="rtl"] .VPNavBar.has-sidebar .divider {
+    padding-left: 0;
+    padding-right: calc((100vw - var(--vp-layout-max-width)) / 2 + var(--vp-sidebar-width));
+  }
+  html[dir="rtl"] .VPNavBar.has-sidebar .content {
+    padding-left: calc((100vw - var(--vp-layout-max-width)) / 2 + 32px);
+    padding-right: calc((100vw - var(--vp-layout-max-width)) / 2 + var(--vp-sidebar-width));
+  }
+}

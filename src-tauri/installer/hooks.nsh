@@ -1,6 +1,6 @@
 ; Signal Lab's additions to the Windows setup (Tauri's NSIS hooks):
 ;
-;   - signallab.exe, the command line (docs/automation.md), next to the app,
+;   - signallab.exe, the command line (docs/automation/cli.md), next to the app,
 ;     and that folder on PATH — the user's for a setup "for me", the machine's
 ;     for "for everyone" — so `signallab` works in every new terminal;
 ;   - when the setup has administrator rights ("for everyone"), an inbound

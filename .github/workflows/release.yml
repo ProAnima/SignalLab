@@ -3,7 +3,7 @@
 # installer signed for the app's updater, and latest.json, which the installed
 # apps read once the release is published (releases/latest skips drafts and
 # pre-releases). Publishing the draft is a person's decision: review it on the
-# releases page. See docs/delivery.md.
+# releases page. See docs/develop/delivery.md.
 name: Release
 
 on:
@@ -112,7 +112,7 @@ jobs:
           includeUpdaterJson: true
           updaterJsonPreferNsis: true
 
-      # The command line for scripts and CI (docs/automation.md), next to the installers.
+      # The command line for scripts and CI (docs/automation/cli.md), next to the installers.
       - name: signallab, the command line
         shell: bash
         env:

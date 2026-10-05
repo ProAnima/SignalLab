@@ -576,7 +576,7 @@ pub async fn start_burst(
             flights.spawn(async move {
                 let resp = execute(&client, &request, &memory).await;
                 if inspect::armed(&host_w) && gate.allow() {
-                    inspect::publish(&host_w, exchange_frame(&request, &resp, Some(id)));
+                    inspect::publish(&host_w, gate.mark(exchange_frame(&request, &resp, Some(id))));
                 }
                 stats.record(&resp);
                 drop(permit);

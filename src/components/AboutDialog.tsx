@@ -1,8 +1,9 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { useStore } from "../lib/store";
-import { useT } from "../lib/i18n";
+import { useI18n } from "../lib/i18n";
 import { useUpdates } from "../lib/updates";
-import { copyText, openExternal } from "../lib/platform";
+import { copyText, openDocs, openExternal } from "../lib/platform";
+import { START_PAGE } from "../lib/docs";
 import { fmtBytes } from "../lib/format";
 import { BrandMark } from "./Brand";
 
@@ -15,7 +16,7 @@ export const REPOSITORY = "https://github.com/ProAnima/SignalLab";
  * it, which saves what is pending, stops every job and restarts the app.
  */
 export function AboutDialog({ onClose, onFeedback }: { onClose: () => void; onFeedback: () => void }) {
-  const t = useT();
+  const { t, lang } = useI18n();
   const { info, jobs } = useStore();
   const updates = useUpdates();
   const id = useId();
@@ -98,6 +99,7 @@ export function AboutDialog({ onClose, onFeedback }: { onClose: () => void; onFe
       </section>
 
       <footer className="btn-row">
+        <button type="button" className="ghost" onClick={() => void openDocs(START_PAGE, lang)} data-tip={t("app.docsHint")}>{t("app.docs")}</button>
         <button type="button" className="ghost" onClick={onFeedback} disabled={working}>{t("about.writeUs")}</button>
         <span className="spacer" />
         <button type="button" className="primary" onClick={onClose} disabled={working}>{t("common.close")}</button>

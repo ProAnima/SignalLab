@@ -25,7 +25,8 @@ import { EmulatorsView } from "./views/EmulatorsView";
 import { EmulatorProvider } from "./lib/emulatorStore";
 import { fmtNum, fmtTime } from "./lib/format";
 import { usePersistentState } from "./lib/hooks";
-import { isDesktop, serverNeedsSignIn, signOut } from "./lib/platform";
+import { isDesktop, openDocs, serverNeedsSignIn, signOut } from "./lib/platform";
+import { screenPage } from "./lib/docs";
 import { api, on, EV, type CaptureStats, type ExperimentNode, type InspectBatch, type JobInfo, type Signal, type SignalBody } from "./lib/api";
 import { en } from "./lib/locales/en";
 
@@ -75,7 +76,7 @@ function Shell() {
   // In a browser: whether this server asks for a token, so Sign out makes sense.
   const [signedIn, setSignedIn] = useState(false);
   useEffect(() => { serverNeedsSignIn().then(setSignedIn); }, []);
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
   const updates = useUpdates();
   // About (with updates) and Feedback: one dialog at a time, over everything.
   const [dialog, setDialog] = useState<"about" | "feedback" | null>(null);
@@ -174,6 +175,23 @@ function Shell() {
     setConsoleOpen(true);
   };
 
+  /** The documentation's page of the screen in view, in the interface's language. */
+  const showDocs = () => {
+    openDocs(screenPage(view), lang).catch(() => pushLog("warn", "docs", "log.docsFailed"));
+  };
+  const showDocsRef = useRef(showDocs);
+  showDocsRef.current = showDocs;
+  // F1, from anywhere — the shell's key, not a screen's.
+  useEffect(() => {
+    const help = (event: KeyboardEvent) => {
+      if (event.key !== "F1" || event.ctrlKey || event.altKey || event.metaKey) return;
+      event.preventDefault();
+      showDocsRef.current();
+    };
+    window.addEventListener("keydown", help);
+    return () => window.removeEventListener("keydown", help);
+  }, []);
+
   useEffect(() => {
     if (!autoscroll || !consoleOpen) return;
     // Scroll the log's own container, not the page — scrollIntoView on an
@@ -231,6 +249,9 @@ function Shell() {
             {t("update.chip", { version: updates.found.version })}
           </button>
         )}
+        <button className="ghost sm header-icon" aria-label={t("app.docs")} data-tip={t("app.docsHint")} onClick={showDocs}>
+          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M2.5 3.2c1.9-.6 3.8-.4 5.5.8 1.7-1.2 3.6-1.4 5.5-.8v9.3c-1.9-.6-3.8-.4-5.5.8-1.7-1.2-3.6-1.4-5.5-.8zM8 4v9.3" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" /></svg>
+        </button>
         <button className="ghost sm header-icon" aria-label={t("feedback.open")} data-tip={t("feedback.open")} onClick={() => setDialog("feedback")}>✉</button>
         <button className="ghost sm header-icon" aria-label={t("about.open")} data-tip={t("about.open")} onClick={() => setDialog("about")}>?</button>
         <LanguageMenu />

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, EV, type CookieInfo, type HttpAuth, type HttpResponse, type JobInfo, type BurstProgress, type Signal, type SignalBody } from "../lib/api";
 import { HttpAuthFields } from "../components/HttpAuthFields";
+import { screenBody, takesBody } from "../lib/httpAuth";
 import { SaveSignal, saveShortcut } from "../components/SaveSignal";
 import { useStore } from "../lib/store";
 import { describeError, responseFailure } from "../lib/errors";
@@ -85,7 +86,7 @@ export function HttpView({ onToExperiment, load, onShowSignal, onShowEmulator }:
   const buildReq = () => ({
     method, url,
     headers: headers.filter(([k]) => k.trim()),
-    body: body.length ? body : null,
+    body: screenBody(method, body),
     timeout_ms: timeout,
     ...(auth.scheme === "none" ? {} : { auth }),
   });
@@ -221,7 +222,7 @@ export function HttpView({ onToExperiment, load, onShowSignal, onShowEmulator }:
               {t("http.keepCookies")}
             </label>
           </div>
-          {method !== "GET" && method !== "HEAD" && (
+          {takesBody(method) && (
             <div className="field">
               <label htmlFor={fid("body")} data-tip={t("http.bodyHint")}>{t("http.body")}</label>
               <textarea id={fid("body")} value={body} onChange={(e) => setBody(e.target.value)} placeholder='{ "key": "value" }' />

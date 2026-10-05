@@ -1,6 +1,7 @@
 import { useEffect, useState, type KeyboardEvent } from "react";
 import { api, type Experiment } from "../lib/api";
 import { isIdent, secretNames } from "../lib/experimentData";
+import { secretsTip } from "../lib/experimentText";
 import { useStore } from "../lib/store";
 import { useT } from "../lib/i18n";
 import type { Failure } from "../lib/errors";
@@ -59,7 +60,7 @@ export function ExperimentSecrets({ doc, onChanged }: { doc: Experiment; onChang
     onChange={(event) => setDraft(event.target.value)} onKeyDown={keys(name)} />;
 
   return <section className="experiment-secrets" aria-label={t("exp.secrets")}>
-    <h3 data-tip={t(readOnly ? "exp.secretsReadOnly" : "exp.secretsHint")}>{t("exp.secrets")}</h3>
+    <h3 data-tip={t(secretsTip(info))}>{t("exp.secrets")}</h3>
     {error !== null && <ErrorMessage className="experiment-file-error" error={error} />}
     {names.length === 0 && !adding && <p className="experiment-empty">{t("exp.noSecrets")}</p>}
     {readOnly && names.map((name) => <div className="experiment-secret-row" key={name}>

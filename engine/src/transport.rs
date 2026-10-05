@@ -33,7 +33,7 @@ pub enum Cause {
     Denied,
     /// HTTPS could not be established (certificate, protocol).
     Tls,
-    /// The target is not `IP:port` or not a valid URL.
+    /// The target is not `IP:port` / `host:port`, or not a valid URL.
     TargetInvalid,
     /// Anything else; the detail says what.
     Failed,
@@ -126,18 +126,44 @@ pub fn chain(error: &dyn std::error::Error) -> String {
     parts.join(": ")
 }
 
-/// `IP:port`, or `host:port` resolved through DNS, to one address.
+/// Whether `spec` has the shape of a destination: `IP:port`, or a host name
+/// and a port. Nothing is looked up.
+pub fn is_target(spec: &str) -> bool {
+    let spec = spec.trim();
+    spec.parse::<SocketAddr>().is_ok() || spec.rsplit_once(':').is_some_and(|(host, port)| !host.is_empty() && !host.contains(char::is_whitespace) && port.parse::<u16>().is_ok())
+}
+
+/// The address a name stands for: its first IPv4 one, else the first. A name
+/// such as `localhost` often lists `::1` first, while the gear on the other
+/// end, and most listeners, are IPv4.
+fn preferred(found: impl Iterator<Item = SocketAddr>) -> Option<SocketAddr> {
+    let mut first = None;
+    for address in found {
+        if address.is_ipv4() {
+            return Some(address);
+        }
+        first.get_or_insert(address);
+    }
+    first
+}
+
+/// The local address a socket sending to `target` binds: any port, in the target's family.
+pub fn unspecified_for(target: &SocketAddr) -> &'static str {
+    if target.is_ipv6() { "[::]:0" } else { "0.0.0.0:0" }
+}
+
+/// `IP:port`, or `host:port` resolved through DNS, to one address (IPv4 when
+/// the name has one).
 pub async fn resolve(spec: &str) -> EngineResult<SocketAddr> {
     let spec = spec.trim();
     if let Ok(address) = spec.parse::<SocketAddr>() {
         return Ok(address);
     }
-    let port_ok = spec.rsplit_once(':').is_some_and(|(host, port)| !host.is_empty() && port.parse::<u16>().is_ok());
-    if !port_ok {
+    if !is_target(spec) {
         return Err(Cause::TargetInvalid.error(spec));
     }
     match tokio::net::lookup_host(spec).await {
-        Ok(mut found) => found.next().ok_or_else(|| Cause::Dns.error(spec)),
+        Ok(found) => preferred(found).ok_or_else(|| Cause::Dns.error(spec)),
         Err(error) => {
             let cause = match of_io(&error) {
                 Cause::Failed | Cause::TargetInvalid => Cause::Dns,
@@ -172,12 +198,27 @@ mod tests {
     #[tokio::test]
     async fn targets_resolve_or_say_why_not() {
         assert_eq!(resolve(" 127.0.0.1:9000 ").await.unwrap(), "127.0.0.1:9000".parse().unwrap());
-        assert!(resolve("localhost:9000").await.unwrap().ip().is_loopback());
-        for bad in ["127.0.0.1", "nonsense", ":9000", "host:99999"] {
+        assert_eq!(resolve("localhost:9000").await.unwrap(), "127.0.0.1:9000".parse().unwrap(), "IPv4 when the name has it");
+        assert_eq!(resolve("[::1]:9000").await.unwrap(), "[::1]:9000".parse().unwrap(), "an IPv6 literal stays one");
+        for bad in ["127.0.0.1", "nonsense", ":9000", "host:99999", "two words:9000"] {
             assert!(resolve(bad).await.unwrap_err().is("transport.target_invalid"), "{bad}");
+            assert!(!is_target(bad), "{bad}");
+        }
+        for good in ["127.0.0.1:9000", "[::1]:9000", "device.local:9000", " localhost:1 "] {
+            assert!(is_target(good), "{good}");
         }
         // `.invalid` is reserved and never resolves (RFC 6761).
         assert!(resolve("no-such-host.invalid:9000").await.unwrap_err().is("transport.dns"));
+    }
+
+    #[test]
+    fn a_name_s_ipv4_address_is_preferred_and_sockets_bind_in_the_target_s_family() {
+        let v6: SocketAddr = "[::1]:9000".parse().unwrap();
+        let v4: SocketAddr = "127.0.0.1:9000".parse().unwrap();
+        assert_eq!(preferred([v6, v4].into_iter()), Some(v4), "listed second, still taken");
+        assert_eq!(preferred([v6].into_iter()), Some(v6), "an IPv6-only name keeps its address");
+        assert_eq!(preferred(std::iter::empty()), None);
+        assert_eq!((unspecified_for(&v4), unspecified_for(&v6)), ("0.0.0.0:0", "[::]:0"));
     }
 
     #[tokio::test]

@@ -9,10 +9,14 @@
  */
 import {
   api,
-  type ExperimentNode, type Frame, type MqttConfig, type RawPayload, type Signal, type SignalBody,
+  type ExperimentNode, type MqttConfig, type Signal, type SignalBody,
 } from "./api";
 import type { TKey, Translate } from "./i18n";
 import { responseFailure } from "./errors";
+import { makeId, signalFromFrame, splitBroker } from "./library";
+
+// The pure parts live in library.ts (node tests import it); screens import them from here.
+export { makeId, signalFromFrame, splitBroker };
 
 export const TRANSPORTS = ["osc", "udp", "http", "mqtt"] as const;
 export type Transport = (typeof TRANSPORTS)[number];
@@ -49,21 +53,6 @@ export function signalSummary(s: Signal): string {
   }
 }
 
-/** host:port, split at the last colon so an IPv6 literal survives. */
-export function splitBroker(broker: string): { host: string; port: number } {
-  const at = broker.lastIndexOf(":");
-  if (at < 1) return { host: broker.trim(), port: 1883 };
-  return { host: broker.slice(0, at).trim(), port: Number(broker.slice(at + 1)) || 1883 };
-}
-
-/**
- * Fire it. Returns a line for the console; throws the engine's message as-is.
- *
- * `liveMqttJobId` is the open MQTT connection, if there is one: an MQTT signal
- * rides it rather than dialling again, so it goes out with that connection's
- * credentials and client id — which is also why the library file stores no
- * password of its own.
- */
 /** What a fired signal did, as a console line: its text key and values (the signal's name is added). */
 export interface Fired { key: TKey; params: Record<string, string | number> }
 
@@ -79,6 +68,15 @@ function httpKeepsCookies(): boolean {
   }
 }
 
+/**
+ * Fire it. Returns a line for the console; throws the engine's message as-is.
+ *
+ * `liveMqttJobId` is an open MQTT connection to the signal's own broker, if
+ * there is one (`mqttConnectionFor`): an MQTT signal rides it rather than
+ * dialling again, so it goes out with that connection's credentials and client
+ * id — which is also why the library file stores no password of its own.
+ * Without one it connects to its broker for this one publish.
+ */
 export async function fireSignal(s: Signal, liveMqttJobId?: number | null): Promise<Fired> {
   const b = s.body;
   switch (b.transport) {
@@ -135,22 +133,6 @@ export async function fireSignal(s: Signal, liveMqttJobId?: number | null): Prom
   }
 }
 
-/** A slug that reads in the file and cannot collide with an existing one. */
-export function makeId(name: string, taken: Signal[]): string {
-  const base =
-    name
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-|-$/g, "")
-      .slice(0, 40) || "signal";
-  const used = new Set(taken.map((s) => s.id));
-  if (!used.has(base)) return base;
-  for (let i = 2; ; i++) {
-    const candidate = `${base}-${i}`;
-    if (!used.has(candidate)) return candidate;
-  }
-}
-
 const BLANK: Record<Transport, SignalBody> = {
   osc: { transport: "osc", target: "127.0.0.1:9000", address: "/hello", args: [] },
   udp: { transport: "udp", target: "127.0.0.1:9000", payload: { kind: "text", text: "" } },
@@ -192,32 +174,6 @@ export function signalFromMqttTopic(
   };
 }
 
-/** A frame keeps every one of its bytes: it can be sent again as it was. */
-export const wholeFrame = (frame: Frame) => frame.bytes > 0 && frame.kept === frame.bytes;
-
-/**
- * A captured frame, as a replayable signal, from the bytes the engine kept of
- * it (`inspect_payload`'s plain `hex`) — never re-parsed out of a display
- * string, which is exactly where a replay stops being the same packet. Half a
- * packet replayed is a different packet, so a frame not kept whole is refused.
- *
- * A received frame is replayed **to** the socket that received it: the point of
- * saving a reader's packet is to stand in for the reader later.
- */
-export function signalFromFrame(frame: Frame, hex: string, taken: Signal[], name: string, t: Translate): Signal | null {
-  if (!wholeFrame(frame)) return null;
-  const target = frame.dir === "rx" ? frame.local : frame.remote;
-  if (!hex.trim() || !target) return null;
-  const payload: RawPayload = { kind: "hex", hex };
-  return {
-    id: makeId(name, taken),
-    name,
-    group: t("sig.capturedFolder"),
-    note: `#${frame.seq} ${frame.proto} ${frame.dir === "rx" ? "←" : "→"} ${frame.remote} · ${frame.summary}`,
-    body: { transport: "udp", target, payload },
-  };
-}
-
 /**
  * A signal as an experiment action with the same parameters. Hex UDP payloads
  * have no node form yet (the UDP node sends text), so they return null.
@@ -238,16 +194,5 @@ export function nodeFromSignal(body: SignalBody, x: number, y: number): Experime
       const { host, port } = splitBroker(body.broker);
       return { ...base, id: id("mqtt"), type: "mqtt", host, port, topic: body.topic, payload: body.payload, qos: body.qos, retain: body.retain };
     }
-  }
-}
-
-/** The inverse, for sending one action node on its own through the direct path. */
-export function signalBodyOfNode(node: ExperimentNode): SignalBody | null {
-  switch (node.type) {
-    case "osc": return { transport: "osc", target: node.target, address: node.address, args: node.args };
-    case "http": return { transport: "http", request: node.request };
-    case "udp": return { transport: "udp", target: node.target, payload: { kind: "text", text: node.text } };
-    case "mqtt": return { transport: "mqtt", broker: `${node.host}:${node.port}`, topic: node.topic, payload: node.payload, qos: node.qos, retain: node.retain };
-    default: return null;
   }
 }

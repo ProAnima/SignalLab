@@ -56,3 +56,41 @@ fn firewall_allow_elsewhere_says_what_to_open() {
     assert_eq!(code(&output), 0);
     assert!(err(&output).contains("ufw") || err(&output).contains("nothing to change"), "{}", err(&output));
 }
+
+/// `doctor` says its lines in the language asked for, as the rest of the command line does.
+#[test]
+fn doctor_speaks_the_chosen_language() {
+    let ru = signallab(&["--lang", "ru", "doctor"]);
+    let said = err(&ru);
+    assert!(said.contains("Сеть:") && said.contains("Папка данных:"), "{said}");
+    assert!(!said.contains("Network:") && !said.contains("Data folder:") && !said.contains("Firewall"), "no English is left: {said}");
+    let verdict = out(&ru);
+    assert!(verdict.contains("ничего не мешает") || verdict.contains("найдено препятствий"), "{verdict}");
+    assert!(!verdict.contains("in the way"), "{verdict}");
+
+    let en = signallab(&["doctor"]);
+    assert!(err(&en).contains("Network:") && err(&en).contains("Data folder:"), "{}", err(&en));
+    assert!(out(&en).contains("in the way"), "{}", out(&en));
+}
+
+#[test]
+#[cfg(not(windows))]
+fn firewall_allow_elsewhere_speaks_the_chosen_language() {
+    let output = signallab(&["--lang", "ru", "firewall", "allow"]);
+    assert_eq!(code(&output), 0);
+    let said = err(&output);
+    assert!(said.contains("брандмауэр") || said.contains("ufw"), "{said}");
+    assert!(!said.contains("nothing to change") && !said.contains("lets in only"), "{said}");
+}
+
+/// A library that is not there is said as this machine's matter, not as a server's data folder.
+#[test]
+fn a_missing_library_is_not_blamed_on_a_server() {
+    let missing = folder("no-library").join("absent.json").display().to_string();
+    for args in [vec!["emulators", "--library", missing.as_str()], vec!["fire", "go", "--library", missing.as_str()]] {
+        let output = signallab(&args);
+        assert_eq!(code(&output), 2, "{args:?}");
+        let said = err(&output);
+        assert!(said.contains("There is no library at") && said.contains("absent.json") && !said.contains("server"), "{args:?}: {said}");
+    }
+}

@@ -1,7 +1,7 @@
 //! The one error shape the experiment engine reports. It carries a stable code
 //! and values, never a sentence: the interface turns `err.<code>` into text in
 //! the user's language, so switching language re-renders every message and a
-//! saved report can be read in either. See `docs/milestone-4-reactive.md`.
+//! saved report can be read in either. See `docs/develop/design-reactive.md`.
 
 use std::collections::BTreeMap;
 use std::fmt;

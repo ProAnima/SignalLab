@@ -7,9 +7,9 @@
 # The container listens on 0.0.0.0:1430, so it needs a token: without one given,
 # it makes one in /data/token on the first start (shown once in the log) and
 # keeps it. Broadcast, multicast and discovery reach the physical network only
-# with --network host on a Linux host. See deploy/compose.yaml and docs/delivery.md.
+# with --network host on a Linux host. See deploy/compose.yaml and docs/develop/delivery.md.
 #
-# The command line `signallab` (docs/automation.md) is in the image too:
+# The command line `signallab` (docs/automation/cli.md) is in the image too:
 #   docker run --rm --network host -v "$PWD:/work" -w /work --entrypoint signallab \
 #     ghcr.io/proanima/signallab run tests/smoke.json
 
@@ -27,6 +27,10 @@ COPY index.html tsconfig.json tsconfig.node.json vite.config.ts ./
 COPY public ./public
 COPY experiments ./experiments
 COPY src ./src
+# The documentation, built into dist/docs by `npm run build` (served at /docs/).
+COPY docs ./docs
+COPY scripts/docs.mjs scripts/lib.mjs ./scripts/
+COPY CHANGELOG.md ./
 RUN npm run build
 
 # ---- the server and the command line: Tauri and WebKit are never built ----------

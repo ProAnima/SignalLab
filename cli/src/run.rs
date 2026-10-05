@@ -577,16 +577,32 @@ pub fn duration(texts: &Texts, ms: u64) -> String {
 /// phases as forwarded / received, in the notation of the timeline.
 pub(crate) fn impairment_line(texts: &Texts, impairment: &Value) -> String {
     let counts = &impairment["counts"];
-    let line = texts.t(
-        "cli.impairmentSummary",
-        &params! {
-            "listen" => impairment["listen"].as_str().unwrap_or_default(),
-            "target" => impairment["target"].as_str().unwrap_or_default(),
-            "received" => &counts["received"],
-            "dropped" => &counts["dropped"],
-            "throttled" => &counts["throttled"],
-        },
-    );
+    let line = if impairment["protocol"] == "tcp" {
+        // A TCP relay moves chunks of streams: connections, resets and half-open ones are its news, and nothing is dropped.
+        texts.t(
+            "cli.impairmentSummaryTcp",
+            &params! {
+                "listen" => impairment["listen"].as_str().unwrap_or_default(),
+                "target" => impairment["target"].as_str().unwrap_or_default(),
+                "received" => &counts["received"],
+                "connections" => counts["connections"].as_u64().unwrap_or_default(),
+                "reset" => counts["reset"].as_u64().unwrap_or_default(),
+                "stalled" => counts["stalled"].as_u64().unwrap_or_default(),
+                "throttled" => &counts["throttled"],
+            },
+        )
+    } else {
+        texts.t(
+            "cli.impairmentSummary",
+            &params! {
+                "listen" => impairment["listen"].as_str().unwrap_or_default(),
+                "target" => impairment["target"].as_str().unwrap_or_default(),
+                "received" => &counts["received"],
+                "dropped" => &counts["dropped"],
+                "throttled" => &counts["throttled"],
+            },
+        )
+    };
     let seconds = |ms: &Value| format!("{:.1}", ms.as_u64().unwrap_or_default() as f64 / 1000.0);
     let phases: Vec<String> = impairment["phases"]
         .as_array()
@@ -763,6 +779,23 @@ mod tests {
         assert_eq!(failure.error.code, "cli.matrix_conflict", "a name set twice is refused");
         let (_, failure) = prepare(&given(&["nobody=a,b"], &[])).err().unwrap();
         assert_eq!((failure.error.code.as_str(), failure.error.params["name"].as_str()), ("cli.matrix_unknown", "nobody"), "said as the matrix's, not --param's");
+    }
+
+    /// A UDP relay moves datagrams; a TCP relay moves chunks of streams, so its line says so.
+    #[test]
+    fn a_relays_summary_names_what_its_protocol_moves() {
+        let en = Texts::new(crate::i18n::Lang::En);
+        let udp = json!({ "listen": "127.0.0.1:9010", "target": "127.0.0.1:9000", "counts": { "received": 120, "forwarded": 90, "dropped": 30, "throttled": 0 },
+            "phases": [{ "profile": "lan", "from_ms": 0, "to_ms": 2000, "counts": { "received": 40, "forwarded": 40 } }] });
+        assert_eq!(impairment_line(&en, &udp), "127.0.0.1:9010 → 127.0.0.1:9000: 120 datagrams, 30 dropped, 0 throttled · lan 0.0–2.0 s 40/40");
+        let tcp = json!({ "protocol": "tcp", "listen": "127.0.0.1:9010", "target": "127.0.0.1:9000", "counts": { "received": 7, "forwarded": 7, "dropped": 0, "throttled": 2, "connections": 1, "reset": 0, "stalled": 1 }, "phases": [] });
+        let said = impairment_line(&en, &tcp);
+        assert_eq!(said, "127.0.0.1:9010 → 127.0.0.1:9000: 7 chunks, 1 connection, 0 reset, 1 half-open, 2 held back");
+        assert!(!said.contains("datagram"), "{said}");
+        let one = json!({ "protocol": "tcp", "listen": "a", "target": "b", "counts": { "received": 1, "forwarded": 1, "dropped": 0, "throttled": 0 } });
+        assert_eq!(impairment_line(&en, &one), "a → b: 1 chunk, 0 connections, 0 reset, 0 half-open, 0 held back", "counts that are absent read as none");
+        let ru = Texts::new(crate::i18n::Lang::Ru);
+        assert!(impairment_line(&ru, &tcp).contains("7 кусков") && !impairment_line(&ru, &tcp).contains("датаграмм"));
     }
 
     #[test]

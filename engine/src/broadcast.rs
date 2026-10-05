@@ -111,7 +111,8 @@ fn parse_hex(s: &str) -> EngineResult<Vec<u8>> {
 #[derive(Clone, Copy, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum TargetMode {
-    /// Comma/space separated `host:port` list.
+    /// `IP:port` or `host:port` destinations, separated by commas, semicolons
+    /// or new lines (a space does not separate them).
     List,
     /// A single broadcast address, e.g. `255.255.255.255:9000` or `10.0.0.255:9000`.
     Broadcast,
@@ -268,6 +269,8 @@ pub struct EmitResult {
 struct EmitStat {
     job_id: u64,
     ts: u64,
+    /// Destinations each round goes to.
+    targets: usize,
     rounds: u64,
     packets: u64,
     bytes: u64,
@@ -275,9 +278,13 @@ struct EmitStat {
     pps: f64,
 }
 
-/// Build the send socket and apply broadcast / multicast options.
+/// Build the send socket and apply broadcast / multicast options. Left to
+/// choose (no bind, or the screen's `0.0.0.0:0`) it is IPv4, or IPv6 when
+/// every target is (an IPv6-only name); a bind that names an interface or a
+/// port is used as it is.
 async fn emit_socket(cfg: &EmitConfig, targets: &[SocketAddr]) -> EngineResult<UdpSocket> {
-    let bind = cfg.bind.as_deref().map(str::trim).filter(|bind| !bind.is_empty()).unwrap_or("0.0.0.0:0");
+    let any = if !targets.is_empty() && targets.iter().all(SocketAddr::is_ipv6) { "[::]:0" } else { "0.0.0.0:0" };
+    let bind = cfg.bind.as_deref().map(str::trim).filter(|bind| !bind.is_empty() && *bind != "0.0.0.0:0").unwrap_or(any);
     let address = super::osc::parse_bind(bind)?;
     let sock = UdpSocket::bind(address)
         .await
@@ -439,12 +446,13 @@ pub async fn start_beacon(
         let mut guard = TaskGuard::new();
 
         let reporter = {
-            let (host_r, p, b, e, r) = (
+            let (host_r, p, b, e, r, fanout) = (
                 host_cl.clone(),
                 packets.clone(),
                 bytes.clone(),
                 errors.clone(),
                 rounds.clone(),
+                targets.len(),
             );
             tokio::spawn(async move {
                 let mut prev = 0u64;
@@ -458,6 +466,7 @@ pub async fn start_beacon(
                         EmitStat {
                             job_id: id,
                             ts: now_ms(),
+                            targets: fanout,
                             rounds: r.load(Ordering::Relaxed),
                             packets: now,
                             bytes: b.load(Ordering::Relaxed),
@@ -486,23 +495,23 @@ pub async fn start_beacon(
             }
             rounds.fetch_add(1, Ordering::Relaxed);
             // Sample the capture: a fast beacon must not flood the Inspector.
-            let capture = inspect::armed(&host_cl) && gate.allow();
+            // A round not drawn is a frame per target not shown.
+            let capture = inspect::armed(&host_cl) && gate.allow_for(targets.len() as u64);
             for t in &targets {
                 match sock.send_to(&payload, t).await {
                     Ok(n) => {
                         packets.fetch_add(1, Ordering::Relaxed);
                         bytes.fetch_add(n as u64, Ordering::Relaxed);
                         if capture {
-                            inspect::publish(
-                                &host_cl,
-                                Frame::tx(proto, "beacon")
-                                    .job(id)
-                                    .local(&local)
-                                    .remote(t)
-                                    .payload(&payload)
-                                    .summary(summary.clone())
-                                    .verdict(verdict),
-                            );
+                            let frame = Frame::tx(proto, "beacon")
+                                .job(id)
+                                .local(&local)
+                                .remote(t)
+                                .payload(&payload)
+                                .summary(summary.clone())
+                                .verdict(verdict);
+                            // The round's first frame says what the gate held back.
+                            inspect::publish(&host_cl, gate.mark(frame));
                         }
                     }
                     Err(e) => {
@@ -531,6 +540,7 @@ pub async fn start_beacon(
             EmitStat {
                 job_id: id,
                 ts: now_ms(),
+                targets: targets.len(),
                 rounds: rounds.load(Ordering::Relaxed),
                 packets: packets.load(Ordering::Relaxed),
                 bytes: bytes.load(Ordering::Relaxed),
@@ -671,6 +681,44 @@ mod tests {
         let (proto, summary, _) = describe_payload(&buf[..n]);
         assert_eq!(proto, "osc");
         assert_eq!(summary, "/hello/discover \"who\"");
+    }
+
+    #[tokio::test]
+    async fn a_host_name_reaches_an_ipv4_listener_and_an_ipv6_target_gets_an_ipv6_socket() {
+        let host = Host::new(crate::host::Recorder::new(), crate::inspect::Capture::new());
+        let device = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let target = format!("localhost:{}", device.local_addr().unwrap().port());
+        // `localhost` may list ::1 first; the device listens on IPv4 only.
+        let sent = send_once(host, cfg_for(TargetMode::List, &target, Payload::Text { text: "hello".into() })).await.unwrap();
+        assert_eq!((sent.packets, sent.errors), (1, 0), "{:?}", sent.first_error);
+        let mut buf = [0u8; 16];
+        let (n, _) = tokio::time::timeout(Duration::from_secs(2), device.recv_from(&mut buf)).await.expect("it arrived").unwrap();
+        assert_eq!(&buf[..n], b"hello");
+
+        let v6 = cfg_for(TargetMode::List, "[::1]:9", Payload::Text { text: "x".into() });
+        let targets = resolve_targets(v6.mode, &v6.target, 0).await.unwrap();
+        assert!(emit_socket(&v6, &targets).await.unwrap().local_addr().unwrap().is_ipv6());
+        let screen = EmitConfig { bind: Some("0.0.0.0:0".into()), ..v6 };
+        assert!(emit_socket(&screen, &targets).await.unwrap().local_addr().unwrap().is_ipv6(), "the screen's own default leaves the family to the targets");
+        let mixed = cfg_for(TargetMode::List, "[::1]:9, 127.0.0.1:9", Payload::Text { text: "x".into() });
+        let targets = resolve_targets(mixed.mode, &mixed.target, 0).await.unwrap();
+        assert!(emit_socket(&mixed, &targets).await.unwrap().local_addr().unwrap().is_ipv4());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_beacon_reports_its_targets() {
+        let recorder = crate::host::Recorder::new();
+        let host = Host::new(recorder.clone(), crate::inspect::Capture::new());
+        let jobs = JobRegistry::new();
+        let (a, b) = (UdpSocket::bind("127.0.0.1:0").await.unwrap(), UdpSocket::bind("127.0.0.1:0").await.unwrap());
+        let list = format!("{};{}", a.local_addr().unwrap(), b.local_addr().unwrap());
+        let cfg = EmitConfig { rate: 20.0, count: 2, ..cfg_for(TargetMode::List, &list, Payload::Text { text: "x".into() }) };
+        start_beacon(host, jobs, cfg).await.unwrap();
+        let ended = recorder.clone();
+        tokio::task::spawn_blocking(move || ended.wait_for("job://ended", Duration::from_secs(5), |_| true)).await.unwrap().expect("two rounds and done");
+        let stats = recorder.payloads("broadcast://emit-stat");
+        assert!(stats.iter().all(|stat| stat["targets"] == 2), "every report names the targets: {stats:?}");
+        assert!(stats.iter().any(|stat| stat["rounds"] == 2 && stat["packets"] == 4), "{stats:?}");
     }
 
     #[tokio::test]

@@ -7,7 +7,7 @@
 # writes a compose file, starts the server with host networking so OSC, UDP,
 # broadcast and discovery reach the real network, waits until it answers, and
 # prints the address and the access token. Run it again to update; the data and
-# the token stay. More: docs/delivery.md, section 7.
+# the token stay. More: https://proanima.github.io/SignalLab/server/, section 7.
 #
 #   sh install.sh [--version X.Y.Z] [--port N | --listen IP:PORT] [--dir DIR]
 #                 [--name NAME] [--image NAME] [--open-udp PORTS] [--no-firewall]
@@ -242,7 +242,7 @@ $AS_OWNER tee "$FILE" > /dev/null <<EOF
 $MARK — it is rewritten on every run.
 # Your own settings go in compose.override.yaml next to it (Docker Compose
 # merges that file in): experiment secrets, SIGNALLAB_ALLOWED_HOSTS,
-# SIGNALLAB_SECURE_COOKIE behind HTTPS. See docs/delivery.md, section 7.
+# SIGNALLAB_SECURE_COOKIE behind HTTPS. See https://proanima.github.io/SignalLab/server/
 
 name: $NAME
 

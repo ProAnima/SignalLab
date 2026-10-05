@@ -1,0 +1,43 @@
+name: Bug report
+description: Something does not work as the documentation says it should.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time. For a security problem, please read SECURITY.md and report it privately instead.
+        The app's **✉ Feedback** button sends a report with logs attached, if you prefer.
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where
+      options:
+        - Desktop app (Windows)
+        - Desktop app (Linux)
+        - Server in a browser
+        - Docker image
+        - Command line (signallab)
+        - Documentation
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: About (the ? in the header) shows it; `signallab version` on the command line.
+      placeholder: "1.0.0"
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, step by step, what you expected and what happened instead. An experiment file or a screenshot helps.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Messages and logs
+      description: The console's lines, an error message with its code, or the server's log. Remove tokens and passwords.
+      render: text

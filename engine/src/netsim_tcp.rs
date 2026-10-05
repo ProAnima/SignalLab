@@ -132,13 +132,16 @@ impl Ending {
     }
 }
 
-/// What a chunk is reported to the Inspector with.
+/// What a chunk is reported to the Inspector with: the relay's listen address
+/// as the frame's local side, where the chunk was going as its peer, and the
+/// leg after the fate in the verdict.
 #[derive(Clone)]
 struct Tap {
     host: Host,
     job_id: u64,
     leg: &'static str,
     dir: &'static str,
+    local: String,
     peer: String,
     gate: Arc<Gate>,
 }
@@ -150,11 +153,11 @@ impl Tap {
 
     fn record(&self, bytes: &[u8], verdict: String) {
         let (_, summary, detail) = describe_payload(bytes);
-        let mut frame = Frame::new("tcp", self.dir, "netsim").job(self.job_id).local(self.leg).remote(&self.peer).payload(bytes).summary(summary).verdict(verdict);
+        let mut frame = Frame::new("tcp", self.dir, "netsim").job(self.job_id).local(&self.local).remote(&self.peer).payload(bytes).summary(summary).verdict(format!("{verdict} · {}", self.leg));
         if let Some(detail) = detail {
             frame = frame.detail(detail);
         }
-        inspect::publish(&self.host, frame);
+        inspect::publish(&self.host, self.gate.mark(frame));
     }
 }
 
@@ -268,7 +271,7 @@ async fn connection(relay: Arc<Relay>, host: Host, job_id: u64, name: String, n:
         }
     };
     let _ = (client.set_nodelay(true), target.set_nodelay(true));
-    let tap = |leg: &'static str, dir: &'static str, peer: String| Tap { host: host.clone(), job_id, leg, dir, peer, gate: gate.clone() };
+    let tap = |leg: &'static str, dir: &'static str, peer: String| Tap { host: host.clone(), job_id, leg, dir, local: relay.listen.to_string(), peer, gate: gate.clone() };
     let (to_target, to_client) = (tap("client→target", "tx", relay.target.to_string()), tap("target→client", "rx", peer.to_string()));
     let (client_read, client_write) = client.into_split();
     let (target_read, target_write) = target.into_split();
@@ -480,6 +483,42 @@ mod tests {
         assert_eq!(back, b"wait for me");
         let summary = relay.summary(None);
         assert_eq!(summary.phases.iter().map(|phase| phase.profile.as_str()).collect::<Vec<_>>(), ["offline", "clean"]);
+        serving.abort();
+    }
+
+    /// A relayed chunk in the Inspector names the relay's listen address, where
+    /// the chunk was going, and the leg after its fate.
+    #[tokio::test]
+    async fn relayed_chunks_name_the_relay_and_where_each_was_going() {
+        // A target that answers after a pause: past the relay's sampling gate.
+        let target = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let target_address = target.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut stream, _) = target.accept().await.unwrap();
+            let mut buffer = [0u8; 64];
+            let _ = stream.read(&mut buffer).await;
+            tokio::time::sleep(Duration::from_millis(60)).await;
+            let _ = stream.write_all(b"pong").await;
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        });
+        let capture = Capture::new();
+        capture.set_enabled(true);
+        let listener = open("127.0.0.1:0".parse().unwrap(), "127.0.0.1:0").await.unwrap();
+        let listen = listener.local_addr().unwrap();
+        let relay = Relay::new(listen, target_address, RelayProtocol::Tcp, calm(), 9);
+        let serving = tokio::spawn(relay.clone().serve_tcp(Host::new(Recorder::new(), capture.clone()), 0, "test".into(), listener));
+        let mut client = TcpStream::connect(listen).await.unwrap();
+        client.write_all(b"ping").await.unwrap();
+        assert_eq!(read_some(&mut client, Duration::from_secs(3)).await.expect("the answer").unwrap(), b"pong");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let frames = capture.snapshot(16);
+        let out = frames.iter().find(|frame| frame.dir == "tx").expect("the chunk to the target");
+        assert_eq!((out.proto.as_str(), out.local.clone(), out.remote.clone()), ("tcp", listen.to_string(), target_address.to_string()));
+        assert!(out.verdict.as_deref().is_some_and(|verdict| verdict.starts_with("forwarded +") && verdict.ends_with(" · client→target")), "{:?}", out.verdict);
+        let back = frames.iter().find(|frame| frame.dir == "rx").expect("the chunk to the client");
+        assert_eq!((back.local.clone(), back.remote.clone()), (listen.to_string(), client.local_addr().unwrap().to_string()));
+        assert!(back.verdict.as_deref().is_some_and(|verdict| verdict.ends_with(" · target→client")), "{:?}", back.verdict);
         serving.abort();
     }
 

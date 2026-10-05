@@ -254,11 +254,12 @@ fn io_error(path: &Path, error: std::io::Error) -> EngineError {
     EngineError::new("file.io").with("path", path.display()).because(error)
 }
 
-/// The library in `text`, read from `path`. A broken file names itself: the
+/// The library in `bytes`, read from `path`. A broken file names itself: the
 /// fix is to edit or delete it, and it is hand-editable by design — so it is
-/// reported, never replaced with the starter set.
-fn parse(text: &str, path: &Path) -> EngineResult<Library> {
-    serde_json::from_str(text).map_err(|error| {
+/// reported, never replaced with the starter set. A byte order mark (an
+/// editor's habit) is no error; bytes that are not UTF-8 are one, with where.
+fn parse(bytes: &[u8], path: &Path) -> EngineResult<Library> {
+    serde_json::from_slice(bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(bytes)).map_err(|error| {
         EngineError::new("signals.json_invalid")
             .with("path", path.display())
             .with("line", error.line())
@@ -271,7 +272,7 @@ fn parse(text: &str, path: &Path) -> EngineResult<Library> {
 pub fn load() -> EngineResult<LibraryFile> {
     let path = library_path();
     let shown = path.display().to_string();
-    match std::fs::read_to_string(&path) {
+    match std::fs::read(&path) {
         Ok(text) => {
             let library = parse(&text, &path)?;
             Ok(LibraryFile {
@@ -297,11 +298,31 @@ pub fn load() -> EngineResult<LibraryFile> {
 /// whole thing — with a few dozen entries there is nothing to be gained from a
 /// merge protocol, and plenty to lose.
 pub fn save(library: &Library) -> EngineResult<String> {
-    let dir = super::paths::data_dir();
-    std::fs::create_dir_all(&dir).map_err(|e| io_error(&dir, e))?;
-    let path = library_path();
+    save_in(&super::paths::data_dir(), library)
+}
+
+/// `save`, in `dir`. A file there that does not read as a library is someone's
+/// document being fixed: it is refused as `load` refuses it, and left as it
+/// is — whoever writes the library, a list that was never read from it must
+/// not land over it. The new file goes through a temporary one in the same
+/// folder, so a write cut short leaves the previous file whole.
+fn save_in(dir: &Path, library: &Library) -> EngineResult<String> {
+    std::fs::create_dir_all(dir).map_err(|e| io_error(dir, e))?;
+    let path = dir.join("signals.json");
+    match std::fs::read(&path) {
+        Ok(existing) => {
+            parse(&existing, &path)?;
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(io_error(&path, e)),
+    }
     let text = serde_json::to_string_pretty(library).map_err(|e| EngineError::new("signals.encode").because(e))?;
-    std::fs::write(&path, text).map_err(|e| io_error(&path, e))?;
+    let temporary = dir.join(format!(".signals-{:016x}.tmp", rand::random::<u64>()));
+    std::fs::write(&temporary, text).map_err(|e| io_error(&temporary, e))?;
+    if let Err(e) = std::fs::rename(&temporary, &path) {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(io_error(&path, e));
+    }
     Ok(path.display().to_string())
 }
 
@@ -389,14 +410,76 @@ mod tests {
     #[test]
     fn a_broken_file_names_itself_instead_of_being_replaced() {
         let path = library_path();
-        let error = parse("{
+        let error = parse(b"{
   \"version\": 2,
   not json }", &path).unwrap_err();
         assert_eq!(error.code, "signals.json_invalid");
         assert!(error.params["path"].ends_with("signals.json"), "the error names the file: {error}");
         assert_eq!((error.params["line"].as_str(), error.params["column"].as_str()), ("3", "3"));
         assert!(error.detail.is_some(), "the parser's wording is the detail");
-        // A file of the wrong shape is reported the same way.
-        assert!(parse(r#"{"signals": []}"#, &path).unwrap_err().is("signals.json_invalid"));
+        // A file of the wrong shape is reported the same way, and so is one that is not UTF-8.
+        assert!(parse(br#"{"signals": []}"#, &path).unwrap_err().is("signals.json_invalid"));
+        assert!(parse(b"{\"version\": 2, \"folders\": [\"\xff\"]}", &path).unwrap_err().is("signals.json_invalid"));
+        // An editor's byte order mark is not a mistake.
+        assert_eq!(parse(b"\xef\xbb\xbf{\"version\": 2}", &path).unwrap().version, 2);
+    }
+
+    /// A folder of its own under the system's temporary one, gone afterwards.
+    struct Scratch(PathBuf);
+
+    impl Scratch {
+        fn new(name: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!("signal-lab-{name}-{:016x}", rand::random::<u64>()));
+            std::fs::create_dir_all(&dir).unwrap();
+            Scratch(dir)
+        }
+
+        fn names(&self) -> Vec<String> {
+            let mut names: Vec<String> = std::fs::read_dir(&self.0).unwrap().map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned()).collect();
+            names.sort();
+            names
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn a_file_being_fixed_is_never_written_over() {
+        let dir = Scratch::new("broken");
+        let path = dir.0.join("signals.json");
+        let broken = b"{\n  \"version\": 2,\n  \"signals\": [ { \"id\": \"half-typed\" \n";
+        std::fs::write(&path, broken).unwrap();
+        let error = save_in(&dir.0, &seed()).unwrap_err();
+        assert_eq!(error.code, "signals.json_invalid", "the same error as reading it: {error}");
+        assert!(error.params["path"].ends_with("signals.json"));
+        assert!(error.params.contains_key("line") && error.params.contains_key("column"));
+        assert_eq!(std::fs::read(&path).unwrap(), broken, "byte for byte as it was");
+        assert_eq!(dir.names(), ["signals.json"], "and nothing left beside it");
+        // A file of the wrong shape is someone's too.
+        std::fs::write(&path, br#"{"signals": "not a list"}"#).unwrap();
+        assert!(save_in(&dir.0, &seed()).unwrap_err().is("signals.json_invalid"));
+        assert_eq!(std::fs::read(&path).unwrap(), br#"{"signals": "not a list"}"#);
+    }
+
+    #[test]
+    fn a_good_save_replaces_the_file_whole_and_leaves_no_temporary_file() {
+        let dir = Scratch::new("save");
+        // No file yet: written.
+        let shown = save_in(&dir.0, &seed()).unwrap();
+        assert!(shown.ends_with("signals.json"));
+        let path = dir.0.join("signals.json");
+        assert_eq!(parse(&std::fs::read(&path).unwrap(), &path).unwrap().signals.len(), seed().signals.len());
+        // A readable file: replaced by the new library.
+        let mut library = seed();
+        library.signals.truncate(1);
+        library.folders = vec!["Venue/Stage".into()];
+        save_in(&dir.0, &library).unwrap();
+        let back = parse(&std::fs::read(&path).unwrap(), &path).unwrap();
+        assert_eq!((back.signals.len(), back.folders), (1, vec!["Venue/Stage".to_string()]));
+        assert_eq!(dir.names(), ["signals.json"], "the temporary file became the library");
     }
 }

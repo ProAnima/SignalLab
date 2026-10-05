@@ -6,6 +6,7 @@ import {
 import { SaveSignal, saveShortcut } from "../components/SaveSignal";
 import { useStore } from "../lib/store";
 import { useT } from "../lib/i18n";
+import { describeError } from "../lib/errors";
 import { fmtNum, fmtTime } from "../lib/format";
 import { signalFromMqttTopic, splitBroker } from "../lib/signals";
 import { waitForMqttMessage } from "../lib/experimentGraph";
@@ -24,7 +25,7 @@ export function MqttView({ onWaitFor, load, onShowSignal }: {
   onShowSignal?: (id: string) => void;
 } = {}) {
   const {
-    pushLog, pushError, jobGone, stopJob, refreshJobs, library, setLibrary,
+    pushLog, pushError, jobGone, stopJob, refreshJobs, library, setLibrary, libraryError,
     mqttTopics, mqttVersion, mqttDropped, clearMqttTopics,
   } = useStore();
   const t = useT();
@@ -181,6 +182,7 @@ export function MqttView({ onWaitFor, load, onShowSignal }: {
   };
 
   const saveTopicAsSignal = (node: TopicNode) => {
+    if (libraryError !== null) return;
     const signal = signalFromMqttTopic(
       `${cfg.host}:${cfg.port}`,
       node.path,
@@ -439,7 +441,8 @@ export function MqttView({ onWaitFor, load, onShowSignal }: {
                 >
                   {confirmClear === pickedNode.path ? t("mq.clearConfirm") : t("mq.clearRetained")}
                 </button>
-                <button className="ghost sm" onClick={() => saveTopicAsSignal(pickedNode)}>
+                <button className="ghost sm" disabled={libraryError !== null} data-tip={libraryError !== null ? describeError(libraryError, t).text : undefined}
+                  onClick={() => saveTopicAsSignal(pickedNode)}>
                   {t("sig.fromFrame")}
                 </button>
               </div>

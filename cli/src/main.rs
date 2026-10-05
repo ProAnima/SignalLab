@@ -3,7 +3,7 @@
 //! through its `/api/run` — and exits with a code a pipeline understands;
 //! sends one OSC message, datagram, HTTP request or MQTT publish; fires a
 //! signal from a library. Everything goes through the engine's own commands
-//! (`engine::Service`), so it behaves as the app does. See docs/automation.md.
+//! (`engine::Service`), so it behaves as the app does. Documentation: https://proanima.github.io/SignalLab/automation/cli.html.
 
 mod catalog;
 mod doctor;
@@ -40,7 +40,7 @@ use i18n::{Lang, Texts};
         server with --server — and send single OSC messages, datagrams, HTTP requests and MQTT publishes.\n\n\
         Exit codes: 0 every experiment passed (or the send succeeded); 1 an experiment ran and failed, or a send failed; \
         2 the invocation or a document is invalid; 3 nothing could run for a reason outside the experiment \
-        (server unreachable, token refused, a port that could not be opened). See docs/automation.md."
+        (server unreachable, token refused, a port that could not be opened). Documentation: https://proanima.github.io/SignalLab/automation/cli.html."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -125,7 +125,8 @@ struct Place {
     token_file: Option<PathBuf>,
 
     /// Where secrets come from in this process: files (SIGNALLAB_SECRET_<NAME> and --secrets-dir) or
-    /// the system credential store (Windows Credential Manager, macOS Keychain).
+    /// the system credential store (the Windows Credential Manager; elsewhere there is none and
+    /// a run that uses a secret stops with exit code 3).
     #[arg(long, value_enum, default_value_t = SecretSource::Files, conflicts_with = "server")]
     secrets: SecretSource,
 

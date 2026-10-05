@@ -311,8 +311,10 @@ impl Context {
         inspect::armed(&self.host) && self.gate.allow()
     }
 
+    /// Into the Inspector; the first frame after exchanges the gate held back
+    /// says how many (`+N not shown`).
     pub(crate) fn publish(&self, frame: Frame) -> Option<u64> {
-        let frame = frame.local(self.emulation.local);
+        let frame = self.gate.mark(frame.local(self.emulation.local));
         let frame = match self.job {
             Some(id) => frame.job(id),
             None => frame,

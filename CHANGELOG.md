@@ -6,9 +6,146 @@ dates are release dates.
 Write changes under **Unreleased** as they land. `npm run release -- <version>` turns
 that section into the version's section, and the release workflow uses it as the
 release notes — so what is written here is what users read. See
-[docs/delivery.md](docs/delivery.md).
+[Checks, builds and releases](https://proanima.github.io/SignalLab/develop/delivery.html).
 
 ## [Unreleased]
+
+### Added
+
+- **Documentation, in all eleven languages.** A guide to every screen, protocol and
+  tool; experiments node by node, with data, flow, load and faults; the command line,
+  CI and the assistant's tools (MCP); the server, its security and its HTTP API — every
+  command and event; and a reference of shortcuts, files and every error message.
+  Searchable in every language. It is inside the app and the server, so it works
+  offline: **F1**, or the book in the header, opens the page of the screen in view; and
+  it is published at https://proanima.github.io/SignalLab/.
+
+### Changed
+
+- The firewall's message on a system without per-program rules no longer names a file
+  of the repository; what to do is in the documentation's troubleshooting page.
+
+### Fixed
+
+- **A broken signal library is no longer overwritten.** While `signals.json` could not be
+  read, any change on the Signals screen wrote the screen's empty list over the file you
+  were fixing. Now nothing writes the library until it reads again: the screens' edits,
+  Save, Save as and *Save as signal* are off and say what is wrong, a save that meets a
+  file you broke meanwhile is refused and leaves it as it is, and *Reload file* lifts the
+  block once the file parses. The library is also written through a temporary file, so a
+  write cut short cannot leave half a file.
+
+- **Save as signal makes the right signal.** A datagram received on a socket listening on
+  every address (`0.0.0.0:9000`, `[::]:9000`) is now replayed to this computer on that port
+  instead of to `0.0.0.0`; an MQTT publish becomes an MQTT signal with its broker, topic,
+  QoS, retain flag and exact payload instead of a raw UDP one; a datagram that went through
+  a relay is aimed at the address it was going to; and a TCP chunk, an HTTP exchange, a
+  WebSocket message or an MQTT control packet — which cannot be sent again as they were —
+  is no longer offered: the button is off and its tip says why. A relayed frame now shows
+  the relay's address and where the packet was going; the leg ends its verdict
+  (`forwarded +40ms · client→target`).
+
+- **An MQTT signal goes to its own broker.** While the MQTT screen was connected, every
+  MQTT signal was published on that connection even when it named another broker. It now
+  rides the connection only when it is to the signal's broker (same host, ignoring case,
+  and port, 1883 when none is given); otherwise it publishes to its own broker.
+
+- **The Inspector's description lists everything it captures** — HTTP, MQTT and
+  WebSocket, emulators, Storm and the Scanner, experiments' steps and waits — not only OSC
+  and relay frames.
+
+- **An impairment relay's target may be a host name.** The Impairment screen and the
+  experiment's Impairment node took only an `IP:port`; the target now also takes
+  `host:port`, looked up once when the relay starts. The listen address stays an IP.
+
+- **A body the HTTP screen hides is not sent.** After typing a body under POST and
+  switching to GET or HEAD, which hide the field, the request still carried the old
+  text — and so did a signal saved from it and *Add to experiment*. A method that hides
+  the body now sends none, everywhere; the text stays in the field for when you switch
+  back.
+
+- **The MQTT screen refuses to publish to a wildcard.** A topic with `+` or `#` was
+  sent to the broker on the screen's connection (which many brokers answer by closing
+  it), while a signal, a step and `signallab send mqtt` refused it first. The
+  connection's publish now refuses it with the same message, and the connection stays.
+  Subscribing to filters is unchanged.
+
+- **The OSC sender and generator refuse an address without the leading `/`.** They sent
+  it, while a step and Broadcast refused it; the message now says the address must
+  start with `/`.
+
+- **The WebSocket screen enforces the 16 MiB message limit.** A longer message was
+  written to the wire; it is now refused (`Too long: at most 16777216`) before anything
+  is sent, as a step's was, and the connection stays open.
+
+- **Host names work wherever a destination is `host:port`.** `localhost:9000` often
+  failed (`Sending to [::1]:9000 failed`) because the name's IPv6 address came first
+  while Signal Lab sends from an IPv4 socket. A name with an IPv4 address now uses it,
+  and a name with only IPv6 addresses is sent to from an IPv6 socket. The OSC sender and
+  generator, Storm, `signallab send osc` and an OSC step also accept `host:port` now —
+  they took only an IP address — and their tips say so.
+
+- **Storm sends the rate it is given.** It sent a tenth of the rate in 10 ms steps,
+  rounded down to a multiple of 100, so 50 a second sent about 100, 250 sent 200, and
+  the system's timer made it worse. The rate is now a schedule — packet *n* is due
+  *n* ÷ rate seconds after the start — so 50 is 50 and 250 is 250, a duration ends on
+  time, and a computer that falls behind drops the old packets instead of bursting.
+
+- **What the Inspector samples is counted.** The signal generator, a beacon, the
+  discovery listener, Storm, the HTTP burst and load, the MQTT connection, the
+  impairment relays and the emulators draw only some of their traffic, and the rest was
+  counted nowhere. The next frame drawn now says how many were left out, in its verdict
+  (`sampled · +5 not shown`).
+
+- **Broadcast shows its targets while a beacon runs.** *Targets* read 0 until you had
+  pressed *Send once*; the beacon now reports how many destinations each round goes to.
+
+- **The Broadcast target list says what separates targets.** Commas, semicolons or new
+  lines — not spaces, as the tip implied.
+
+- **The generator's saw and ramp are different waves.** Both rose from Min to Max.
+  Saw now falls from Max to Min and jumps back; ramp rises from Min to Max.
+
+- **A TCP message shows in the Inspector.** The *TCP message* node of an experiment wrote
+  and read without leaving a trace there. Its step now appears as two `tcp` frames, source
+  `experiment`: the payload it wrote and the answer it read (at most 1 024 bytes), with
+  secrets masked like in any other frame.
+
+- **A TCP message has *Send now*.** The button was missing on a *TCP message* node although
+  the engine could send it; it now connects, writes the payload once and says how many
+  bytes were sent and came back.
+
+- **Texts that said what Signal Lab does not do.** The experiment import's tip said
+  "Version 1" (it opens this version's files and every older one, upgraded, up to 4 MiB);
+  the *Impairment* node said it degrades UDP only (it relays UDP or TCP); *Wait for
+  WebSocket* counted messages "since the connection opened" (it counts from the branch's
+  latest action of any kind); the *MQTT publish* node promised "a local broker" (any broker
+  works); *Join branches* said only a *Parallel branch* feeds it (any wire into it must be
+  followed); *Corruption* said "one byte flipped" (one bit of one byte); the starter OSC
+  device's note said `/pong` carries "the same number" (it carries a count); and the
+  message about secrets named the macOS Keychain, which Signal Lab has no build for. On the
+  Linux desktop app, where there is no credential store at all, the *Secrets* tip now says
+  so instead of naming the Windows one.
+
+- **The command line told the wrong thing in a few places.** `--secrets system` said it
+  reads the macOS Keychain (it reads the Windows Credential Manager; on Linux it fails with
+  exit code 3); `signallab emulators` without a library blamed "the server's data folder";
+  `signallab doctor` and `signallab firewall allow` printed English whatever `--lang` was,
+  and now speak the chosen language; and the summary of an Impairment node over TCP counted
+  "datagrams", where it now counts chunks, connections, resets, half-open connections and
+  held-back streams.
+
+- **`signal-lab-server --help` told half of the host-name rule.** It said that without a
+  token only loopback names are allowed; names given with `--allowed-host` are allowed with
+  a token or without. The behaviour is unchanged, the help now says it.
+
+- **The GitHub Action's `lang` input lists all eleven languages**, not "en or ru".
+
+- **The node catalogue that `signallab nodes` and the assistants read is truer.** It asks
+  for exactly one End (not "at least one"), lists every method the HTTP node accepts
+  (OPTIONS, and any other token the engine can send), marks the fields that take templates
+  (a header check's name and text, a WebSocket wait's pattern and more), and says what a
+  *Wait for WebSocket* counts from.
 
 ## [1.0.0] - 2026-10-04
 
@@ -80,7 +217,7 @@ release notes — so what is written here is what users read. See
   sending, each removable, with this computer's name, its address and your folders left
   out. It goes to the studio's hub, which mails it from signal-labs@proanima.net to
   info@proanima.net; the mailbox's password is on the hub and never in the app — see
-  `docs/hub.md`.
+  `docs/develop/hub.md`.
 
 - **Emulators: Signal Lab as the other side.** A new *Emulators* screen plays the API,
   device or service your system talks to. An **HTTP API** answers by routes — method,
@@ -212,7 +349,7 @@ release notes — so what is written here is what users read. See
   described at `/api/openapi.json`.
 - **A GitHub Action** (`uses: ProAnima/SignalLab@vX.Y.Z`) runs experiments in a workflow
   and leaves a JUnit report; GitLab CI and plain shell recipes are in
-  `docs/automation.md`.
+  `docs/automation/cli.md`.
 - **The server in one command.** On a Linux machine,
   `curl -fsSL https://raw.githubusercontent.com/ProAnima/SignalLab/main/deploy/install.sh | sh`
   installs Docker if needed (it asks), starts the server with host networking, waits
@@ -237,7 +374,7 @@ release notes — so what is written here is what users read. See
   language (“1 signal”, “5 сигналов”), numbers and sizes are written the
   language's way, the language is picked from the system's list of preferred
   ones, and the starter signals are created in it. Adding a language is a
-  dictionary and one line — see `docs/localization.md`; the checks name every
+  dictionary and one line — see `docs/develop/localization.md`; the checks name every
   missing text, placeholder or plural form.
 - **Every error in your language.** The tool screens — OSC, Broadcast,
   MQTT, impairment, Storm, Scanner, HTTP, the library and the Inspector — now

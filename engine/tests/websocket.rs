@@ -165,6 +165,11 @@ async fn the_screen_connects_sends_hears_and_closes_as_a_job() {
     assert_eq!((job["kind"].as_str(), job["params"]["url"].as_str()), (Some("websocket"), Some(format!("{url}/chat").as_str())));
     assert_eq!(service.invoke("ws_send", json!({ "jobId": id, "message": { "text": "hello" } })).await.unwrap(), json!(5));
     assert_eq!(service.invoke("ws_send", json!({ "jobId": id, "message": { "hex": "01 02 03" } })).await.unwrap(), json!(3));
+    // Past 16 MiB is refused as the node's field is, before the wire; the connection stays.
+    let huge = "x".repeat((16 << 20) + 1);
+    let refused = serde_json::to_value(service.invoke("ws_send", json!({ "jobId": id, "message": { "text": huge } })).await.unwrap_err()).unwrap();
+    assert_eq!((refused["code"].as_str(), refused["params"]["max"].as_str(), refused["field"]["key"].as_str()), (Some("node.too_long"), Some("16777216"), Some("payload")), "{refused}");
+    assert_eq!(service.invoke("ws_send", json!({ "jobId": id, "message": { "text": "still" } })).await.unwrap(), json!(5));
 
     let wait = |test: fn(&Value) -> bool| {
         let recorder = recorder.clone();

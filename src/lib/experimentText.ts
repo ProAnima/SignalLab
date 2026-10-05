@@ -14,6 +14,22 @@ export const GROUP_GLYPH: Record<NodeGroup, string> = { action: "↗", observe: 
 /** `:9001` from `127.0.0.1:9001`: the port is what tells waits apart on the canvas. */
 const bindPort = (bind: string) => { const at = bind.lastIndexOf(":"); return at >= 0 ? bind.slice(at) : bind; };
 export const isWait = (node: ExperimentNode) => node.type === "wait_osc" || node.type === "wait_udp" || node.type === "wait_mqtt" || node.type === "wait_http" || node.type === "wait_ws";
+/** Sends traffic: the engine's `NodeKind::is_action`. */
+export const isAction = (node: ExperimentNode) => ["tcp", "http", "mqtt", "osc", "udp", "ws_connect", "ws_send"].includes(node.type);
+/**
+ * Send now applies to actions, and Listen now to waits — what `experiment_send_node`
+ * performs. A WebSocket send or wait opens the connection its connect node describes,
+ * for that one test.
+ */
+export const canSendNow = (node: ExperimentNode) => isAction(node) || isWait(node);
+/**
+ * What the Secrets heading's tip says, by where the engine runs (`app_info`, never guessed):
+ * a server reads them, read-only; the Windows app keeps them in the Credential Manager;
+ * the Linux app has no credential store at all.
+ */
+export const secretsTip = (info: { secrets_writable: boolean; os: string } | null) =>
+  info !== null && !info.secrets_writable ? "exp.secretsReadOnly" as const
+    : info?.os === "linux" ? "exp.secretsUnavailable" as const : "exp.secretsHint" as const;
 const anyMethod = (method: string) => method.toUpperCase() === "ANY" ? "*" : method.toUpperCase();
 /** A node heading's tooltip: what the node does; for the parallel nodes, how they are wired. */
 export const nodeHelp = (type: NodeType) => type === "fork" ? "exp.forkHint" as const : type === "join" ? "exp.joinHint" as const : type === "loop" ? "exp.loopHint" as const

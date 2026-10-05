@@ -1,637 +1,132 @@
-# Signal Lab
+<p align="center"><img src="docs/public/icon.png" width="88" height="88" alt=""></p>
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-3ee6b0.svg)](LICENSE)
-[![Rust](https://img.shields.io/badge/engine-Rust-b7410e.svg)](engine)
-[![Tauri 2](https://img.shields.io/badge/shell-Tauri%202-24c8db.svg)](https://tauri.app)
+<h1 align="center">Signal Lab</h1>
 
-*An open-source tool by [ProAnimaStudio](https://github.com/ProAnima) — Ian Panaev,
-[info@proanima.net](mailto:info@proanima.net).*
+<p align="center">
+  <b>The lab for the protocols your show, installation and IoT gear speaks.</b><br>
+  Send, capture, emulate and impair OSC, UDP/TCP, HTTP, WebSocket and MQTT —<br>
+  by hand, as repeatable experiments, and from CI or an AI assistant.
+</p>
 
-A lightweight, cross-platform simulator and toolbox for **OSC signals, HTTP,
-MQTT, emulated APIs and devices, network impairment, broadcast/discovery,
-traffic storms, and port scanning** —
-with live signal display, a cross-protocol packet inspector, and a library of
-named signals you can fire again. Built with
-**Tauri 2 + React/TypeScript** on a native **Rust** networking engine, so it
-ships as a small binary yet has full raw UDP/TCP access. The same engine and
-interface also run **headless as a server, used from a browser** — on a rack PC or
-a Linux box next to the gear, or as the Docker image `ghcr.io/proanima/signallab`
-(see [Run as a server](#run-as-a-server-browser-docker)).
+<p align="center">
+  <a href="https://github.com/ProAnima/SignalLab/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/ProAnima/SignalLab/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://github.com/ProAnima/SignalLab/releases/latest"><img alt="Release" src="https://img.shields.io/github/v/release/ProAnima/SignalLab?color=3ee6b0"></a>
+  <a href="https://proanima.github.io/SignalLab/"><img alt="Documentation" src="https://img.shields.io/badge/docs-11%20languages-38c9ec"></a>
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-8b7cff"></a>
+</p>
 
-The interface is a dark instrument panel in **11 languages** — English, Russian, Spanish, French, German, Portuguese (Brazilian), Chinese (Simplified), Japanese, Korean, Hindi and Arabic (right
-to left); it picks the language from the OS on first run and remembers the
-choice. See [Interface & localization](#interface--localization).
+<p align="center">
+  <a href="https://proanima.github.io/SignalLab/"><b>Documentation</b></a> ·
+  <a href="https://github.com/ProAnima/SignalLab/releases/latest"><b>Download</b></a> ·
+  <a href="https://proanima.github.io/SignalLab/server/">Server &amp; Docker</a> ·
+  <a href="CHANGELOG.md">Changelog</a>
+</p>
 
-> Runs on **Windows and Linux** — no macOS, iOS or Android builds (see
-> [Platforms](#platforms)).
+<p align="center">
+  <a href="https://proanima.github.io/SignalLab/">English</a> ·
+  <a href="https://proanima.github.io/SignalLab/ru/">Русский</a> ·
+  <a href="https://proanima.github.io/SignalLab/es/">Español</a> ·
+  <a href="https://proanima.github.io/SignalLab/fr/">Français</a> ·
+  <a href="https://proanima.github.io/SignalLab/de/">Deutsch</a> ·
+  <a href="https://proanima.github.io/SignalLab/pt/">Português</a> ·
+  <a href="https://proanima.github.io/SignalLab/zh/">中文</a> ·
+  <a href="https://proanima.github.io/SignalLab/ja/">日本語</a> ·
+  <a href="https://proanima.github.io/SignalLab/ko/">한국어</a> ·
+  <a href="https://proanima.github.io/SignalLab/hi/">हिन्दी</a> ·
+  <a href="https://proanima.github.io/SignalLab/ar/">العربية</a>
+</p>
 
 ---
 
-## Modules
+Signal Lab is a desktop app for **Windows and Linux** and a **server** you use from
+a browser (also as a Docker image). It is built for bringing up shows, installations
+and networked devices before the rest of the system exists — and for testing the
+services and APIs they talk to.
 
-| Module | What it does |
+## What you can do
+
+| | |
 | --- | --- |
-| **Experiments** | A node canvas for mixed HTTP, OSC, UDP, TCP and MQTT tests. Add a node after the selected one with `A`, drag a wire out of a port to create or connect the next step, send any single action node on its own, branch on a status or a value, and run work in parallel — several wires out of one output (Start included) run their nodes at the same time, and a Join waits for all of them. Focus and native fullscreen modes give the graph more room. Runs highlight each step and save a JSON report under `Documents/SignalLab/runs/`; **Compare** puts a run beside an earlier one of the same experiment, load step by load step, a regression in red. An HTTP node can run **under load** — a constant rate, a ramp, steps, a spike or random (Poisson) arrivals, many at once — measured (p50…p99, errors, the rate achieved, statuses, each second) and judged by **thresholds** (`p95 < 300 ms`, `errors < 1 %`). |
-| **Emulators** | Signal Lab as the other side: the API, device or service your system talks to. An **HTTP API** answers by routes (method, a path with `:name` segments, conditions on headers, query, body or JSON) with responses in sequence — 500, 500, then 200 for retries — in turn, or a seeded mix by weight, with delays, jitter and faults (no answer, a closed connection). An **OSC, UDP or TCP device** answers by rules: on this address, payload or line, reply that — to the sender or elsewhere, after a delay; a TCP device greets and can hang up. An **MQTT broker** routes what clients publish (QoS 0/1/2, retained messages, wills, a login if you set one) and answers by rules like a device: on `lab/+/set`, publish `lab/{{request.levels[1]}}/state`. Replies are templates read with what arrived (`{{request.params.id}}`, `{{request.args[0]}}`, `{{request.payload}}`). Any emulator can **go down now and then** (up so long, down so long: HTTP gets 503 with `Retry-After`, a closed connection or no answer; TCP and MQTT drop connections; OSC and UDP go silent), and a response can be **malformed** (JSON that stops halfway). Each exchange is counted per rule, listed live and sent to the Inspector. **Mock this** on the HTTP screen and on an experiment's *Send now* turns a response into a route; each route has **Copy the URL**. The library is `Documents/SignalLab/emulators.json`, starting with a demo API, a demo OSC, UDP and TCP device and a demo MQTT broker on loopback. |
-| **Signals** | The library: a named, editable packet you can fire again — OSC, raw UDP, an HTTP request or an MQTT publish — in nested folders that open and close, searchable, and fired from anywhere with `Ctrl+K`. *Save…* on the HTTP, OSC and MQTT screens files what you just sent into a folder and keeps the screen tied to it: *Save* (`Ctrl+S`) updates it, *Save as…* copies it, and a chip says where it lives and whether it changed. Folders are made, renamed (`F2`), dragged and removed (their contents move up); *Open in…* loads a signal back into its screen. Ships with the recipes for the gear it was written against, saves itself as hand-editable JSON in `Documents/SignalLab/signals.json`, and turns any frame the Inspector caught into a byte-exact replay. |
-| **OSC** | Send OSC 1.0 messages with typed arguments, monitor an incoming port with live decoding, and drive continuous waveforms (sine / triangle / saw / square / ramp / random) into any endpoint with an on-screen oscilloscope. |
-| **MQTT** | Connect to a broker, subscribe to `#` and watch every topic it holds build up as a live tree — last value, retain flag, QoS, message count. Publish at QoS 0/1/2, announce a last will, and **clear a retained value** (the empty-payload trick), which is the one thing a stuck broker needs and no other tool makes easy. MQTT 3.1.1, hand-written, plain TCP. |
-| **Broadcast** | Fan a payload — OSC, text, or raw hex — out to a **list** of hosts, a **broadcast** address (`SO_BROADCAST`), a **multicast** group, or every host in a **CIDR sweep**. One-shot or as a repeating beacon. The paired **discovery listener** joins multicast groups, tables every peer that answers, and can auto-reply to impersonate a device. |
-| **Inspector** | One timeline for every module, in the bottom panel next to the console so it is there on every screen: each OSC send, monitor packet, beacon, discovery probe and impaired relay frame, decoded, with a hex dump and the relay's verdict on it. A frame keeps its bytes whole, up to 256 KiB (the list shows the first KiB, *Show all* the rest; the capture holds up to 64 MiB, the oldest frames making room), so *Save as signal* replays it byte for byte. Its tab shows when capture is on and how many frames it holds; the panel can be maximised. Filter by protocol / direction / text, then export the buffer — every byte kept — to `.jsonl` or `.txt`. |
-| **WebSocket** | Connect to a `ws://` or `wss://` service with the **headers and subprotocols** it expects, send text or bytes, and read every message as it comes, newest last, JSON formatted; the close handshake and who closed, with what code. In experiments: **WebSocket connect**, **send**, **Wait for WebSocket** and **close** — a token extracted earlier can be in the URL or a header. |
-| **HTTP** | Inspect a single request/response (status, latency, headers, body) — with **Basic, Bearer or Digest** authentication (the server's 401 challenge answered, MD5 or SHA-256) and a **cookie jar** that sends back what servers set, as a browser does — then run a concurrent **load burst** — as fast as its workers go, or at a fixed **rate** where a request that finds every worker busy is counted as *missed* rather than sent late — with live RPS, **p50/p90/p95/p99** and min/avg/max latency. Ramps, steps, spikes and thresholds are an HTTP node's *Load* in an experiment. |
-| **Impairment** | A relay that sits between a client and a target — a software network conditioner. Over **UDP** it injects **latency, jitter, packet loss, bursts of loss, duplication, corruption, reordering and a bandwidth limit**, or lets nothing through. Over **TCP** each connection is joined to one of its own to the target and both streams are **delayed** (in order, whatever the jitter), **held to a bandwidth** (the sender is slowed down, nothing is dropped), **reset** or **left half-open** — nothing more goes through and nobody is told — or paused while offline. Presets (*LAN*, *Busy Wi-Fi*, *4G*, *Satellite*, *Intermittent*, *Offline*) set it in one click for either protocol, and an edit applies while it runs, without dropping the port. Every decision is seeded: the same traffic meets the same fate. |
-| **Storm** | A controlled **UDP/TCP traffic generator** for stress-testing your own servers, with live pps / Mbps metering and a bounded duration. |
-| **Scanner** | Concurrency-bounded **TCP connect port scan** with best-effort service banners and progress. |
+| **Talk to devices** | [OSC](https://proanima.github.io/SignalLab/protocols/osc.html) with typed arguments, a monitor and a waveform generator; raw [UDP and TCP](https://proanima.github.io/SignalLab/protocols/udp-tcp.html); [HTTP](https://proanima.github.io/SignalLab/protocols/http.html) with Basic, Bearer and Digest, cookies and bursts; [WebSocket](https://proanima.github.io/SignalLab/protocols/websocket.html); [MQTT 3.1.1](https://proanima.github.io/SignalLab/protocols/mqtt.html) with QoS 0–2, retained messages and a last will; [broadcast, multicast and discovery](https://proanima.github.io/SignalLab/protocols/broadcast.html). |
+| **See every byte** | The [Inspector](https://proanima.github.io/SignalLab/tools/inspector.html) captures what Signal Lab sends and receives, decoded and in hex; export it, or save a frame as a signal. |
+| **Keep a library** | [Signals](https://proanima.github.io/SignalLab/tools/signals.html) in folders, fired from anywhere with <kbd>Ctrl</kbd>+<kbd>K</kbd>. |
+| **Fake what is not there** | [Emulators](https://proanima.github.io/SignalLab/tools/emulators.html): HTTP APIs, OSC/UDP responders, TCP devices and an MQTT broker, with rules, templated replies, faults and outages. |
+| **Break the network on purpose** | An [impairment relay](https://proanima.github.io/SignalLab/tools/impairment.html) for UDP and TCP: latency, jitter, loss, duplication, reordering, bandwidth, resets and half-open connections, with presets from a LAN to a satellite link. |
+| **Make it repeatable** | [Experiments](https://proanima.github.io/SignalLab/experiments/): a visual flow of sends, waits, checks, extraction, branches, loops, retries and fault phases — seeded, reproducible, with a report of every run. |
+| **Load it** | [Load profiles](https://proanima.github.io/SignalLab/experiments/load.html) on an HTTP request — constant, ramp, steps, spike, random arrivals — with thresholds on p95, errors and rate, and two runs compared. |
+| **Automate it** | [`signallab`](https://proanima.github.io/SignalLab/automation/cli.html), the command line with JUnit reports for [CI and a GitHub Action](https://proanima.github.io/SignalLab/automation/ci.html); [MCP](https://proanima.github.io/SignalLab/automation/mcp.html) for AI assistants; an [HTTP API](https://proanima.github.io/SignalLab/api/) for everything the interface does. |
 
-Every long-running action is a **job**: it streams telemetry to the UI over Tauri
-events and can be stopped individually or all at once from the console strip.
+The interface and the documentation speak **eleven languages**: English, Russian,
+Spanish, French, German, Portuguese, Chinese, Japanese, Korean, Hindi and Arabic.
 
-### Working with an experiment
+## Get it
 
-The **Experiments** button beside the document name opens the templates:
-empty, HTTP status check, HTTP → OSC with a status branch, parallel flows,
-*OSC ping → reply* (send `/ping` with the run id, wait for `/pong` carrying it),
-*Poll until ready* (ask a device for `/status` until it answers `ready`), and
-*Retry a flaky API* (an emulated API that fails twice, and a loop that asks until it answers).
-The same dialog imports JSON files of any earlier version (up to 4 MiB; they are
-migrated on open) and exports the current document to
-`Documents/SignalLab/exports/`. Import checks the file before showing a preview;
-**Open experiment** replaces the canvas as one undo action. Invalid files leave
-the current experiment intact. Export includes parameters and positions; opening
-a template or file does not run it. Incomplete connections are valid drafts.
+- **Windows** — `Signal.Lab_<version>_x64-setup.exe` (just for you, or for everyone) or the `.msi`
+  from the [latest release](https://github.com/ProAnima/SignalLab/releases/latest).
+  The installers are not code-signed yet, so SmartScreen may ask: *More info → Run anyway*.
+- **Linux** — `.deb`, `.rpm` or `.AppImage` from the same page.
+- **Server** — on a Linux host, in one command, or with Docker:
 
-Building a flow is mostly the keyboard: select a node, press `A`, type a few
-letters of the node you want and press Enter. The new node is wired in **after
-the selected one** (spliced into its existing connection, or onto its free Yes/No
-output), downstream nodes make room, and its main field — URL, OSC address, topic,
-delay — is focused and selected, so you can type straight away. `Escape` returns
-from the form to the canvas for the next `A`. With the mouse, drag from an output
-port onto a node to connect it, or onto empty canvas to create the next node right
-there; the ＋ on a wire inserts into it. A click on a wire selects it — the
-properties show what it connects — and `Delete` removes it; hovering a wire also
-shows a × above its ＋. Saved Signals appear in the same menu and become nodes with
-their parameters filled in.
+  ```bash
+  curl -fsSL https://raw.githubusercontent.com/ProAnima/SignalLab/main/deploy/install.sh | sh
+  ```
 
-The console, the properties pane and the run timeline have handles on their edges:
-drag one, or focus it with Tab and use the arrow keys (Shift for bigger steps); a
-double click or Enter gives the pane its default size back. Sizes, and whether the
-console is open, are kept for the next time.
+  ```bash
+  docker run -d --name signallab --network host --restart unless-stopped \
+    -v signallab-data:/data ghcr.io/proanima/signallab:latest
+  docker logs signallab    # the access token, on the first start
+  ```
 
-**Parameters** (`{ }` in the toolbar) hold values such as `api = http://127.0.0.1:8080`;
-any text field can use them as `{{api}}/login`. Typing `{{` (or `Ctrl+Space`) suggests
-parameters, variables set upstream and generators (`{{uuid}}`, `{{now.iso}}`,
-`{{counter}}`, `{{random_int(1, 100)}}`, `{{pick(a, b)}}`). **Extract value** saves a JSON
-field, header, status, body or regex match of the latest response as a variable;
-**Check value** and **Branch on value** compare it. The properties panel previews what
-a node will send with current values. *Send now* on a request also fills in the
-variables of the Extract nodes after it, and clicking a value in its JSON response
-inserts an Extract node for that path. Every run records its seed; **Pin** stores it in
-the experiment so random values repeat exactly.
+- **Command line** — `signallab` comes with the installers; archives for CI are on the release page.
 
-**Profiles** are named sets of parameter values — *Stage*, *Venue* — edited as tabs in
-the Parameters panel: a profile overrides some parameters and inherits the rest. The
-switch in the toolbar chooses the profile used by runs, the preview and *Send now*,
-and marks with ⚠ a profile that would fail validation before you switch to it.
-**Run with…** (the arrow next to Run) runs once with another profile, changed values
-or a given seed without changing the experiment; the timeline shows what was used.
+The desktop app updates itself from signed releases. Details:
+[installing and updating](https://proanima.github.io/SignalLab/guide/install.html),
+[running a server](https://proanima.github.io/SignalLab/server/).
 
-**Secrets** — tokens and passwords — are written as `{{secret.API_TOKEN}}` and stored in
-the Windows Credential Manager from the Secrets section of the Parameters panel; the
-experiment file keeps only the names. Values never reach the interface: *Send now* runs
-in the engine, the preview shows `••••`, and every value is masked in the timeline,
-responses, run reports and the Inspector while it is in use. A run is refused before
-any traffic if a secret it needs is not stored on this computer. The full language is described in
-[docs/milestone-3-data.md](docs/milestone-3-data.md).
+## Documentation
 
-Outputs that still need a wire pulse amber and nodes that Start cannot reach are
-drawn dashed. **Complete the graph** in the toolbar (and **Run** on an invalid
-graph) names the problem and jumps to the node. **Send now** (`Ctrl+Enter`) on an
-HTTP, OSC, UDP or MQTT node sends just that step through the same path as the
-direct instruments and shows the result — for HTTP, the formatted response —
-without running the experiment.
+The documentation is [online](https://proanima.github.io/SignalLab/) and inside the
+app and the server, so it works offline: press <kbd>F1</kbd> on any screen.
 
-An **Emulator** node plays a dependency for the whole run: it opens before the first
-step, answers until the run ends, and the run report counts what it received (*Edit…*
-opens its rules; it can be taken from, or kept in, the emulator library). **Wait for
-HTTP request** then checks what the system under test sent it — method, path and
-conditions — and later steps read `{{request.json.…}}`; on an address without an
-emulator, the run's own listener answers 204. An OSC or UDP emulator shares its port
-with the run's waits, and an MQTT broker emulator is what *Wait for MQTT* and the MQTT
-node talk to — gear tested against a broker of the run's own.
-
-**Faults on a schedule.** An **Impairment** node puts an impairment relay — UDP, or TCP
-in front of an API, a broker or a TCP device — in front of a dependency for the whole
-run (*Route through impairment* on an OSC or UDP node inserts one and points the node at
-it); **Change impairment** switches it to another profile from
-that step on, and **Emulator down/up** takes one of the run's emulators down — HTTP meets
-503, a closed connection or no answer — and brings it back. A branch of Delays and
-switches next to the traffic reads as a schedule: clean, lossy, offline, clean again
-(the template *Fault phases*; *Dependency outage* does the same to an API). The relay
-draws from the run's seed, so the same seed drops the same packets; the report counts
-each phase apart, and the run's end — passed, failed or stopped — closes the relay, so
-nothing stays impaired.
-
-The OSC and HTTP screens have **Add to experiment**, which appends the message or
-request you just tried as the next step. Their fields are kept across screens and
-restarts, and a one-line verdict appears under **Send**; the app reopens on the
-screen you used last.
-
-Use **Nodes** to find an existing node by type, URL, payload, or ID and jump to it.
-**Arrange** places the graph from left to right; **Fit graph** shows its full extent.
-Select several nodes with `Shift`+click (or `Ctrl`+click), a frame drawn with
-`Shift` on the empty canvas, or `Ctrl+A`; dragging one of them moves them all.
-Duplicate (`Ctrl+D`) copies the selection with the wires between its nodes; Copy
-and Paste (`Ctrl+C`, `Ctrl+V`) do the same through the clipboard, into another
-experiment too. A copy's wiring to the rest of the graph is left to you; a copy
-that names another copied node (a WebSocket send, a Change impairment) names the
-copy, and a copied Emulator or Impairment listens on the next free port. Start
-and End are one of a kind and are not copied. Drafts are autosaved even while
-connections are incomplete.
-
-| Shortcut | Action |
+| | |
 | --- | --- |
-| `A` | Add a node after the selected one (or mid-view when nothing is selected) |
-| Double-click empty canvas | Add a node there |
-| Drag from an output port | Connect to the node you drop on, or add the next node on empty canvas |
-| `Ctrl+Enter` | Send the selected action node on its own |
-| `{{` or `Ctrl+Space` in a field | Suggest parameters, variables and generators |
-| `Ctrl+Z` / `Ctrl+Shift+Z` (also `Ctrl+Y`) | Undo / redo |
-| `Shift`/`Ctrl` + click | Add a node to the selection, or take it out |
-| `Shift` + drag on empty canvas | Select the nodes a frame touches |
-| `Ctrl+A` | Select every node |
-| `Ctrl+C` / `Ctrl+X` / `Ctrl+V` | Copy / cut / paste the selected nodes and the wires between them |
-| `Ctrl+D` | Duplicate the selected nodes |
-| `Ctrl+F` | Find and reveal a node |
-| `Ctrl+0` / `Ctrl+1` | Fit graph / actual size |
-| `Ctrl` + wheel | Zoom around the pointer |
-| Arrow keys on a focused node | Move the selected nodes by 5 px; hold `Shift` for 20 px |
-| `Delete` | Remove the selected nodes (Start and End stay) |
-| `Escape` | Leave a node's form for the canvas; close the active popup/connection; drop a selection of several; leave fullscreen/focus mode |
+| [Getting started](https://proanima.github.io/SignalLab/guide/) | what it is, installing, the window, a first session, the ideas |
+| [Protocols](https://proanima.github.io/SignalLab/protocols/osc.html) | OSC, UDP and TCP, HTTP, WebSocket, MQTT, broadcast and discovery |
+| [Tools](https://proanima.github.io/SignalLab/tools/signals.html) | signals, the Inspector, emulators, impairment, Storm, Scanner |
+| [Experiments](https://proanima.github.io/SignalLab/experiments/) | the editor, every node, data and templates, flow, load, faults, runs |
+| [Automation](https://proanima.github.io/SignalLab/automation/cli.html) | the command line, CI, MCP |
+| [Server](https://proanima.github.io/SignalLab/server/) · [HTTP API](https://proanima.github.io/SignalLab/api/) | running it, its security, every command and event |
+| [Reference](https://proanima.github.io/SignalLab/reference/shortcuts.html) | shortcuts, files, troubleshooting, every error message |
 
-Text fields retain their native editing shortcuts. A node drag or field-edit
-session is one undo action. Up to 100 actions are kept for the current app
-session, including while switching between protocol instruments.
-
----
-
-## Architecture
-
-```
-src/                     React + TypeScript UI (Vite)
-  lib/transport.ts       desktop (Tauri invoke) or browser (fetch + one WebSocket)
-  lib/platform.ts        fullscreen, downloads, sign-out on either platform
-  lib/api.ts             typed command wrappers + event channels
-  lib/store.tsx          shared jobs, console and signal-library state
-  lib/signals.ts         firing, describing and capturing library signals
-  lib/library.ts         library folders as paths: tree, rename, move, remove (pure)
-  components/SaveSignal.tsx  Save… / Save / Save as… on the sending screens
-  components/SignalTree.tsx  the folder tree: open/close, drag & drop, F2, Delete
-  components/Splitter.tsx    a resizable pane edge (pointer and keyboard)
-  components/TooltipLayer.tsx  the one tooltip: any data-tip, hover + keyboard focus
-  lib/experimentGraph.ts graph editing, duplication and DAG layout
-  lib/experimentData.ts  template suggestions, upstream variables, JSON paths
-  lib/editHistory.ts     bounded, grouped document history (pure reducer)
-  lib/useExperimentViewport.ts canvas zoom, fit and reveal behavior
-  lib/useExperimentDocument.ts document load, history, validation and autosave
-  lib/experimentTemplates.ts template catalog (shared JSON definitions)
-  lib/errors.ts          one renderer for every failure: engine errors and legacy text
-  components/ErrorMessage.tsx  where · what — why, with the technical detail folded
-  lib/i18n.tsx           language provider, detection, useT()
-  lib/translate.ts       placeholders, ICU plurals, numbers for a language (pure)
-  lib/locales/index.ts   the list of languages
-  lib/locales/en.ts      source-of-truth dictionary (every key)
-  lib/locales/<code>.ts  the other languages (ru, es, fr, de, pt, zh, ja, ko, hi, ar), typed against en.ts
-  lib/flags.ts           each language's flag on the switch
-  components/LanguageMenu.tsx  the header's language switch: flag, letters, the list of languages
-  components/Scope.tsx   canvas oscilloscope / charts (no chart libs)
-  components/OscArgs.tsx typed OSC argument editor (OSC + Broadcast + Signals)
-  components/Palette.tsx Ctrl+K palette that fires a signal from any screen
-  components/Brand.tsx   ProAnimaStudio inline-SVG mark + lockup
-  views/*.tsx            one screen per module
-engine/src/              the Rust engine (crate signal-lab-engine, no Tauri)
-  service.rs             the command table both front doors forward to
-  host.rs                where events go (Tauri, WebSockets, a test recorder) + the capture bus
-  paths.rs               the data folder
-  osc_codec.rs           self-contained OSC 1.0 encoder/decoder (no deps)
-  osc.rs                 monitor + waveform generator
-  broadcast.rs           broadcast / multicast / sweep emitter + discovery listener
-  inspect.rs             the capture bus every module publishes to
-  error.rs               EngineError: code, values, node, field, detail
-  transport.rs           network failure causes (refused, timeout, DNS …)
-  experiment.rs          the document model: nodes, edges, outputs, versions
-  experiment_validate.rs structural and run-time validation
-  experiment_data.rs     parameters, templated fields, extraction and value checks
-  experiment_actions.rs  one network action, its failure classified
-  experiment_steps.rs    what one step does: send, check, extract, branch, wait
-  experiment_run.rs      the runner: branches, joins, listeners, events, reports
-  matching.rs            OSC address patterns, argument rules, UDP payloads, comparisons
-  listen.rs              wait listeners: armed per bind, bounded queues
-  template.rs            the {{template}} language and seeded generators
-  secrets.rs             secrets: OS credential store or read-only files, masking, redaction
-  experiment_files.rs    JSON parsing, atomic working-file replacement and exports
-  http.rs                request runner + concurrent burst: closed or at a rate
-  http_auth.rs           Basic, Bearer and Digest (RFC 7616): challenges read, answers made
-  cookies.rs             cookie jars: the HTTP screen's and a run's, listed and cleared
-  latency.rs             latency percentiles in constant memory
-  load.rs                an HTTP node under load: profiles, schedule, metrics, thresholds
-  experiment_compare.rs  run history from the reports, two runs compared
-  netsim.rs              impairment relay: profiles, seeded decisions, phases; UDP datagrams
-  netsim_tcp.rs          the TCP relay: streams delayed in order, throttled, reset, half-open
-  netsim_run.rs          a run's relays, opened before the first step
-  storm.rs               UDP/TCP load generator
-  mqtt_codec.rs          self-contained MQTT 3.1.1 codec (no deps)
-  mqtt.rs                one live broker connection as a job + one-shot publish
-  ws.rs                  WebSocket client: the screen's connection as a job, a run's connections, one exchange
-  scan.rs                TCP connect scanner
-  signals.rs             signal library file + starter set (storage only)
-  jobs.rs                job registry (start / list / stop)
-src-tauri/src/lib.rs     the desktop shell: one Tauri command into the engine, Tauri events back
-server/src/              signal-lab-server (axum): HTTP commands, WebSocket events, sign-in, static UI
-```
-
-The three Rust crates form one Cargo workspace (one version, one `Cargo.lock`, one
-`target/`). The desktop shell and the server are thin: both hand a command name and
-its JSON arguments to `engine::Service`, so a command behaves the same in the app and
-in a browser.
-
-Bundled definitions live in `experiments/templates/`. The starter experiment and
-template chooser use these same files; Rust tests check that each can run and
-round-trip through the document format.
-
-The engine uses `tokio` for async sockets, `socket2` for the socket options
-tokio can't set before bind (`SO_REUSEADDR`), and `reqwest` (native-tls /
-schannel on Windows) for HTTP. The OSC and MQTT codecs are hand-written, so
-there are no protocol-crate version risks and the dependency tree stays small.
-
-### The capture bus
-
-Modules never talk to the Inspector directly — they publish a normalized `Frame`
-to `engine::inspect`, which keeps a bounded ring buffer and pumps batches to the
-UI. A frame keeps its payload (secrets masked) up to 256 KiB; a batch carries a
-hex preview of the first KiB, and the rest is asked for by number
-(`inspect_payload`). The ring holds 8192 frames and 64 MiB of payload, whichever
-fills first. Two consequences worth knowing:
-
-- **Capture is armed explicitly.** While disarmed, publishing is one atomic load,
-  so the hot paths cost nothing.
-- **High-rate sources are sampled, not dropped silently.** The waveform generator,
-  beacons and the impairment relay publish through a rate gate; anything the UI
-  never drew is counted and shown as *"N not shown"*, and the full ring is still
-  what `Export` writes.
-
-Exports land in `~/Documents/SignalLab/capture-<epoch-ms>.jsonl`.
-
----
-
-## Interface & localization
-
-The UI speaks **English, Russian, Spanish, French, German, Portuguese (Brazilian), Chinese (Simplified), Japanese, Korean, Hindi and Arabic**, switched live from the header — no reload, and
-the console re-translates its backlog too. The switch shows the current
-language's flag and letters and opens the list of every language, each by its
-flag and its own name; the arrows, a letter, Enter and Escape work in it. Arabic mirrors the whole page right to left, while what is
-data — addresses, hex dumps, code, the experiment canvas — stays left to right.
-It works like this:
-
-- `src/lib/locales/en.ts` is the **source of truth**. Its keys define the
-  `Dict` type; every other dictionary is typed against it, so a missing or
-  misspelled key is a **compile error**, never a blank label at runtime.
-- `t("key", { name })` fills `{name}` placeholders; counts use ICU plurals —
-  `{n, plural, one {# signal} other {# signals}}` — chosen by each language's
-  own rules (`Intl.PluralRules`: Russian has *one*, *few*, *many*; Arabic six
-  forms; Chinese, Japanese and Korean one). Numbers and sizes are written the
-  language's way (Arabic in Latin digits, as the addresses beside them). Unknown keys fall back to English, then
-  to the key string itself.
-- **Errors are translated too.** The engine never builds a sentence: every
-  command and every job reports an `EngineError` — a stable `code`, values, the node and field it is
-  about, and the system's own wording as `detail`. `src/lib/errors.ts` renders it
-  as *Node · Field — message* from `err.<code>` and `field.<key>`, with the
-  detail folded underneath, in the banner, the properties panel, the timeline,
-  *Send now*, the console and the HTTP screen alike. Network failures are
-  classified (refused, timeout, name not found, unreachable, port in use, TLS …)
-  because each has a different fix. A `cargo test` scans the engine for every
-  code and field key and fails if `en.ts` has no text for one. The jobs in the
-  console strip are named the same way (`job.<kind>` with their values).
-- Console log lines store a **key + params**, not finished text, so switching
-  language re-renders the whole history in the new one.
-- The initial language is the first of the system's languages
-  (`navigator.languages`) that Signal Lab has, and the choice persists in
-  `localStorage`. The starter signals are written in it on first run; the
-  server's sign-in page follows the browser's `Accept-Language`.
-- Help is in tooltips, in the current language, on hover and on keyboard focus —
-  a field shows its label's.
-
-**Adding a language** is a dictionary, one line in `src/lib/locales/index.ts`, a
-flag, and its line in the command line, the sign-in page and the installer;
-[docs/localization.md](docs/localization.md) walks through it and lists what the
-checks catch (missing texts, other placeholders, missing plural forms, English
-left on a screen).
-
-**Translating a label?** Keep single words short, or let them wrap — metric
-captions sit in ~112px cards. `.metric .k` uses `overflow-wrap: anywhere` as a
-safety net, but a long compound word still reads badly.
-
-### UI conventions
-
-Worth knowing before editing the interface:
-
-- **Everything clickable is a real `<button>`** — the sidebar nav and the
-  filter/mode "chips" included. They look like plain elements but need focus
-  rings and Space/Enter, so they must not become `<div>`/`<span>` again.
-- **`--text-faint` carries 9.5px labels** and is tuned to clear WCAG AA
-  (≥4.5:1) on all three surfaces. Darkening it fails contrast where it hurts
-  most.
-- **Enter submits** in the OSC sender, the Broadcast target, and the HTTP URL.
-- **The console collapses** to its header bar (the chevron at its left); the
-  running-jobs strip stays visible either way. At the 900×600 minimum window
-  that hands ~146px back to the module.
-- Click targets that belong next to a field go *beside* the `<label>`, never
-  inside it — a click inside a label also activates the labelled input.
-- **No captions, tooltips instead.** The screen shows labels, values, states and
-  errors. An explanation, a shortcut or what `0` means goes in `data-tip` on the
-  control or its label; `components/TooltipLayer.tsx` shows it on hover and on
-  keyboard focus, in the current language. The native `title` attribute is not
-  used (a test fails on it).
-- **Switching screens loses nothing.** A screen is mounted the first time it is
-  opened and then kept, hidden, for the session: typed values, the last
-  response, a running monitor's list and its job, and the scroll position are
-  all where they were left. Fields you would want again after a restart (the
-  OSC message, the HTTP request) are also stored in `localStorage`.
-
-## Prerequisites
-
-- **Node.js** 22.18+ and npm (editor tests use native TypeScript stripping)
-- **Rust** (stable) — install via [rustup](https://rustup.rs)
-- **Windows:** Visual Studio C++ build tools (MSVC) + WebView2 runtime
-  (WebView2 ships with Windows 10/11)
-
-## Develop
+## Build from source
 
 ```bash
 npm install
-npm run tauri dev
+npm run tauri dev        # the desktop app with live reload
+npm run check            # what CI checks
 ```
 
-This launches the Vite dev server and the native window with hot reload for the
-UI and automatic Rust rebuilds.
-
-Before pushing, run **`npm run check`** — the same checks CI runs on Windows and
-Linux, in order: versions agree, UI tests, TypeScript + production build, `clippy`
-with warnings as errors, Rust tests for the whole workspace. `npm run check:linux` runs
-them on Linux in Docker, and `npm run check:image` builds and smoke-tests the server
-image.
-
-**`npm run e2e`** walks every screen of the real app — the desktop app and the
-server in a browser — sending real traffic to loopback stand-ins (an HTTP API, UDP and
-TCP sinks, an OSC device, an MQTT broker) and checking what arrived; `npm run e2e:linux`
-does the same on Linux in WebKitGTK, and CI runs both for every change and for the
-server image. Screenshots of every step land in `artifacts/e2e/`. How CI, releases and
-server mode work: [docs/delivery.md](docs/delivery.md).
-
-## Build a desktop bundle
-
-```bash
-npm run tauri build
-```
-
-Produces two Windows installers under `target/release/bundle/`:
-
-| Artifact | Use |
-| --- | --- |
-| `nsis/Signal Lab_<version>_x64-setup.exe` | normal install in the system's language (any of the interface's 11, chosen in the setup's first dialog), for you (no admin rights) or for everyone, *Run* and a desktop shortcut at the end; `/S` installs silently |
-| `msi/Signal Lab_<version>_x64_en-US.msi` | unattended / group-policy deployment (`msiexec /i … /qn`) |
-
-`target/release/signal-lab.exe` is the bare executable and needs no
-installation at all — handy for a USB stick on a show site. The release profile
-is size-optimized (`opt-level = "s"`, LTO, stripped).
-
-The app icon is redrawn from the in-app brand mark (`src/components/Brand.tsx`)
-by `scripts/gen-icon.py`; feed the 1024px result to `npx tauri icon` to cut the
-platform set. The installers' sidebar, header, dialog and banner come from that
-icon too: `python scripts/gen-installer-art.py` (unattended switches and the rest:
-[docs/delivery.md](docs/delivery.md#installers)).
-
-**Linux packages** from this machine: `npm run build:linux` builds `.deb`, `.rpm`
-and `.AppImage` in Docker on Ubuntu 22.04 (the system CI uses) into
-`artifacts/linux/`, with `SHA256SUMS.txt`. Installed packages need WebKitGTK 4.1.
-
-## Run as a server (browser, Docker)
-
-`signal-lab-server` is the engine and the interface without a window: open it in
-Chrome, Firefox or Edge and every screen works as in the app — runs, the Inspector,
-reports and exports download from the browser.
-
-**On a Linux machine, in one command:**
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/ProAnima/SignalLab/main/deploy/install.sh | sh
-```
-
-It installs Docker if it is missing (it asks first), starts the server with host
-networking, waits until it answers and prints the address to open and the access
-token to sign in with. Run it again to update — the data and the token stay;
-`--uninstall` removes it (`--purge` with its data). Options: `--version`, `--port`,
-`--dir`, `--name`, `--yes`; `sh install.sh --help`.
-
-**Docker by hand** (the image is published with each release, x64 and arm64):
-
-```bash
-docker run -d --name signallab --network host --restart unless-stopped \
-  -v signallab-data:/data --read-only --cap-drop ALL --security-opt no-new-privileges \
-  ghcr.io/proanima/signallab:latest
-docker exec signallab cat /data/token     # the token it made on its first start
-```
-
-Then open `http://<host>:1430` and sign in with the token. The same as a Compose file:
-[`deploy/compose.yaml`](deploy/compose.yaml) — `docker compose up -d`.
-
-| Networking | What works |
-| --- | --- |
-| `--network host` (Linux) | everything: OSC/UDP/TCP/HTTP/MQTT to the LAN, listening ports, **broadcast, multicast, discovery** |
-| bridge with published ports | unicast, and listeners on published ports — no broadcast or multicast |
-| Docker Desktop (Windows/macOS) | unicast only — on Windows use the desktop app; macOS has none ([Platforms](#platforms)) |
-
-**Without Docker** (from a checkout): `npm run build`, then
-`cargo run --release -p signal-lab-server` — it serves `dist/` on
-`http://127.0.0.1:1430` for this machine only, no token needed.
-
-**Security.** Without a token the server listens only on loopback and refuses to
-start on any other address. With one (`--token-file`, 24+ characters,
-`signal-lab-server token` makes one; the image makes and keeps its own in
-`/data/token`, `--generate-token`) a browser signs in once and gets an `HttpOnly`,
-`SameSite=Strict` session; scripts send `Authorization: Bearer`. Requests must come
-from the server's own origin and host name, every job start is logged with the
-client's address, and experiment secrets are read-only files in
-`/run/secrets/signallab/`. Put TLS in a reverse proxy and add `--secure-cookie`.
-All options and their environment variables: `signal-lab-server --help` and
-[docs/delivery.md](docs/delivery.md#7-server-mode-and-docker-image).
-
-## Automation, CI/CD and the API
-
-`signallab` runs the same experiments without a window — in a pipeline, a cron
-job or a deploy script — and exits with a code a pipeline understands:
-
-```bash
-signallab run tests/smoke.json --param api=http://127.0.0.1:8080 --junit junit.xml
-signallab run tests/smoke.json --matrix api=http://a:8080,http://b:8080 --matrix user=admin,guest --fail-fast
-signallab run tests/stage.json --server http://lab-pc:1430 --token-file token.txt
-signallab send osc 127.0.0.1:9000 /cue/go f:0.75
-signallab emulate tests/payments-mock.json --for 120 &   # the dependency, while the app is tested
-```
-
-`0` all passed, `1` one failed, `2` invalid input, `3` could not run. Steps print as
-they happen in the interface's language (any of its 11), `--json` gives a JSON object per line, `--junit`
-a report every CI system shows, and `--server` sends the runs to a lab PC that can
-reach the gear. It comes with the desktop app — the installers put it on `PATH`
-(`/usr/bin` on Linux) — and in the image; `signallab doctor` says what stands
-between it and the gear, the firewall included. A GitHub Action wraps it:
-
-```yaml
-- uses: ProAnima/SignalLab@v0.4.0
-  with:
-    experiments: tests/signallab/*.json
-```
-
-**For an assistant:** `signallab mcp` is a Model Context Protocol server, so an
-LLM in Claude Code, Claude Desktop, Cursor or VS Code can read what an experiment
-is made of, write one, validate and run it, send single messages, listen on a
-port, and start an emulator and read what it received — here, or on a lab server
-with `--server`. `signallab mcp --print-config claude-code` prints the line to add it.
-
-The server's API does the same over HTTP: `POST /api/run` waits for a run and
-answers with its result, or streams its steps as NDJSON; `/api/invoke/<command>`
-is the engine's whole command table; `/api/openapi.json` describes it all. Commands,
-exit codes, secrets, GitLab and shell recipes: [docs/automation.md](docs/automation.md).
-
-## Releases
-
-Releases are built by GitHub Actions from a version tag, never uploaded by hand:
-
-```bash
-npm run release -- 0.4.0 --dry-run   # check everything, change nothing
-npm run release -- 0.4.0 --push      # version, changelog, commit, tag, push
-```
-
-The tag builds the Windows and Linux installers into a **draft** release with
-`SHA256SUMS.txt` and notes taken from `CHANGELOG.md`; review it and publish it on
-the releases page. Publishing builds the server image for x64 and arm64, smoke-tests
-it and pushes it to `ghcr.io/proanima/signallab` with an SBOM and signed provenance. Write user-visible changes under *Unreleased* in `CHANGELOG.md`
-as they land — that text is the release notes. Details and the rules the release
-script enforces: [docs/delivery.md](docs/delivery.md).
-
-**Updates.** The desktop app finds a newer *published* release by itself (once a
-day, or *Check for updates* in About — the **?** in the header), shows what is new,
-and installs it when you click *Install and restart*: what is pending is saved, running
-jobs stop, the download's signature is checked against the key built into the app, and
-Signal Lab starts again as the new version. It asks the studio's hub, which offers a
-release to a share of installs first, and GitHub when the hub cannot be reached
-([docs/hub.md](docs/hub.md)). A server updates with its image.
-
-**Write to the developers.** The **✉** in the header (and About) sends the
-developers a message with screenshots — paste them with Ctrl+V — and the logs that
-help, attached on their own and shown before anything is sent. It goes through the
-studio's hub ([docs/hub.md](docs/hub.md)), which mails it on; the app carries no
-password for it.
-
----
-
-## Platforms
-
-| | Released, toured end to end, supported |
-| --- | --- |
-| **Windows** 10/11, x64 | The desktop app (setup `.exe`, `.msi`) with `signallab` |
-| **Linux**, x86_64 | The desktop app (`.deb`, `.rpm`, AppImage; WebKitGTK 4.1) with `signallab` |
-| **Linux**, amd64 and arm64 | The server: the image `ghcr.io/proanima/signallab`, or `deploy/install.sh` |
-
-From a checkout the server also builds and runs on Windows (the tour runs it there).
-**Not built and not supported:** macOS, iOS and Android. Docker Desktop on a Mac
-runs the server image with unicast only (the table under
-[Run as a server](#run-as-a-server-browser-docker)); there is no desktop app for it.
-
----
+You need Node 22.18 or newer (CI uses 24), Rust as pinned in `rust-toolchain.toml`
+and, on Windows, the MSVC build tools. See
+[building and running](https://proanima.github.io/SignalLab/develop/building.html)
+and the [architecture](https://proanima.github.io/SignalLab/develop/).
 
 ## Responsible use
 
-The **Storm**, **Scanner** and **Broadcast** modules generate real traffic and
-probe real hosts. Only point them at systems you own or are explicitly authorized
-to test. Broadcast and sweep reach *every* device on the segment, not just the one
-you had in mind — check which network you are on first. Guard rails in the engine
-cap a sweep at 1024 hosts and a beacon at 50 000 packets/s aggregate, but they are
-guard rails, not permission.
+Storm, Scanner and Broadcast send real traffic to real hosts, and a broadcast or a
+sweep reaches every device on the segment. Point them only at equipment you own or
+are authorised to test. Every default target is on loopback; the engine's guard
+rails — a sweep of at most 1024 hosts, a beacon of at most 50 000 packets a second —
+are guard rails, not permission.
 
 ## Contributing
 
-Issues and pull requests are welcome. A few things worth knowing:
-
-- `cargo test --workspace` covers the OSC codec, the CIDR/target resolver, the
-  socket-option paths, the capture ring, an experiment run end to end and the
-  server's security rules. `npm run check` runs it with everything else; please
-  keep it green.
-- `npm run build` runs `tsc` in strict mode — it will catch a missing
-  translation key for you.
-- The UI has invariants that are easy to undo by accident (keyboard-reachable
-  controls, label contrast, no click targets inside `<label>`). See
-  [UI conventions](#ui-conventions) before changing the interface.
-- **Never** add a default target that points at a host you do not own. The
-  Storm and Scanner modules generate real traffic.
+Issues, ideas, translations and pull requests are welcome — see
+[CONTRIBUTING.md](CONTRIBUTING.md). Report security problems privately as
+[SECURITY.md](SECURITY.md) describes. Everyone follows the
+[code of conduct](CODE_OF_CONDUCT.md).
 
 ## License
 
-[MIT](LICENSE) © 2026 ProAnimaStudio.
-
-### Experiment node catalogue
-
-The editor supports Start/End, HTTP requests, OSC messages, UDP datagrams, TCP,
-MQTT publishing, **WebSocket connect / send / close**, Log, Delay, **Wait for OSC**,
-**Wait for UDP**, **Wait for MQTT**, **Wait for WebSocket** and **Wait for HTTP request**, the **Emulator**, Extract, value checks and branches, status
-branching, parallel branch/join, **Loop**, and HTTP status/body/header/latency checks.
-The palette groups actions, waits (*Observe*), *Emulate*, data, checks and flow; search
-finds a node by its name and description in the interface's language, by its type (`http`, `wait_osc`) and by protocol names,
-with arrow-key selection and Enter to insert. HTTP node forms include request
-headers, and OSC forms include typed arguments.
-
-A wait listens on `bind` (`IP:port`) from the moment the run starts, so a device
-that answers faster than the next step begins is not missed; replies count from
-the latest request on the same path. *Wait for OSC* matches an OSC 1.0 address
-pattern (`*`, `?`, `[0-9]`, `{ping,pong}`) and optional argument rules
-(`args[0] equals {{nonce}}`); *Wait for UDP* matches any datagram, text, a regular
-expression or a hex byte sequence. **Matched** continues with the reply in a
-variable (`{{reply.address}}`, `{{reply.args[0]}}`, `{{reply.text}}`,
-`{{reply.from}}`, `{{reply.ms}}`); an optional **Timeout** wire handles silence —
-without it a timeout fails the step and says how many other messages arrived.
-A port that cannot be opened stops the run before any traffic. *Listen now* on a
-wait listens with that step alone.
-
-Every step that sends or listens can **retry** (attempts, the same or a doubling
-pause), and every step that sends can **repeat** — a number of times or for a time,
-every so many milliseconds with an optional seeded jitter; `{{counter}}` numbers the
-sends. An OSC message or UDP datagram can **wait for its reply** in the same step.
-
-An HTTP request can instead run **under load**: its request (templates read once, as
-the step starts) sent on a profile — *Constant*, *Ramp* (from one rate to another),
-*Steps*, *Spike* (a burst in a base rate) or *Random* (Poisson arrivals from the
-run's seed) — at 0.1 to 100 000 requests a second, at most *At once* in flight,
-within a run's five minutes. The properties draw the profile and add it up before it
-runs. A request due while every worker is busy is skipped and counted as *missed*,
-never sent late. The step measures latencies (p50, p90, p95, p99, mean, the slowest),
-the error rate, the rate achieved, answers by status (or by cause: timeout, refused),
-each second's requests and a latency histogram, and passes only when its
-**thresholds** hold (`p95 < 300 ms`, `errors < 1 %`, `rate ≥ 100/s`, `missed ≤ 0`);
-it fails on the first that does not, saying by how much. The timeline counts up
-once a second, the properties show the result, and **Compare** in the timeline sets
-the run beside the one before it (or any earlier run of the experiment): each metric
-before and after, the change, a regression — 5 % or more the wrong way — in red,
-and how each threshold went in either run. A load replaces Repeat and Retry, and
-leaves no response for the checks after it: thresholds judge it.
-
-A **Loop** runs the steps on its *Body* output, which lead back to it, again and
-again — at most a set number of times, and until an exit condition holds when it has
-one (checked after each iteration, so the body can set what it tests). *Done*
-follows; the optional *Limit* when the iterations ran out first. Inside the body
-`{{counter}}` is the iteration's number; the wire back is the only one that may go
-backwards, and a body runs as one branch (no parallel work inside).
-
-MQTT nodes use unauthenticated brokers (QoS 0–2, retain, 15-second deadline).
-Body checks search the bounded HTTP preview: a match succeeds; a missing match in
-a truncated preview fails explicitly. Header names are case-insensitive; values
-and body text are case-sensitive.
+[MIT](LICENSE) © 2026 [ProAnimaStudio](https://github.com/ProAnima) —
+[info@proanima.net](mailto:info@proanima.net).

@@ -1,4 +1,6 @@
-import type { Signal, SignalBody } from "./api";
+import type { Frame, JobInfo, Signal, SignalBody } from "./api";
+import type { TKey } from "./locales/en";
+import type { Translate } from "./i18n";
 
 /**
  * The starter set the engine writes on first run (`engine/src/signals.rs`,
@@ -197,4 +199,164 @@ export function canonicalBody(body: SignalBody): string {
 /** "API / Auth / Login": a signal as the library shows where it is. */
 export function signalPlace(signal: Signal): string {
   return [...normalizeFolder(signal.group).split("/").filter(Boolean), signal.name].join(" / ");
+}
+
+// ---- what a captured frame becomes, and which connection a signal rides ----
+
+/** host:port, split at the last colon so an IPv6 literal survives; 1883 when there is no port. */
+export function splitBroker(broker: string): { host: string; port: number } {
+  const text = broker.trim();
+  if (text.startsWith("[") && text.includes("]")) {
+    const end = text.indexOf("]");
+    const rest = text.slice(end + 1);
+    return { host: text.slice(0, end + 1), port: rest.startsWith(":") ? Number(rest.slice(1)) || 1883 : 1883 };
+  }
+  const at = text.lastIndexOf(":");
+  // No port, or an IPv6 address without brackets (and so without one).
+  if (at < 1 || text.indexOf(":") !== at) return { host: text, port: 1883 };
+  return { host: text.slice(0, at).trim(), port: Number(text.slice(at + 1)) || 1883 };
+}
+
+/**
+ * One broker, however it is written: the host ignoring case and an IPv6
+ * literal's brackets, the port 1883 when none is given. `localhost` and
+ * `127.0.0.1` are two names, not one — nothing here looks names up.
+ */
+export function sameBroker(a: string, b: string): boolean {
+  const key = (text: string) => {
+    const { host, port } = splitBroker(text);
+    return `${host.replace(/^\[(.*)\]$/, "$1").toLowerCase()}:${port}`;
+  };
+  return key(a) === key(b);
+}
+
+/**
+ * The open MQTT connection an MQTT signal to `broker` goes out on: the first
+ * one connected to that broker (its job names it, `params.broker`). None, and
+ * the signal makes a connection of its own to its own broker.
+ */
+export function mqttConnectionFor(broker: string, jobs: Pick<JobInfo, "id" | "kind" | "params">[]): number | null {
+  return jobs.find((job) => job.kind === "mqtt" && job.params?.broker !== undefined && sameBroker(job.params.broker, broker))?.id ?? null;
+}
+
+/**
+ * A socket listening on every address is reached here on loopback:
+ * `0.0.0.0:9000` → `127.0.0.1:9000`, `[::]:9000` → `[::1]:9000`. Any other
+ * address stays as it is.
+ */
+export function reachable(address: string): string {
+  const text = address.trim();
+  if (text.startsWith("0.0.0.0:")) return `127.0.0.1${text.slice("0.0.0.0".length)}`;
+  if (text.startsWith("[::]:")) return `[::1]${text.slice("[::]".length)}`;
+  return text;
+}
+
+/** `IP:port` or `host:port` (IPv6 in brackets), the port 1–65535: where a datagram can be sent. */
+export function isHostPort(text: string): boolean {
+  const match = /^(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9._-]+):(\d{1,5})$/.exec(text.trim());
+  return !!match && Number(match[2]) > 0 && Number(match[2]) < 65536;
+}
+
+/**
+ * A frame keeps every one of its bytes: it can be sent again as it was. An
+ * MQTT message may be empty — that is how a retained value is cleared — but
+ * any other frame of no bytes kept nothing.
+ */
+export const wholeFrame = (frame: Frame) => frame.kept === frame.bytes && (frame.bytes > 0 || !!frame.publish);
+
+/**
+ * Where a captured datagram is sent again. A relay's frame — either way —
+ * to where it was going (its peer); a received frame to the socket that
+ * received it, since saving a reader's packet is to stand in for its sender
+ * later; a sent one to where it was sent. A socket on every address is
+ * reached on loopback.
+ */
+export function replayTarget(frame: Frame): string {
+  if (frame.source === "netsim") return reachable(frame.remote);
+  return reachable(frame.dir === "rx" ? frame.local : frame.remote);
+}
+
+/**
+ * Why a frame cannot become a signal, as the text key of the button's tip;
+ * null when it can. A signal sends one datagram (an OSC or UDP frame) or one
+ * MQTT publish with a text payload; a TCP chunk, an HTTP exchange, a
+ * WebSocket message or an MQTT control packet has no such form.
+ */
+export function frameSignalBlock(frame: Frame): TKey | null {
+  if (frame.proto === "mqtt") {
+    if (!frame.publish) return "ins.noSignalForm";
+    if (!wholeFrame(frame)) return "ins.noExactCopy";
+    return frame.publish.text ? null : "ins.notText";
+  }
+  if (frame.proto !== "osc" && frame.proto !== "udp") return "ins.noSignalForm";
+  if (!wholeFrame(frame)) return "ins.noExactCopy";
+  return isHostPort(replayTarget(frame)) ? null : "ins.noSignalForm";
+}
+
+/** `48 65 6c`, `inspect_payload`'s plain hex, as bytes; null when it is not that. */
+function hexBytes(hex: string): Uint8Array | null {
+  const pairs = hex.trim() === "" ? [] : hex.trim().split(/\s+/);
+  if (!pairs.every((pair) => /^[0-9A-Fa-f]{2}$/.test(pair))) return null;
+  return Uint8Array.from(pairs, (pair) => parseInt(pair, 16));
+}
+
+/**
+ * A captured frame as a signal's message, from the bytes the engine kept of
+ * it (`hex`, `inspect_payload`'s) — never re-parsed out of a display string,
+ * which is where a replay stops being the same packet. A datagram becomes a
+ * raw UDP signal with those bytes; an MQTT publish an MQTT signal to its
+ * broker, with its topic, QoS, retain flag and the same payload. Null for a
+ * frame `frameSignalBlock` refuses, or bytes that are not all of it.
+ */
+export function frameSignalBody(frame: Frame, hex: string): SignalBody | null {
+  if (frameSignalBlock(frame)) return null;
+  const bytes = hexBytes(hex);
+  if (!bytes || bytes.length !== frame.bytes) return null;
+  if (frame.publish) {
+    let payload: string;
+    try {
+      // The bytes as they are: no byte order mark dropped, nothing replaced.
+      payload = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+    } catch {
+      return null;
+    }
+    const { broker, topic, qos, retain } = frame.publish;
+    return { transport: "mqtt", broker: reachable(broker), topic, payload, qos, retain };
+  }
+  return { transport: "udp", target: replayTarget(frame), payload: { kind: "hex", hex: hex.trim() } };
+}
+
+/** A slug that reads in the file and cannot collide with an existing one. */
+export function makeId(name: string, taken: Signal[]): string {
+  const base =
+    name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "")
+      .slice(0, 40) || "signal";
+  const used = new Set(taken.map((s) => s.id));
+  if (!used.has(base)) return base;
+  for (let i = 2; ; i++) {
+    const candidate = `${base}-${i}`;
+    if (!used.has(candidate)) return candidate;
+  }
+}
+
+/**
+ * A captured frame, as a replayable signal (`frameSignalBody`: a datagram as
+ * raw UDP, an MQTT publish as MQTT), from the bytes the engine kept of it —
+ * `inspect_payload`'s plain `hex`. Null for a frame with no signal form, or
+ * not kept whole: half a packet replayed is a different packet.
+ */
+export function signalFromFrame(frame: Frame, hex: string, taken: Signal[], name: string, t: Translate): Signal | null {
+  const body = frameSignalBody(frame, hex);
+  if (!body) return null;
+  const peer = frame.remote || frame.publish?.broker || frame.local;
+  return {
+    id: makeId(name, taken),
+    name,
+    group: t("sig.capturedFolder"),
+    note: `#${frame.seq} ${frame.proto} ${frame.dir === "rx" ? "←" : "→"} ${peer} · ${frame.summary}`,
+    body,
+  };
 }

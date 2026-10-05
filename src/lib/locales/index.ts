@@ -13,7 +13,7 @@ import { ar } from "./ar.ts";
 /**
  * The languages of the interface. Adding one is a dictionary typed `Dict`
  * (so a missing key is a compile error) and one line here — see
- * docs/localization.md. Plural rules and number formats come from `Intl` for
+ * docs/develop/localization.md. Plural rules and number formats come from `Intl` for
  * the code, so nothing else needs to know the language.
  */
 export interface Locale {

@@ -1,19 +1,14 @@
 import { useEffect, useState, type Dispatch, type SetStateAction } from "react";
 import { api, type Experiment, type ExperimentNode, type HttpResponse } from "./api";
 import type { Failure } from "./errors";
-import { isWait, missingParts, nodeLabel, previewLines } from "./experimentText";
+import { canSendNow, missingParts, nodeLabel, previewLines } from "./experimentText";
 import { fmtBytes, fmtNum, prettyJson } from "./format";
 import { useT } from "./i18n";
-import { signalBodyOfNode } from "./signals";
 import { useStore } from "./store";
 
 /** What the last Send now of a node did. A failure is kept as it came and described when shown. */
 export type NodeTest = { ok: boolean; text: string; ts: number; error?: Failure; missing?: string[]; response?: HttpResponse; body?: string; json?: unknown; values?: Record<string, unknown> };
 export type Preview = { nodeId: string; lines: string[]; missing: string[]; error?: Failure };
-
-/** Send now applies to actions, and Listen now to waits. */
-/** A WebSocket send or wait opens the connection its connect node describes, for that one test. */
-export const canSendNow = (node: ExperimentNode) => !!signalBodyOfNode(node) || isWait(node) || node.type === "ws_connect" || node.type === "ws_send";
 
 /**
  * One node on its own: Send now / Listen now, and the resolved preview of the

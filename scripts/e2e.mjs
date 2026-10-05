@@ -340,6 +340,10 @@ function plan(ports, fixtures, mode, dataDir, { feedbackHere }) {
     { name: "emulators", args: { port: ports.emulator } },
     { name: "emulatorMqtt", args: { port: ports.broker } },
     { name: "experimentHttp", args: { port: ports.http } },
+    { name: "experimentTcp", args: { tcp: ports.tcp }, before: mark, after: async (expect) => {
+      await sleep(300);
+      expect("the TCP sink received the TCP message's payload", counts.tcpBytes - at.tcp === 5, `${counts.tcpBytes - at.tcp} B`);
+    } },
     { name: "experimentOsc", args: { device: ports.device, pong: ports.pong }, before: mark, after: (expect) => expect("the device was pinged", counts.pings - at.pings >= 1) },
     { name: "experimentRepeat", args: { device: ports.device, pong: ports.pong }, before: mark, after: (expect) => expect("the device got three pings", counts.pings - at.pings === 3, `${counts.pings - at.pings} pings`) },
     { name: "experimentLoop", args: { device: ports.device }, before: mark, after: (expect) => expect("the device was polled three times", counts.statusPolls - at.polls === 3, `${counts.statusPolls - at.polls} polls`) },
@@ -368,6 +372,7 @@ function plan(ports, fixtures, mode, dataDir, { feedbackHere }) {
     } },
     { name: "russian" },
     { name: "languages" },
+    { name: "docs" },
     { name: "cleanup" },
   ];
 }

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Documentation
+    url: https://proanima.github.io/SignalLab/
+    about: Guides for every screen, experiments, the command line, the server and the HTTP API — in eleven languages.
+  - name: Report a security problem
+    url: https://github.com/ProAnima/SignalLab/security/advisories/new
+    about: Privately, as SECURITY.md describes.

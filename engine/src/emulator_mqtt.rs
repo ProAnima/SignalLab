@@ -552,7 +552,8 @@ fn published(shared: &Shared, message: Message, retain: bool, client: &str, peer
         None => "—".to_string(),
     };
     let capture = context.capturing();
-    let frame = capture.then(|| context.publish(Frame::rx("mqtt", "emulator").remote(peer).payload(&message.payload).summary(&line).verdict(verdict))).flatten();
+    // Sent again, it goes to this broker on the same topic: as if the client published it once more.
+    let frame = capture.then(|| context.publish(Frame::rx("mqtt", "emulator").remote(peer).payload(&message.payload).publish(context.emulation.local, &message.topic, message.qos, retain).summary(&line).verdict(verdict))).flatten();
     let mut exchange = Exchange { from: peer.to_string(), request: matching::shorten(&line), frame, ..Default::default() };
     let Some((index, rule, matched)) = found else {
         exchange.data = kept(&request);
@@ -598,7 +599,7 @@ fn later(shared: &Shared, reply: Message, retain: bool, delay: Duration, capture
         };
         context.emulation.miss(missed);
         if capture {
-            context.publish(Frame::tx("mqtt", "emulator").payload(&reply.payload).summary(&line));
+            context.publish(Frame::tx("mqtt", "emulator").payload(&reply.payload).publish(context.emulation.local, &reply.topic, reply.qos, retain).summary(&line));
         }
         exchange.reply = matching::shorten(&line);
         exchange.ms = started.elapsed().as_millis() as u64;
@@ -923,5 +924,50 @@ mod tests {
         assert!(matches!(closed, Ok(0) | Err(_)), "closed after 1.5 s of silence");
         assert!(begun.elapsed() >= Duration::from_millis(1400));
         jobs.stop(id);
+    }
+
+    /// A publish in the Inspector says where it went and how, so it can be
+    /// saved as an MQTT signal and sent again byte for byte; a SUBSCRIBE does not.
+    #[tokio::test]
+    async fn publishes_in_the_inspector_carry_their_broker_topic_and_flags() {
+        let port = free_port();
+        let capture = Capture::new();
+        capture.set_enabled(true);
+        let host = Host::new(Recorder::new(), capture.clone());
+        let (jobs, hub) = (JobRegistry::new(), EmulatorHub::new());
+        let emulator: Emulator = serde_json::from_value(json!({
+            "name": "Broker", "bind": format!("127.0.0.1:{port}"), "protocol": "mqtt",
+            "rules": [{ "topic": "lab/+/set", "reply": { "topic": "lab/lamp/state", "payload": "{{request.payload}}", "qos": 1, "retain": true } }]
+        }))
+        .unwrap();
+        let info = emulator_job::start(host, jobs.clone(), hub, emulator, StartOptions { seed: Some(3), ..Default::default() }).await.unwrap();
+        let broker: SocketAddr = info.params["local"].parse().unwrap();
+        let (mut panel, _) = Raw::connect(broker, "panel", None, None, 30).await;
+        panel.subscribe(&[("lab/#", 0)]).await;
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        panel.send(&encode_publish("lab/lamp/set", b"ON", 1, false, 7, false)).await;
+        assert!(panel.next().await.is_some());
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        panel.send(&encode_publish("lab/blob/set", &[0xff, 0x00, 0xfe], 0, false, 0, false)).await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        let frames = capture.snapshot(100);
+        let subscribe = frames.iter().find(|frame| frame.summary.starts_with("SUBSCRIBE")).expect("the SUBSCRIBE");
+        assert!(subscribe.publish.is_none(), "a control packet is no publish");
+        assert!(!serde_json::to_value(subscribe).unwrap().as_object().unwrap().contains_key("publish"), "and says nothing of one");
+        let received = frames.iter().find(|frame| frame.dir == "rx" && frame.publish.as_ref().is_some_and(|publish| publish.topic == "lab/lamp/set")).expect("the panel's publish");
+        let publish = received.publish.as_ref().unwrap();
+        assert_eq!((publish.broker.as_str(), publish.qos, publish.retain, publish.text), (broker.to_string().as_str(), 1, false, true));
+        assert_eq!((received.data.as_deref(), received.kept, received.bytes), (Some(&b"ON"[..]), 2, 2), "the message's own bytes, kept whole");
+        let replied = frames.iter().find(|frame| frame.dir == "tx" && frame.publish.is_some()).expect("the rule's reply");
+        let publish = replied.publish.as_ref().unwrap();
+        assert_eq!((publish.topic.as_str(), publish.qos, publish.retain, replied.data.as_deref()), ("lab/lamp/state", 1, true, Some(&b"ON"[..])));
+        let binary = frames.iter().find(|frame| frame.publish.as_ref().is_some_and(|publish| publish.topic == "lab/blob/set")).expect("the binary publish");
+        assert!(!binary.publish.as_ref().unwrap().text, "bytes that are not text cannot be a signal's payload");
+        // A batch carries what it was published with, never the bytes.
+        let shipped = serde_json::to_value(received).unwrap();
+        assert_eq!(shipped["publish"]["topic"], "lab/lamp/set");
+        assert!(shipped.get("data").is_none());
+        jobs.stop(info.id);
     }
 }

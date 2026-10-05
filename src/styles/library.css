@@ -115,6 +115,9 @@
 .save-signal-dialog h2 { margin: 0 0 14px; font-size: 16px; }
 .save-signal-dialog footer { justify-content: flex-end; margin-top: 6px; }
 .sig-foot .ok { color: var(--accent); }
+/* While the library file cannot be read: what is wrong, above the tree; the fields read only. */
+.sig-blocked { margin: 0 0 8px; }
+.sig-fields { min-width: 0; margin: 0; padding: 0; border: 0; }
 
 kbd {
   padding: 0 5px;

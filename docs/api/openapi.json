@@ -4,7 +4,7 @@
     "title": "Signal Lab server",
     "version": "1",
     "summary": "The engine of Signal Lab over HTTP: commands, experiment runs, events and files.",
-    "description": "The API `signal-lab-server` serves next to its interface. Without a token the server listens only on loopback and needs no authentication; with one, every endpoint except `/api/health` needs `Authorization: Bearer <token>` (scripts) or the session cookie a browser gets at `/login`. Requests that change state must not carry an `Origin` of another site, and take JSON only. Failures are an `EngineError`: a stable `code` (its text is `err.<code>` in the interface's dictionaries), `params`, the `node` and `field` it is about and the system's own wording as `detail`. A guide with examples: docs/automation.md.",
+    "description": "The API `signal-lab-server` serves next to its interface. Without a token the server listens only on loopback and needs no authentication; with one, every endpoint except `/api/health` needs `Authorization: Bearer <token>` (scripts) or the session cookie a browser gets at `/login`. Requests that change state must not carry an `Origin` of another site, and take JSON only. Failures are an `EngineError`: a stable `code` (its text is `err.<code>` in the interface's dictionaries), `params`, the `node` and `field` it is about and the system's own wording as `detail`. A guide with examples: https://proanima.github.io/SignalLab/api/.",
     "license": { "name": "MIT", "identifier": "MIT" }
   },
   "servers": [{ "url": "http://127.0.0.1:1430", "description": "A server on this machine (the default address)" }],
@@ -122,7 +122,7 @@
         },
         "x-signallab-commands": {
           "app_info": { "arguments": {}, "returns": "{version, mode, secrets_writable, data_dir, os, arch}" },
-          "feedback_send": { "arguments": { "form": "{message, email?, meta: {version, os, arch, mode, lang, screen}, screenshots: [{name, data (base64)}], logs: [{name, text}]} — at most 6 screenshots of 8 MB, 15 MB in all" }, "returns": "{id} — the studio's hub (docs/hub.md) mailed it to the developers; its refusals are feedback.*, the network's transport.*" },
+          "feedback_send": { "arguments": { "form": "{message, email?, meta: {version, os, arch, mode, lang, screen}, screenshots: [{name, data (base64)}], logs: [{name, text}]} — at most 6 screenshots of 8 MB, 15 MB in all" }, "returns": "{id} — the studio's hub (https://proanima.github.io/SignalLab/develop/hub.html) mailed it to the developers; its refusals are feedback.*, the network's transport.*" },
           "firewall_status": { "arguments": {}, "returns": "{applies, program, enabled, networks, allowed, blocked, rules} — whether the firewall lets other machines reach this program (Windows: per program)" },
           "firewall_allow": { "arguments": { "public": "boolean — on public networks too" }, "returns": "the new firewall_status; the desktop app only (firewall.server on a server), after the system's administrator prompt (firewall.declined when refused)" },
           "get_host_info": { "arguments": {}, "returns": "host name and network interfaces" },

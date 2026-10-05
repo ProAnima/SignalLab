@@ -102,6 +102,26 @@ export async function experimentAuth(expect: Expect, args: StepArgs) {
   expect("the run with a Digest request passes", outcome === T("exp.passed"), `${outcome} · ${rows.join(" | ")}`);
 }
 
+/** A TCP message added with Add next and tried on its own: Send now writes its payload to the TCP sink. */
+export async function experimentTcp(expect: Expect, args: StepArgs) {
+  const editor = await openTemplate("exp.templateHttp");
+  const http = await selectNode(editor, "exp.node.http");
+  await click(buttonWith(http, T("exp.addNext")));
+  const search = await until("the add menu", () => document.querySelector<HTMLInputElement>(".experiment-add-menu input"));
+  await type(search, T("exp.node.tcp"));
+  key(search, { key: "Enter", code: "Enter" });
+  await until("the TCP message in the properties", () => textOf(editor.querySelector(".experiment-properties h2")) === T("exp.node.tcp"));
+  const properties = editor.querySelector<HTMLElement>(".experiment-properties")!;
+  const nameless = unnamed(properties);
+  expect("TCP message: every field and button has a name", nameless.length === 0, nameless.join(" | "));
+  await type(control(properties, T("exp.host")), "127.0.0.1");
+  await type(control(properties, T("exp.port")), args.tcp as number);
+  await type(control(properties, T("exp.payload")), "hello");
+  await click(buttonWith(properties, T("exp.sendNow")));
+  const tested = await until("Send now", () => properties.querySelector(".experiment-test-result"));
+  expect("Send now on a TCP message writes to the sink", tested.classList.contains("ok") && textOf(tested).includes(`→ 127.0.0.1:${args.tcp}`), textOf(tested));
+}
+
 export async function experimentOsc(expect: Expect, args: StepArgs) {
   const editor = await openTemplate("exp.templatePingReply");
   await click(button(editor, T("exp.params")));

@@ -769,7 +769,7 @@ pub async fn run(env: LoadEnv<'_>, request: HttpRequest, load: &Load, mut progre
         flights.spawn(async move {
             let response = http::execute(&client, &request, &memory).await;
             if inspect::armed(&host) && gate.allow() {
-                inspect::publish(&host, http::exchange_frame(&request, &response, None));
+                inspect::publish(&host, gate.mark(http::exchange_frame(&request, &response, None)));
             }
             stats.record(&response, second);
             drop(permit);

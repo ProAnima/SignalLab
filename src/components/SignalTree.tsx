@@ -16,7 +16,9 @@ const isPaths = (value: unknown) => Array.isArray(value) && value.every((item) =
  * drag signals and folders into folders — or onto the list's empty space for
  * the top level — rename a folder (✎ or F2) and remove one (× twice; what is
  * in it moves up a level). While a search is on, every folder with a match is
- * open and the empty ones are hidden.
+ * open and the empty ones are hidden. While the library file cannot be read
+ * (the store's `libraryError`), nothing moves, is renamed or removed: the file
+ * is being fixed, and only a reload lifts that.
  */
 export function SignalTree({ signals, searching, selectedId, onSelect, onFire, folder, onFolder, reveal, onNewFolder }: {
   /** The signals to show (already filtered by the search). */
@@ -34,7 +36,8 @@ export function SignalTree({ signals, searching, selectedId, onSelect, onFire, f
   onNewFolder: () => void;
 }) {
   const t = useT();
-  const { library, folders, setLibraryState, pushLog } = useStore();
+  const { library, folders, setLibraryState, pushLog, libraryError } = useStore();
+  const locked = libraryError !== null;
   const [collapsed, setCollapsed] = usePersistentState<string[]>("signal-lab.signals.collapsed", [], isPaths);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [confirming, setConfirming] = useState<string | null>(null);
@@ -79,13 +82,13 @@ export function SignalTree({ signals, searching, selectedId, onSelect, onFire, f
     setDropAt(null);
     const what = dragged ?? readDragged(event);
     setDragged(null);
-    if (!what) return;
+    if (!what || locked) return;
     if (what.kind === "signal") { setLibraryState(moveSignal(state, what.id, path)); return; }
     const next = moveFolder(state, what.id, path);
     if (next && next !== state) setLibraryState(next);
   };
   const over = (event: DragEvent, path: string) => {
-    if (!dragged) return;
+    if (!dragged || locked) return;
     // Not into itself, nor into a folder inside it.
     if (dragged.kind === "folder" && within(path, dragged.id)) return;
     event.preventDefault();
@@ -99,8 +102,8 @@ export function SignalTree({ signals, searching, selectedId, onSelect, onFire, f
   };
 
   const folderKeys = (event: KeyboardEvent, node: FolderNode) => {
-    if (event.key === "F2") { event.preventDefault(); setRenaming(node.path); }
-    if (event.key === "Delete") { event.preventDefault(); if (confirming === node.path) remove(node.path); else setConfirming(node.path); }
+    if (event.key === "F2" && !locked) { event.preventDefault(); setRenaming(node.path); }
+    if (event.key === "Delete" && !locked) { event.preventDefault(); if (confirming === node.path) remove(node.path); else setConfirming(node.path); }
     if (event.key === "ArrowRight" && !isOpen(node.path)) { event.preventDefault(); toggle(node.path); }
     if (event.key === "ArrowLeft" && isOpen(node.path) && !searching) { event.preventDefault(); toggle(node.path); }
   };
@@ -109,7 +112,7 @@ export function SignalTree({ signals, searching, selectedId, onSelect, onFire, f
 
   const renderSignal = (signal: Signal, depth: number) => <button key={signal.id} data-signal={signal.id} style={indent(depth)}
     className={"sig-item" + (signal.id === selectedId ? " active" : "")} aria-current={signal.id === selectedId ? "true" : undefined}
-    draggable onDragStart={(event) => start(event, { kind: "signal", id: signal.id })} onDragEnd={() => { setDragged(null); setDropAt(null); }}
+    draggable={!locked} onDragStart={(event) => start(event, { kind: "signal", id: signal.id })} onDragEnd={() => { setDragged(null); setDropAt(null); }}
     data-tip={t("sig.itemHint")} onClick={() => onSelect(signal.id)} onDoubleClick={() => onFire(signal)}>
     <span className="sig-item-name">{signal.name}</span>
     <span className="sig-item-meta"><span className="sig-badge">{t(transportKey(signal.body.transport))}</span>{signalTarget(signal)}</span>
@@ -125,7 +128,7 @@ export function SignalTree({ signals, searching, selectedId, onSelect, onFire, f
             onFocus={(event) => event.target.select()}
             onKeyDown={(event) => { if (event.key === "Enter") rename(node.path, event.currentTarget.value); if (event.key === "Escape") { event.preventDefault(); setRenaming(null); } }}
             onBlur={(event) => rename(node.path, event.currentTarget.value)} />
-          : <button className="sig-folder" aria-expanded={open} draggable data-folder={node.path}
+          : <button className="sig-folder" aria-expanded={open} draggable={!locked} data-folder={node.path}
             data-tip={t("sig.folderRowHint")} onDragStart={(event) => start(event, { kind: "folder", id: node.path })} onDragEnd={() => { setDragged(null); setDropAt(null); }}
             onClick={() => { if (!searching) toggle(node.path); onFolder(node.path); }} onKeyDown={(event) => folderKeys(event, node)}>
             <span className="sig-folder-twist" aria-hidden="true">{open ? "▾" : "▸"}</span>
@@ -133,8 +136,8 @@ export function SignalTree({ signals, searching, selectedId, onSelect, onFire, f
             <span className="sig-folder-count" aria-label={t("sig.count", { n: node.total })}>{node.total}</span>
           </button>}
         {renaming !== node.path && <span className="sig-folder-tools">
-          <button className="ghost xs" aria-label={`${t("sig.renameFolder")}: ${node.name}`} data-tip={`${t("sig.renameFolder")} · F2`} onClick={() => setRenaming(node.path)}>✎</button>
-          <button className={`ghost xs ${confirming === node.path ? "danger" : ""}`} aria-label={`${t("sig.removeFolder")}: ${node.name}`} data-tip={`${t("sig.removeFolderHint")} · Delete`}
+          <button className="ghost xs" aria-label={`${t("sig.renameFolder")}: ${node.name}`} data-tip={`${t("sig.renameFolder")} · F2`} disabled={locked} onClick={() => setRenaming(node.path)}>✎</button>
+          <button className={`ghost xs ${confirming === node.path ? "danger" : ""}`} aria-label={`${t("sig.removeFolder")}: ${node.name}`} data-tip={`${t("sig.removeFolderHint")} · Delete`} disabled={locked}
             onClick={() => confirming === node.path ? remove(node.path) : setConfirming(node.path)} onBlur={() => setConfirming((at) => at === node.path ? null : at)}>
             {confirming === node.path ? t("sig.confirmRemoveFolder") : "×"}</button>
         </span>}
@@ -148,7 +151,7 @@ export function SignalTree({ signals, searching, selectedId, onSelect, onFire, f
     <div className="sig-tree-tools" role="group" aria-label={t("sig.library")}>
       <button className="ghost xs" aria-label={t("sig.expandAll")} data-tip={t("sig.expandAll")} disabled={searching || collapsed.length === 0} onClick={() => setCollapsed([])}>⊞</button>
       <button className="ghost xs" aria-label={t("sig.collapseAll")} data-tip={t("sig.collapseAll")} disabled={searching || everyFolder.length === 0} onClick={() => setCollapsed(everyFolder)}>⊟</button>
-      <button className="ghost xs" data-tip={t("sig.newFolderHint")} onClick={onNewFolder}>＋ {t("sig.newFolder")}</button>
+      <button className="ghost xs" data-tip={t("sig.newFolderHint")} disabled={locked} onClick={onNewFolder}>＋ {t("sig.newFolder")}</button>
       {folder && <button className="link-btn sig-current-folder" data-tip={t("sig.currentFolderHint")} onClick={() => onFolder("")}>{t("sig.inFolder", { folder: folder.split("/").join(" / ") })} ×</button>}
     </div>
     <div className={`sig-list scroll-y ${dropAt === "" ? "drop" : ""}`}

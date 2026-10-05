@@ -1,6 +1,6 @@
 //! Signal Lab without a window. The engine runs here; browsers get the same
 //! interface as the desktop app, talking to the engine over HTTP and a
-//! WebSocket. Design and the rules it follows: docs/delivery.md, section 7.
+//! WebSocket. Design and the rules it follows: docs/develop/delivery.md, section 7.
 
 pub mod auth;
 pub mod config;

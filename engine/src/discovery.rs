@@ -264,7 +264,7 @@ pub async fn start_discovery(
                         if let Some(d) = &detail {
                             frame = frame.detail(d.clone());
                         }
-                        inspect::publish(&host_cl, frame);
+                        inspect::publish(&host_cl, gate.mark(frame));
                     }
 
                     if should_reply {

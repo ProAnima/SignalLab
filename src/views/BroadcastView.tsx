@@ -183,6 +183,8 @@ export function BroadcastView() {
     try {
       const r = await api.broadcastSend(emitConfig());
       setResult(r);
+      // The panel shows the last emit: a running beacon's next report takes it back.
+      setEmitStat(null);
       if (r.errors > 0) {
         pushLog("warn", "broadcast", "log.emitErrors", {
           sent: r.packets, targets: r.targets, summary: r.summary, errors: r.errors,
@@ -412,7 +414,7 @@ export function BroadcastView() {
               <div className="metrics">
                 <div className="metric">
                   <div className="k">{t("bc.targets")}</div>
-                  <div className="v accent">{fmtNum(result?.targets ?? 0)}</div>
+                  <div className="v accent">{fmtNum(emitStat?.targets ?? result?.targets ?? 0)}</div>
                 </div>
                 <div className="metric">
                   <div className="k">{t("common.packets")}</div>
@@ -440,7 +442,7 @@ export function BroadcastView() {
                 )}
               </div>
             )}
-            {result && result.resolved.length > 0 && (
+            {result && !emitStat && result.resolved.length > 0 && (
               <div style={{ marginTop: 12, fontFamily: "var(--mono)", fontSize: 11, color: "var(--text-faint)" }}>
                 → {result.resolved.join("  ")}
                 {result.targets > result.resolved.length && ` ${t("bc.andMore", { n: result.targets - result.resolved.length })}`}

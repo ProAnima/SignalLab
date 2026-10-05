@@ -2,7 +2,7 @@
  * Editor-side helpers for values in experiments. The language itself is
  * resolved by the engine (`experiment_resolve`); these only help the user type
  * it: suggestions, the variables visible at a node, JSON paths for "Extract as
- * variable". See docs/milestone-3-data.md.
+ * variable". See docs/develop/design-data.md.
  */
 import type { Experiment, ExperimentNode, ExperimentProfile, OscReply, Repeat, Retry, UdpMode, UdpReply } from "./api";
 import type { TKey } from "./i18n";
@@ -134,7 +134,7 @@ export function templateAt(text: string, caret: number): { start: number; query:
   return /^[\sA-Za-z0-9_.[\]"'-]*$/.test(query) ? { start: open, query: query.trim() } : null;
 }
 
-// ---- parameters and profiles (pure document edits; see docs/milestone-3-data.md §10) ----
+// ---- parameters and profiles (pure document edits; see docs/develop/design-data.md §10) ----
 
 /** Defaults, then the profile, then Run with… values; mirrors `effective_params`. */
 export function effectiveParams(doc: Experiment, profile: string | null, overrides: Record<string, string> = {}): Record<string, string> {

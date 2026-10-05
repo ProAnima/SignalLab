@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Cut a release from this machine. GitHub Actions then builds the installers
 // for Windows and Linux from the tag into a draft release; you review the
-// draft and publish it. See docs/delivery.md.
+// draft and publish it. See docs/develop/delivery.md.
 //
 //   npm run release -- 1.2.3 --dry-run   check everything, change nothing
 //   npm run release -- 1.2.3             checks, version, changelog, commit, tag — local only

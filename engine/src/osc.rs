@@ -7,14 +7,14 @@ use serde::{Deserialize, Serialize};
 use crate::host::Host;
 use tokio::net::UdpSocket;
 
-use super::error::{EngineError, EngineResult};
+use super::error::{EngineError, EngineResult, Field};
 use super::inspect::{self, Frame, Gate};
 use super::jobs::{now_ms, JobInfo, JobRegistry};
 use super::net;
 use super::osc_codec::{
     arg_str, decode_packet, encode_message, summarize_messages, OscArg, OscMessage,
 };
-use super::transport::{self, Cause};
+use super::transport;
 
 /// One decoded inbound OSC packet, forwarded to the UI on `osc://message`.
 #[derive(Clone, Serialize)]
@@ -71,9 +71,13 @@ pub(crate) fn parse_bind(bind: &str) -> EngineResult<SocketAddr> {
     bind.trim().parse().map_err(|_| EngineError::new("node.bind_invalid").with("value", bind))
 }
 
-/// A destination, `IP:port`.
-pub(crate) fn parse_target(target: &str) -> EngineResult<SocketAddr> {
-    target.trim().parse().map_err(|_| Cause::TargetInvalid.error(target))
+/// An OSC address starts with `/`, as a node's and Broadcast's do (`node.osc_address`).
+pub(crate) fn check_address(address: &str) -> EngineResult<()> {
+    if address.starts_with('/') {
+        Ok(())
+    } else {
+        Err(EngineError::new("node.osc_address").with("value", address).in_field(Field::new("address")))
+    }
 }
 
 pub async fn start_monitor(
@@ -159,11 +163,41 @@ pub async fn start_monitor(
 pub enum Waveform {
     Sine,
     Triangle,
+    /// Falling: Max to Min, then back to Max at once.
     Saw,
     Square,
     Random,
+    /// Rising: Min to Max, then back to Min at once.
     Ramp,
     Constant,
+}
+
+impl Waveform {
+    /// Where the wave is at `phase` (0 to 1 through one cycle), from 0 (Min)
+    /// to 1 (Max); `random` draws from `rng`.
+    fn unit(&self, phase: f64, rng: &mut u64) -> f64 {
+        match self {
+            Waveform::Sine => (2.0 * std::f64::consts::PI * phase).sin() * 0.5 + 0.5,
+            Waveform::Triangle => 1.0 - (2.0 * phase - 1.0).abs(),
+            Waveform::Saw => 1.0 - phase,
+            Waveform::Ramp => phase,
+            Waveform::Square => {
+                if phase < 0.5 {
+                    1.0
+                } else {
+                    0.0
+                }
+            }
+            Waveform::Random => {
+                // xorshift64 for a cheap deterministic-ish noise source
+                *rng ^= *rng << 13;
+                *rng ^= *rng >> 7;
+                *rng ^= *rng << 17;
+                (*rng >> 11) as f64 / (1u64 << 53) as f64
+            }
+            Waveform::Constant => 1.0,
+        }
+    }
 }
 
 #[derive(Clone, Deserialize)]
@@ -198,8 +232,9 @@ pub async fn start_generator(
     jobs: JobRegistry,
     cfg: GenConfig,
 ) -> EngineResult<JobInfo> {
-    let target = parse_target(&cfg.target)?;
-    let local = if target.is_ipv6() { "[::]:0" } else { "0.0.0.0:0" };
+    check_address(&cfg.address)?;
+    let target = transport::resolve(&cfg.target).await?;
+    let local = transport::unspecified_for(&target);
     let socket = UdpSocket::bind(local)
         .await
         .map_err(|e| net::bind_error(local, e))?;
@@ -230,8 +265,6 @@ pub async fn start_generator(
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         let span = (cfg.max - cfg.min).max(0.0);
-        let mid = (cfg.max + cfg.min) / 2.0;
-        let amp = span / 2.0;
         let start = std::time::Instant::now();
         let mut sent: u64 = 0;
         let mut rng_state: u64 = 0x9E3779B97F4A7C15 ^ id.wrapping_mul(2654435761);
@@ -244,31 +277,7 @@ pub async fn start_generator(
                 break;
             }
             let phase = (cfg.freq * t).fract();
-            let unit = match cfg.waveform {
-                Waveform::Sine => (2.0 * std::f64::consts::PI * phase).sin() * 0.5 + 0.5,
-                Waveform::Triangle => 1.0 - (2.0 * phase - 1.0).abs(),
-                Waveform::Saw => phase,
-                Waveform::Ramp => phase,
-                Waveform::Square => {
-                    if phase < 0.5 {
-                        1.0
-                    } else {
-                        0.0
-                    }
-                }
-                Waveform::Random => {
-                    // xorshift64 for a cheap deterministic-ish noise source
-                    rng_state ^= rng_state << 13;
-                    rng_state ^= rng_state >> 7;
-                    rng_state ^= rng_state << 17;
-                    (rng_state >> 11) as f64 / (1u64 << 53) as f64
-                }
-                Waveform::Constant => 1.0,
-            };
-            let value = match cfg.waveform {
-                Waveform::Sine => mid + amp * (2.0 * (unit - 0.5)),
-                _ => cfg.min + span * unit,
-            };
+            let value = cfg.min + span * cfg.waveform.unit(phase, &mut rng_state);
 
             let arg = if cfg.as_int {
                 OscArg::Int(value.round() as i32)
@@ -285,13 +294,15 @@ pub async fn start_generator(
             if inspect::armed(&host_cl) && gate.allow() {
                 inspect::publish(
                     &host_cl,
-                    Frame::tx("osc", "osc-gen")
-                        .job(id)
-                        .local(&gen_local)
-                        .remote(&cfg.target)
-                        .payload(&packet)
-                        .summary(format!("{} {}", cfg.address, arg_str(&arg)))
-                        .verdict("sampled"),
+                    gate.mark(
+                        Frame::tx("osc", "osc-gen")
+                            .job(id)
+                            .local(&gen_local)
+                            .remote(target)
+                            .payload(&packet)
+                            .summary(format!("{} {}", cfg.address, arg_str(&arg)))
+                            .verdict("sampled"),
+                    ),
                 );
             }
 
@@ -315,14 +326,16 @@ pub async fn start_generator(
     Ok(info)
 }
 
-/// Send a single OSC message immediately (fire-and-forget, no job).
+/// Send a single OSC message immediately (fire-and-forget, no job) to
+/// `IP:port` or `host:port`.
 pub async fn send_once(
     host: Host,
     target: String,
     address: String,
     args: Vec<OscArg>,
 ) -> EngineResult<usize> {
-    let addr = parse_target(&target)?;
+    check_address(&address)?;
+    let addr = transport::resolve(&target).await?;
     send_to(&host, addr, address, &args).await.map_err(|e| transport::of_io(&e).error(&target).because(e))
 }
 
@@ -334,7 +347,7 @@ pub async fn send_to(
     address: String,
     args: &[OscArg],
 ) -> std::io::Result<usize> {
-    let socket = UdpSocket::bind(if addr.is_ipv6() { "[::]:0" } else { "0.0.0.0:0" }).await?;
+    let socket = UdpSocket::bind(transport::unspecified_for(&addr)).await?;
     let packet = encode_message(&address, args);
     let sent = socket.send_to(&packet, addr).await?;
 
@@ -390,10 +403,50 @@ mod tests {
         let jobs = JobRegistry::new();
         let bad = start_monitor(host.clone(), jobs.clone(), "9000".into()).await.unwrap_err();
         assert_eq!((bad.code.as_str(), bad.params["value"].as_str()), ("node.bind_invalid", "9000"));
-        let target = send_once(host.clone(), "localhost:9000".into(), "/x".into(), vec![]).await.unwrap_err();
-        assert_eq!((target.code.as_str(), target.params["target"].as_str()), ("transport.target_invalid", "localhost:9000"));
+        let target = send_once(host.clone(), "localhost".into(), "/x".into(), vec![]).await.unwrap_err();
+        assert_eq!((target.code.as_str(), target.params["target"].as_str()), ("transport.target_invalid", "localhost"));
+        let unknown = send_once(host.clone(), "no-such-host.invalid:9000".into(), "/x".into(), vec![]).await.unwrap_err();
+        assert!(unknown.is("transport.dns"), "{unknown}");
+        let address = send_once(host.clone(), "127.0.0.1:9".into(), "hello".into(), vec![]).await.unwrap_err();
+        assert_eq!((address.code.as_str(), address.params["value"].as_str(), address.field.as_ref().unwrap().key.as_str()), ("node.osc_address", "hello", "address"));
         let cfg = GenConfig { target: "nowhere".into(), address: "/x".into(), rate: 1.0, waveform: Waveform::Sine, freq: 1.0, min: 0.0, max: 1.0, as_int: false, duration_s: 0.0 };
-        assert!(start_generator(host, jobs.clone(), cfg).await.unwrap_err().is("transport.target_invalid"));
+        assert!(start_generator(host.clone(), jobs.clone(), cfg.clone()).await.unwrap_err().is("transport.target_invalid"));
+        let slashless = GenConfig { target: "127.0.0.1:9".into(), address: "lfo".into(), ..cfg };
+        assert!(start_generator(host, jobs.clone(), slashless).await.unwrap_err().is("node.osc_address"));
         assert!(jobs.list().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_host_name_reaches_an_ipv4_listener() {
+        let host = Host::new(Recorder::new(), Capture::new());
+        let device = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let port = device.local_addr().unwrap().port();
+        // `localhost` may list ::1 first; the device listens on IPv4 only.
+        let sent = send_once(host.clone(), format!("localhost:{port}"), "/go".into(), vec![OscArg::Int(1)]).await.unwrap();
+        let mut buf = [0u8; 64];
+        let (n, _) = tokio::time::timeout(Duration::from_secs(2), device.recv_from(&mut buf)).await.expect("the message arrived").unwrap();
+        assert_eq!(n, sent);
+        assert_eq!(decode_packet(&buf[..n]).unwrap()[0].address, "/go");
+
+        let jobs = JobRegistry::new();
+        let cfg = GenConfig { target: format!("localhost:{port}"), address: "/lfo".into(), rate: 50.0, waveform: Waveform::Ramp, freq: 1.0, min: 0.0, max: 1.0, as_int: false, duration_s: 0.0 };
+        let job = start_generator(host, jobs.clone(), cfg).await.unwrap();
+        let (n, _) = tokio::time::timeout(Duration::from_secs(2), device.recv_from(&mut buf)).await.expect("the generator's message arrived").unwrap();
+        assert_eq!(decode_packet(&buf[..n]).unwrap()[0].address, "/lfo");
+        jobs.stop(job.id);
+    }
+
+    #[test]
+    fn saw_falls_and_ramp_rises() {
+        let mut rng = 1;
+        let at = |waveform: Waveform, rng: &mut u64| [0.0, 0.25, 0.5, 0.75].map(|phase| waveform.unit(phase, rng));
+        assert_eq!(at(Waveform::Saw, &mut rng), [1.0, 0.75, 0.5, 0.25], "Max down to Min");
+        assert_eq!(at(Waveform::Ramp, &mut rng), [0.0, 0.25, 0.5, 0.75], "Min up to Max");
+        assert_eq!(at(Waveform::Triangle, &mut rng), [0.0, 0.5, 1.0, 0.5]);
+        assert_eq!(at(Waveform::Square, &mut rng), [1.0, 1.0, 0.0, 0.0]);
+        assert_eq!(at(Waveform::Constant, &mut rng), [1.0; 4]);
+        let sine = at(Waveform::Sine, &mut rng);
+        assert!((sine[0] - 0.5).abs() < 1e-9 && (sine[1] - 1.0).abs() < 1e-9 && sine[3].abs() < 1e-9, "{sine:?}");
+        assert!(at(Waveform::Random, &mut rng).iter().all(|value| (0.0..1.0).contains(value)));
     }
 }

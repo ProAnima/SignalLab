@@ -1,10 +1,16 @@
 //! Cross-protocol capture bus.
 //!
-//! Every module (OSC monitor/sender, broadcast emitter, discovery listener, the
-//! impairment relay …) publishes a normalized [`Frame`] here. The bus keeps a
-//! bounded ring buffer so nothing is lost to a busy UI, and a pump task ships
-//! batches to the front-end on `inspect://batch`. Capture is *armed* explicitly
-//! — while disarmed, `push` is a single atomic load and costs nothing.
+//! Every module that puts traffic on a wire or takes it off one publishes a
+//! normalized [`Frame`] here: the OSC sender, monitor and generator (`osc-send`,
+//! `osc-monitor`, `osc-gen`), broadcast, beacon and discovery, HTTP requests
+//! and bursts (`http`), MQTT connections and one-shot publishes (`mqtt`,
+//! `mqtt-send`), WebSocket messages (`websocket`), the emulators (`emulator`),
+//! the impairment relay (`netsim`), Storm and the Scanner (`storm`, `scan`),
+//! and an experiment's actions and waits (`experiment`, `experiment-wait`).
+//! The bus keeps a bounded ring buffer so nothing is lost to a busy UI, and a
+//! pump task ships batches to the front-end on `inspect://batch`. Capture is
+//! *armed* explicitly — while disarmed, `push` is a single atomic load and
+//! costs nothing.
 //!
 //! A frame keeps its payload's bytes (secrets masked), up to [`FRAME_LIMIT`]:
 //! a batch carries only the first [`HEX_LIMIT`] as a hex preview, the rest is
@@ -43,17 +49,19 @@ pub const RING_BYTES: usize = 64 << 20;
 pub struct Frame {
     pub seq: u64,
     pub ts: u64,
-    /// "osc", "udp", "tcp", "http".
+    /// "osc", "udp", "tcp", "http", "mqtt", "ws".
     pub proto: String,
     /// "tx" (we sent it) or "rx" (we received it).
     pub dir: String,
-    /// Which module captured it, e.g. "osc-monitor", "netsim", "discovery".
+    /// Which module captured it, e.g. "osc-monitor", "netsim", "emulator", "experiment-wait".
     pub source: String,
     pub job_id: Option<u64>,
+    /// The socket on this side, `IP:port`, when there is one (a relay's: where it listens).
     pub local: String,
+    /// The other side: `IP:port`, a URL, a broker — for a relayed frame, where it was going.
     pub remote: String,
     pub bytes: usize,
-    /// One-line human summary, e.g. `/hello/lfo f 0.42`.
+    /// One-line human summary, e.g. `/hello/lfo 0.42`.
     pub summary: String,
     /// Optional multi-line decode shown in the detail pane.
     pub detail: Option<String>,
@@ -67,6 +75,22 @@ pub struct Frame {
     /// The payload as captured, secrets masked; never sent with a batch.
     #[serde(skip)]
     pub data: Option<Arc<[u8]>>,
+    /// An MQTT PUBLISH: what an MQTT signal needs besides the payload. None
+    /// for anything else (a SUBSCRIBE, a datagram, …), and then not sent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub publish: Option<Publish>,
+}
+
+/// Where and how an MQTT message was published — no bytes, so a batch stays light.
+#[derive(Clone, Debug, Serialize)]
+pub struct Publish {
+    /// host:port of the broker it went through.
+    pub broker: String,
+    pub topic: String,
+    pub qos: u8,
+    pub retain: bool,
+    /// The payload the frame keeps is UTF-8 text, which is what an MQTT signal holds.
+    pub text: bool,
 }
 
 impl Frame {
@@ -87,6 +111,7 @@ impl Frame {
             verdict: None,
             kept: 0,
             data: None,
+            publish: None,
         }
     }
 
@@ -143,6 +168,27 @@ impl Frame {
     /// Record only the size, for paths where copying the payload isn't worth it.
     pub fn size(mut self, n: usize) -> Self {
         self.bytes = n;
+        self
+    }
+
+    /// Say that `n` frames before this one were not drawn (a [`Gate`] or a
+    /// [`Budget`] refused them): `+n not shown`, after its verdict if it has one.
+    pub fn not_shown(mut self, n: u64) -> Self {
+        if n > 0 {
+            self.verdict = Some(match self.verdict.take() {
+                Some(verdict) => format!("{verdict} · +{n} not shown"),
+                None => format!("+{n} not shown"),
+            });
+        }
+        self
+    }
+
+    /// Mark it an MQTT PUBLISH of `topic` through `broker` (host:port). After
+    /// `payload`, which keeps the message's own bytes: whether they are text
+    /// is read from what the frame keeps.
+    pub fn publish(mut self, broker: impl std::fmt::Display, topic: &str, qos: u8, retain: bool) -> Self {
+        let text = self.data.as_deref().is_some_and(|data| std::str::from_utf8(data).is_ok());
+        self.publish = Some(Publish { broker: broker.to_string(), topic: topic.to_string(), qos, retain, text });
         self
     }
 }
@@ -420,6 +466,10 @@ fn redact(mut frame: Frame, values: &[String]) -> Frame {
     frame.remote = mask(&frame.remote);
     frame.local = mask(&frame.local);
     frame.verdict = frame.verdict.as_deref().map(mask);
+    if let Some(publish) = &mut frame.publish {
+        publish.broker = mask(&publish.broker);
+        publish.topic = mask(&publish.topic);
+    }
     frame
 }
 
@@ -564,10 +614,13 @@ pub fn ascii_preview(bytes: &[u8], max: usize) -> String {
     s
 }
 
-/// A cheap sampling gate: allows one event per `min_ms`, lock-free.
+/// A cheap sampling gate: allows one event per `min_ms`, lock-free. What it
+/// refuses is counted, and the next frame it lets through says how many
+/// (`mark`: *+N not shown*), as a [`Budget`]'s does.
 pub struct Gate {
     last_ms: AtomicU64,
     min_ms: u64,
+    refused: AtomicU64,
 }
 
 impl Gate {
@@ -575,19 +628,32 @@ impl Gate {
         Gate {
             last_ms: AtomicU64::new(0),
             min_ms,
+            refused: AtomicU64::new(0),
         }
     }
 
-    /// True at most once per `min_ms`. Safe to call from many tasks.
+    /// True at most once per `min_ms`. Safe to call from many tasks. Ask only
+    /// while capture is armed: a refusal is a frame not shown.
     pub fn allow(&self) -> bool {
+        self.allow_for(1)
+    }
+
+    /// `allow`, for what stands for `frames` frames (a beacon's round: one per
+    /// target); a refusal counts them all.
+    pub fn allow_for(&self, frames: u64) -> bool {
         let now = now_ms();
         let last = self.last_ms.load(Ordering::Relaxed);
-        if now.saturating_sub(last) < self.min_ms {
-            return false;
+        let allowed = now.saturating_sub(last) >= self.min_ms
+            && self.last_ms.compare_exchange(last, now, Ordering::Relaxed, Ordering::Relaxed).is_ok();
+        if !allowed {
+            self.refused.fetch_add(frames, Ordering::Relaxed);
         }
-        self.last_ms
-            .compare_exchange(last, now, Ordering::Relaxed, Ordering::Relaxed)
-            .is_ok()
+        allowed
+    }
+
+    /// `frame`, saying how many frames the gate refused since the last one it marked.
+    pub fn mark(&self, frame: Frame) -> Frame {
+        frame.not_shown(self.refused.swap(0, Ordering::Relaxed))
     }
 }
 
@@ -636,6 +702,20 @@ mod tests {
         budget.window_ms.store(0, Ordering::Relaxed);
         assert_eq!(budget.allow(), Some(2), "the next second's first frame says two were not shown");
         assert_eq!(budget.allow(), Some(0));
+    }
+
+    #[test]
+    fn a_gate_counts_what_it_refused_and_the_next_frame_says_so() {
+        let gate = Gate::new(60_000);
+        assert!(gate.allow(), "the first is let through");
+        assert_eq!(gate.mark(Frame::tx("osc", "test").verdict("sampled")).verdict.as_deref(), Some("sampled"), "nothing refused yet");
+        assert!(!gate.allow() && !gate.allow() && !gate.allow_for(3), "within the gap");
+        gate.last_ms.store(0, Ordering::Relaxed);
+        assert!(gate.allow());
+        assert_eq!(gate.mark(Frame::tx("osc", "test").verdict("sampled")).verdict.as_deref(), Some("sampled · +5 not shown"), "two, and a round of three");
+        assert_eq!(gate.mark(Frame::tx("udp", "test")).verdict, None, "counted once");
+        assert!(!gate.allow());
+        assert_eq!(gate.mark(Frame::tx("udp", "test")).verdict.as_deref(), Some("+1 not shown"));
     }
 
     #[test]

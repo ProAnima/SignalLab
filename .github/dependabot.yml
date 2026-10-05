@@ -20,7 +20,8 @@ updates:
         update-types: [minor, patch]
 
   - package-ecosystem: cargo
-    directory: /src-tauri
+    # The workspace (engine, server, cli, src-tauri) and its one Cargo.lock are at the root.
+    directory: /
     schedule:
       interval: monthly
     groups:

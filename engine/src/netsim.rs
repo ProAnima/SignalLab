@@ -29,7 +29,7 @@ use super::error::{EngineError, EngineResult, Field};
 use super::inspect::{self, describe_payload, Frame, Gate};
 use super::jobs::{now_ms, JobInfo, JobRegistry, TaskGuard};
 use super::net;
-use super::osc::{parse_bind, parse_target};
+use super::osc::parse_bind;
 use super::template::Rng;
 use super::transport;
 
@@ -413,7 +413,9 @@ impl Leg {
     }
 }
 
-/// Everything a packet's fate is reported with to the Inspector.
+/// Everything a packet's fate is reported with to the Inspector: the relay's
+/// listen address as the frame's local side, where the packet was going as
+/// its peer, and the leg after the fate in the verdict.
 #[derive(Clone)]
 struct Tap {
     host: Host,
@@ -423,7 +425,9 @@ struct Tap {
     /// "tx" for traffic heading to the target, "rx" for replies coming back —
     /// so the Inspector's direction filter means something for relayed packets.
     dir: &'static str,
-    /// Fallback peer label when the socket is connected and `dest` is None.
+    /// Where the relay listens: the frame's local side.
+    local: String,
+    /// Where a packet goes when the socket is connected and `dest` is None: the target.
     peer: String,
     /// Shared sampling budget — a relay under load must not flood the UI.
     gate: Arc<Gate>,
@@ -437,11 +441,12 @@ impl Tap {
     fn record(&self, bytes: &[u8], dest: Option<SocketAddr>, verdict: String) {
         let (proto, summary, detail) = describe_payload(bytes);
         let peer = dest.map(|d| d.to_string()).unwrap_or_else(|| self.peer.clone());
-        let mut frame = Frame::new(proto, self.dir, "netsim").job(self.job_id).local(self.leg).remote(peer).payload(bytes).summary(summary).verdict(verdict);
+        let verdict = format!("{verdict} · {}", self.leg);
+        let mut frame = Frame::new(proto, self.dir, "netsim").job(self.job_id).local(&self.local).remote(peer).payload(bytes).summary(summary).verdict(verdict);
         if let Some(d) = detail {
             frame = frame.detail(d);
         }
-        inspect::publish(&self.host, frame);
+        inspect::publish(&self.host, self.gate.mark(frame));
     }
 }
 
@@ -667,7 +672,7 @@ impl Relay {
         // One sampling budget shared by both legs, so a loaded relay reports a
         // representative slice rather than swamping the Inspector.
         let gate = Arc::new(Gate::new(25));
-        let tap = |leg: &'static str, dir: &'static str| Tap { host: host.clone(), job_id, leg, dir, peer: self.target.to_string(), gate: gate.clone() };
+        let tap = |leg: &'static str, dir: &'static str| Tap { host: host.clone(), job_id, leg, dir, local: self.listen.to_string(), peer: self.target.to_string(), gate: gate.clone() };
         // What is on its way, delayed: owned here, so it ends with the relay —
         // no packet goes out after a stop, and no socket outlives it.
         let flights: Arc<Mutex<JoinSet<()>>> = Arc::new(Mutex::new(JoinSet::new()));
@@ -806,7 +811,8 @@ impl Relay {
 pub async fn start_proxy(host: Host, jobs: JobRegistry, hub: RelayHub, cfg: ProxyConfig) -> EngineResult<JobInfo> {
     cfg.profile.check()?;
     let listen = parse_bind(&cfg.listen)?;
-    let target = parse_target(&cfg.target)?;
+    // A bind is an address; the target may be a name, looked up once, here.
+    let target = transport::resolve(&cfg.target).await?;
     let opened = Opened::open(cfg.protocol, listen, &cfg.listen, target, &cfg.target).await?;
     let local = opened.local().unwrap_or(listen);
 
@@ -976,6 +982,52 @@ mod tests {
         assert_eq!((error.code.as_str(), error.params["target"].as_str()), ("transport.address_in_use", bind.as_str()));
         let lossy = start("127.0.0.1:0", "127.0.0.1:9", ImpairProfile { loss: 1.5, ..calm() }).await.unwrap_err();
         assert_eq!((lossy.code.as_str(), lossy.field.clone().map(|field| field.key)), ("node.range", Some("loss".to_string())));
+        assert!(jobs.list().is_empty());
+    }
+
+    /// A relayed datagram in the Inspector names sockets: the relay's listen
+    /// address on this side, where the datagram was going as the peer, and
+    /// the leg after its fate — so a frame saved as a signal has an address.
+    #[tokio::test]
+    async fn relayed_frames_name_the_relay_and_where_each_datagram_was_going() {
+        let capture = Capture::new();
+        capture.set_enabled(true);
+        let host = Host::new(Recorder::new(), capture.clone());
+        let jobs = JobRegistry::new();
+        let target = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let listen_port = UdpSocket::bind("127.0.0.1:0").await.unwrap().local_addr().unwrap().port();
+        let job = start_relay(host, jobs.clone(), format!("127.0.0.1:{listen_port}"), target.local_addr().unwrap().to_string(), calm()).await.unwrap();
+        let client = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        client.send_to(b"ping", ("127.0.0.1", listen_port)).await.unwrap();
+        let (_, upstream) = recv(&target).await;
+        // Past the relay's sampling gate, so the answer is captured too.
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        target.send_to(b"pong", upstream).await.unwrap();
+        assert_eq!(recv(&client).await.0, b"pong");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let frames = capture.snapshot(16);
+        let listen = format!("127.0.0.1:{listen_port}");
+        let out = frames.iter().find(|frame| frame.dir == "tx").expect("the datagram to the target");
+        assert_eq!((out.source.as_str(), out.local.as_str(), out.remote.clone()), ("netsim", listen.as_str(), target.local_addr().unwrap().to_string()));
+        assert!(out.verdict.as_deref().is_some_and(|verdict| verdict.starts_with("forwarded +") && verdict.ends_with(" · client→target")), "{:?}", out.verdict);
+        assert_eq!(out.data.as_deref(), Some(&b"ping"[..]));
+        let back = frames.iter().find(|frame| frame.dir == "rx").expect("the answer to the client");
+        assert_eq!((back.local.as_str(), back.remote.clone()), (listen.as_str(), client.local_addr().unwrap().to_string()));
+        assert!(back.verdict.as_deref().is_some_and(|verdict| verdict.ends_with(" · target→client")), "{:?}", back.verdict);
+        jobs.stop(job.id);
+    }
+
+    /// The target may be a name, looked up when the relay starts; the listen address is a bind.
+    #[tokio::test]
+    async fn a_target_may_be_a_host_name() {
+        let host = Host::new(Recorder::new(), Capture::new());
+        let jobs = JobRegistry::new();
+        let job = start_relay(host.clone(), jobs.clone(), "127.0.0.1:0".into(), "localhost:9".into(), calm()).await.unwrap();
+        assert_eq!(job.params["target"], "localhost:9", "the job names it as it was given");
+        jobs.stop(job.id);
+        assert!(start_relay(host.clone(), jobs.clone(), "localhost:0".into(), "127.0.0.1:9".into(), calm()).await.unwrap_err().is("node.bind_invalid"));
+        assert!(start_relay(host, jobs.clone(), "127.0.0.1:0".into(), "no-such-host.invalid:9".into(), calm()).await.unwrap_err().is("transport.dns"));
         assert!(jobs.list().is_empty());
     }
 

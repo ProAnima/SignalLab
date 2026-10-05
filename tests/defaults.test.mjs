@@ -21,9 +21,11 @@ function files(dir, extensions) {
 
 /**
  * Not addresses anything is sent to: an XML namespace, a placeholder that
- * shows the format, and the project's page, which About opens in the browser.
+ * shows the format, and the project's pages, which About and the documentation
+ * button open in the browser (the repository, and the published documentation
+ * that a build without the documentation inside falls back to).
  */
-const NOT_TARGETS = new Set(["www.w3.org", "...", "github.com"]);
+const NOT_TARGETS = new Set(["www.w3.org", "...", "github.com", "proanima.github.io"]);
 const LOOPBACK = new Set(["127.0.0.1", "localhost", "[::1]"]);
 
 test("default URLs in the interface and the templates are loopback", () => {

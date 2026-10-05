@@ -10,8 +10,9 @@ use signal_lab_engine::firewall::{self, FirewallStatus};
 use signal_lab_engine::{net, paths};
 
 use crate::fail::{Exit, Failure};
+use crate::i18n::Texts;
 use crate::remote::Remote;
-use crate::{Ctx, DoctorArgs, FirewallArgs};
+use crate::{params, Ctx, DoctorArgs, FirewallArgs};
 
 /// The programs of an installation the firewall should let through: this one,
 /// and the desktop app — next to it, or where the installers put it.
@@ -51,35 +52,46 @@ fn port_firewall() -> Option<(&'static str, &'static str)> {
     None
 }
 
-fn status_line(status: &FirewallStatus) -> &'static str {
-    match (status.enabled, status.blocked, status.allowed) {
-        (false, _, _) => "the firewall is off on this network",
-        (true, true, _) => "BLOCKED by a rule (a Cancel at the system's prompt) — signallab firewall allow",
-        (true, false, true) => "allowed",
-        (true, false, false) => "not allowed yet — signallab firewall allow",
-    }
+/// Where a program stands with the firewall, in the reader's language.
+fn status_line(texts: &Texts, status: &FirewallStatus) -> String {
+    texts.plain(match (status.enabled, status.blocked, status.allowed) {
+        (false, _, _) => "cli.doctor.fwOff",
+        (true, true, _) => "cli.doctor.fwBlocked",
+        (true, false, true) => "cli.doctor.fwAllowed",
+        (true, false, false) => "cli.doctor.fwNotAllowed",
+    })
+}
+
+/// `private, domain`: the networks a status is about, as the interface names them.
+fn network_names(texts: &Texts, status: &FirewallStatus) -> String {
+    let named = |network: &String| {
+        let key = format!("fw.network.{network}");
+        if texts.has(&key) { texts.plain(&key) } else { network.clone() }
+    };
+    status.networks.iter().map(named).collect::<Vec<_>>().join(", ")
 }
 
 pub async fn doctor(ctx: &Ctx, args: DoctorArgs) -> Exit {
     let mut problems = 0;
     let mut report = json!({ "version": env!("CARGO_PKG_VERSION") });
     let say = |line: String| ctx.say(&line);
+    let texts = &ctx.texts;
     say(format!("signallab {}", env!("CARGO_PKG_VERSION")));
 
     // The network this machine is on.
     let host = net::host_info().await;
-    say(format!("Network: {} · {}", host.hostname, host.local_ip));
+    say(texts.t("cli.doctor.network", &params! { "host" => host.hostname.as_str(), "address" => host.local_ip.as_str() }));
     report["network"] = json!({ "hostname": host.hostname, "address": host.local_ip });
 
     // The data folder: the app's documents, where fire and the app keep their files. Looked at, never made here.
     let data = paths::data_dir();
-    let (writable, state) = if data.is_dir() {
+    let (writable, key) = if data.is_dir() {
         let writable = tempfile_in(&data);
-        (writable, if writable { "writable" } else { "NOT writable" })
+        (writable, if writable { "cli.doctor.dataWritable" } else { "cli.doctor.dataLocked" })
     } else {
-        (true, "not there yet — the app makes it on first use")
+        (true, "cli.doctor.dataAbsent")
     };
-    say(format!("Data folder: {} — {state}", data.display()));
+    say(texts.t(key, &params! { "path" => data.display().to_string() }));
     report["data_dir"] = json!({ "path": data.display().to_string(), "writable": writable, "exists": data.is_dir() });
     if !writable {
         problems += 1;
@@ -90,27 +102,29 @@ pub async fn doctor(ctx: &Ctx, args: DoctorArgs) -> Exit {
     for (name, program) in programs() {
         match firewall::status(vec![program.clone()]).await {
             Ok(status) if status.applies => {
-                let line = status_line(&status);
                 if status.in_the_way() {
                     problems += 1;
                 }
-                say(format!("Firewall · {name} ({}) · {} network: {line}", program.display(), status.networks.join(", ")));
+                say(texts.t(
+                    "cli.doctor.fwProgram",
+                    &params! { "name" => name.as_str(), "program" => program.display().to_string(), "networks" => network_names(texts, &status), "state" => status_line(texts, &status) },
+                ));
                 firewalls.push(json!({ "program": name, "status": status }));
             }
             Ok(_) => {}
             Err(error) => {
                 let failure = Failure::environment(error);
-                say(format!("Firewall · {name}: {}", failure.lines(ctx, "").join(" ")));
+                say(texts.t("cli.doctor.fwFailed", &params! { "name" => name.as_str(), "error" => failure.lines(ctx, "").join(" ") }));
             }
         }
     }
     if firewalls.is_empty() {
         match port_firewall() {
             Some((name, how)) => {
-                say(format!("Firewall: {name} is on — it lets in only the ports it lists: {how} (and the server's port, e.g. 1430/tcp)"));
+                say(texts.t("cli.doctor.fwPorts", &params! { "name" => name, "how" => how }));
                 firewalls.push(json!({ "system": name, "open_with": how }));
             }
-            None => say("Firewall: no per-program firewall here, and neither ufw nor firewalld is on".into()),
+            None => say(texts.plain("cli.doctor.fwNone")),
         }
     }
     report["firewall"] = Value::Array(firewalls);
@@ -120,18 +134,18 @@ pub async fn doctor(ctx: &Ctx, args: DoctorArgs) -> Exit {
         match Remote::new(url, args.token_file.as_deref()) {
             Ok(remote) => match remote.invoke("app_info", &Value::Null).await {
                 Ok(info) => {
-                    say(format!("Server {url}: answers · Signal Lab {} · token accepted", info["version"].as_str().unwrap_or("?")));
+                    say(texts.t("cli.doctor.serverOk", &params! { "url" => url.as_str(), "version" => info["version"].as_str().unwrap_or("?") }));
                     report["server"] = json!({ "url": url, "ok": true, "info": info });
                 }
                 Err(failure) => {
                     problems += 1;
-                    say(format!("Server {url}: {}", failure.lines(ctx, "").join(" ")));
+                    say(texts.t("cli.doctor.serverFailed", &params! { "url" => url.as_str(), "error" => failure.lines(ctx, "").join(" ") }));
                     report["server"] = json!({ "url": url, "ok": false, "error": failure.error });
                 }
             },
             Err(failure) => {
                 problems += 1;
-                say(format!("Server {url}: {}", failure.lines(ctx, "").join(" ")));
+                say(texts.t("cli.doctor.serverFailed", &params! { "url" => url.as_str(), "error" => failure.lines(ctx, "").join(" ") }));
             }
         }
     }
@@ -140,7 +154,7 @@ pub async fn doctor(ctx: &Ctx, args: DoctorArgs) -> Exit {
     if ctx.json {
         println!("{report}");
     } else {
-        println!("{}", if problems == 0 { "✔ nothing in the way".to_string() } else { format!("✖ {problems} thing(s) in the way") });
+        println!("{}", if problems == 0 { format!("✔ {}", texts.plain("cli.doctor.clear")) } else { format!("✖ {}", texts.t("cli.doctor.problems", &params! { "n" => problems as usize })) });
     }
     if problems == 0 { Exit::Passed } else { Exit::Failed }
 }
@@ -157,17 +171,17 @@ pub async fn firewall(ctx: &Ctx, args: FirewallArgs) -> Exit {
     let programs: Vec<PathBuf> = programs().into_iter().map(|(_, path)| path).collect();
     if !cfg!(windows) {
         match port_firewall() {
-            Some((name, how)) => ctx.say(&format!("{name} lets in only the ports it lists; open the ones you listen on: {how}")),
-            None => ctx.say("No firewall here filters by program, and neither ufw nor firewalld is on: nothing to change."),
+            Some((name, how)) => ctx.say(&ctx.texts.t("cli.firewall.ports", &params! { "name" => name, "how" => how })),
+            None => ctx.say(&ctx.texts.plain("cli.firewall.none")),
         }
         return Exit::Passed;
     }
-    ctx.say("Windows asks for administrator rights now…");
+    ctx.say(&ctx.texts.plain("cli.firewall.elevating"));
     match firewall::allow(programs.clone(), args.public).await {
         Ok(()) => {
             for program in programs {
                 if let Ok(status) = firewall::status(vec![program.clone()]).await {
-                    ctx.say(&format!("{}: {}", program.display(), status_line(&status)));
+                    ctx.say(&format!("{}: {}", program.display(), status_line(&ctx.texts, &status)));
                 }
             }
             Exit::Passed

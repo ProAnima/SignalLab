@@ -2,7 +2,7 @@ import {
   createContext, useCallback, useContext, useEffect, useRef, useState,
   type ReactNode,
 } from "react";
-import { localizeSeed, type LibraryState } from "./library";
+import { localizeSeed, mqttConnectionFor, type LibraryState } from "./library";
 import { onFlush } from "./flush";
 import {
   api, on, EV,
@@ -11,7 +11,7 @@ import {
 import { watchConnection, type ConnectionState } from "./transport";
 import { fireSignal } from "./signals";
 import { ingestTopic, makeTopicRoot, type TopicNode } from "./topics";
-import { describeError, messageParams, type Failure } from "./errors";
+import { describeError, isEngineError, messageParams, type Failure } from "./errors";
 import { useI18n, type TextKey, type Translate } from "./i18n";
 import { en } from "./locales/en";
 
@@ -89,7 +89,11 @@ interface Store {
   /** Signals and folders at once, as a folder rename or move changes both. */
   setLibraryState: (next: LibraryState) => void;
   libraryPath: string;
-  /** Set when the file on disk could not be read — the list is then empty. */
+  /**
+   * Set when the file on disk could not be read (or turned out unreadable when
+   * it was written). Until a reload reads it, nothing writes the library: an
+   * edit is refused with this failure, so the file being fixed stays as it is.
+   */
   libraryError: Failure | null;
   saveState: SaveState;
   /** Replace the library; the file follows on its own shortly after. */
@@ -140,6 +144,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   translate.current = t;
   const [libraryPath, setLibraryPath] = useState("");
   const [libraryError, setLibraryError] = useState<Failure | null>(null);
+  // The same, for the callbacks that must not write while it is set.
+  const blocked = useRef<Failure | null>(null);
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const [lastFired, setLastFired] = useState<Record<string, number>>({});
   const saveTimer = useRef<number | null>(null);
@@ -206,7 +212,23 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   // ---- signal library ----------------------------------------------------
 
+  /** The file cannot be read: nothing is written until a reload reads it. */
+  const block = useCallback((error: Failure | null) => {
+    blocked.current = error;
+    setLibraryError(error);
+  }, []);
+
+  /** A write still waiting for its debounce, dropped: the file is read again, or must not be written. */
+  const dropPending = useCallback(() => {
+    if (saveTimer.current !== null) window.clearTimeout(saveTimer.current);
+    saveTimer.current = null;
+    pendingSave.current = null;
+    setSaveState("idle");
+  }, []);
+
   const loadLibrary = useCallback(() => {
+    // What the file holds wins over an edit not written yet: that is what reloading asks for.
+    dropPending();
     api.signalsLoad().then(
       (file) => {
         latestLibrary.current = { signals: file.library.signals, folders: file.library.folders ?? [] };
@@ -219,28 +241,31 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         setSignals(latestLibrary.current.signals);
         setFolders(latestLibrary.current.folders);
         setLibraryPath(file.path);
-        setLibraryError(null);
+        block(null);
         if (file.seeded) pushLog("ok", "signals", "log.librarySeeded", { path: file.path });
         else pushLog("info", "signals", "log.libraryLoaded", { n: file.library.signals.length, path: file.path });
       },
       (e) => {
         // A hand-edited file with a typo must say so and stay untouched, not be
-        // silently replaced by the starter set.
-        setLibraryError(e);
+        // silently replaced by the starter set — nor by the list on the screen.
+        dropPending();
+        block(e);
         pushError("signals", e);
       }
     );
-  }, [pushLog, pushError]);
+  }, [pushLog, pushError, block, dropPending]);
 
   const writeLibrary = useCallback((next: LibraryState) => {
     return api.signalsSave({ version: 2, signals: next.signals, folders: next.folders }).then(
       () => setSaveState("saved"),
       (e) => {
         setSaveState("error");
+        // Broken on disk since it was read: the engine left it alone, and so does everything here now.
+        if (isEngineError(e) && e.code === "signals.json_invalid") block(e);
         pushError("signals", e);
       }
     );
-  }, [pushError]);
+  }, [pushError, block]);
 
   /**
    * The file is ours alone, so there is nothing to merge and no reason to make
@@ -248,6 +273,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
    * forget is the thing you needed. Debounced so typing a name is one write.
    */
   const setLibraryState = useCallback((next: LibraryState) => {
+    if (blocked.current !== null) {
+      pushError("signals", blocked.current);
+      return;
+    }
     latestLibrary.current = next;
     setSignals(next.signals);
     setFolders(next.folders);
@@ -260,13 +289,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       pendingSave.current = null;
       if (pending) writeLibrary(pending);
     }, SAVE_DEBOUNCE_MS);
-  }, [writeLibrary]);
+  }, [writeLibrary, pushError]);
   const setLibrary = useCallback((next: Signal[]) => setLibraryState({ signals: next, folders: latestLibrary.current.folders }), [setLibraryState]);
 
   const fire = useCallback(async (signal: Signal) => {
     try {
-      // An MQTT signal rides an open connection when there is one.
-      const live = jobs.find((j) => j.kind === "mqtt")?.id ?? null;
+      // An MQTT signal rides an open connection to its own broker when there is one.
+      const live = signal.body.transport === "mqtt" ? mqttConnectionFor(signal.body.broker, jobs) : null;
       const fired = await fireSignal(signal, live);
       setLastFired((prev) => ({ ...prev, [signal.id]: Date.now() }));
       pushLog("ok", "signals", fired.key, { name: signal.name, ...fired.params });

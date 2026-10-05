@@ -25,14 +25,14 @@ const KINDS: &[Kind] = &[
     Kind { kind: "delay", fields: &[("ms", "milliseconds")], example: || json!({ "ms": 500 }) },
     Kind {
         kind: "http",
-        fields: &[("request.method", "GET, POST, PUT, PATCH, DELETE, HEAD"), ("request.url", "http(s) URL, templated"), ("request.headers", "[[name, value], …], templated"), ("request.body", "text or null, templated"), ("request.timeout_ms", "milliseconds"),
+        fields: &[("request.method", "GET, HEAD, POST, PUT, PATCH, DELETE or OPTIONS (the editor's list); any other method token is sent as written"), ("request.url", "http(s) URL, templated"), ("request.headers", "[[name, value], …], templated"), ("request.body", "text or null, templated"), ("request.timeout_ms", "milliseconds"),
                  ("request.auth", "optional: {scheme: basic|digest, username, password} or {scheme: bearer, token}, templated ({{secret.NAME}}); Digest answers the server's 401 challenge"),
                  ("load", "optional: send the request on a load profile, many at once, measured and judged by thresholds — see \"load\"")],
         example: || json!({ "request": { "method": "POST", "url": "{{api}}/cue", "headers": [["Content-Type", "application/json"]], "body": "{\"cue\": 1}", "timeout_ms": 5000 } }),
     },
     Kind { kind: "assert_status", fields: &[("status", "the HTTP status the last response must have")], example: || json!({ "status": 200 }) },
     Kind { kind: "assert_body", fields: &[("contains", "text the last response body must contain, templated")], example: || json!({ "contains": "ready" }) },
-    Kind { kind: "assert_header", fields: &[("name", "header name"), ("contains", "text its value must contain")], example: || json!({ "name": "Content-Type", "contains": "json" }) },
+    Kind { kind: "assert_header", fields: &[("name", "header name, any case, templated"), ("contains", "text its value must contain, templated")], example: || json!({ "name": "Content-Type", "contains": "json" }) },
     Kind { kind: "assert_latency", fields: &[("max_ms", "the last response's time limit")], example: || json!({ "max_ms": 250 }) },
     Kind { kind: "branch_status", fields: &[("status", "yes when the last response has it, else no")], example: || json!({ "status": 200 }) },
     Kind {
@@ -77,17 +77,17 @@ const KINDS: &[Kind] = &[
     },
     Kind {
         kind: "wait_osc",
-        fields: &[("bind", "IP:port to listen on (opened when the run starts)"), ("address", "OSC address pattern: * ? [a-z] {a,b}"), ("args", "[{index, op, value}] rules"), ("timeout_ms", "milliseconds"), ("variable", "the message as {{reply.address}}, {{reply.args[0]}}, {{reply.from}}")],
+        fields: &[("bind", "IP:port to listen on (opened when the run starts)"), ("address", "OSC address pattern: * ? [a-z] {a,b}; templated"), ("args", "[{index, op, value}] rules; values templated"), ("timeout_ms", "milliseconds"), ("variable", "the message as {{reply.address}}, {{reply.args[0]}}, {{reply.from}}")],
         example: || json!({ "bind": "0.0.0.0:9001", "address": "/status", "args": [{ "index": 0, "op": "eq", "value": "ready" }], "timeout_ms": 5000, "variable": "reply" }),
     },
     Kind {
         kind: "wait_udp",
-        fields: &[("bind", "IP:port to listen on"), ("mode", "any | contains | regex | hex"), ("pattern", "what the payload must match"), ("timeout_ms", "milliseconds"), ("variable", "the datagram as {{reply.text}}, {{reply.from}}")],
+        fields: &[("bind", "IP:port to listen on"), ("mode", "any | contains | regex | hex"), ("pattern", "what the payload must match, templated"), ("timeout_ms", "milliseconds"), ("variable", "the datagram as {{reply.text}}, {{reply.from}}")],
         example: || json!({ "bind": "0.0.0.0:9002", "mode": "contains", "pattern": "READY", "timeout_ms": 5000, "variable": "reply" }),
     },
     Kind {
         kind: "wait_mqtt",
-        fields: &[("host", "broker (a parameter at most: subscribed before the first step)"), ("port", "number"), ("topic", "filter: + one level, # the rest"), ("mode", "any | contains | regex | hex"), ("pattern", "what the payload must match"), ("timeout_ms", "milliseconds"), ("variable", "the message as {{reply.topic}}, {{reply.text}}")],
+        fields: &[("host", "broker (a parameter at most: subscribed before the first step)"), ("port", "number"), ("topic", "filter: + one level, # the rest; a parameter at most"), ("mode", "any | contains | regex | hex"), ("pattern", "what the payload must match, templated"), ("timeout_ms", "milliseconds"), ("variable", "the message as {{reply.topic}}, {{reply.text}}")],
         example: || json!({ "host": "{{broker}}", "port": 1883, "topic": "lab/+/state", "mode": "contains", "pattern": "on", "timeout_ms": 5000, "variable": "reply" }),
     },
     Kind {
@@ -123,7 +123,7 @@ const KINDS: &[Kind] = &[
         kind: "impairment",
         fields: &[
             ("listen", "IP:port the system under test sends to (or connects to) instead of the target; parameters only (opened before the first step)"),
-            ("target", "IP:port it forwards to (replies come back the same way); parameters only"),
+            ("target", "IP:port or host:port it forwards to (a name is looked up when the run starts; replies come back the same way); parameters only"),
             ("profile", "the impairment from the first step on (see \"impairment profile\"); the flow passes at once"),
             ("protocol", "udp (default): datagrams; tcp: each connection joined to one to the target, its streams impaired"),
         ],
@@ -151,7 +151,7 @@ const KINDS: &[Kind] = &[
         kind: "ws_connect",
         fields: &[
             ("url", "ws:// or wss:// (templates: a token extracted earlier may be in it)"),
-            ("headers", "[[name, value], …] sent with the upgrade"),
+            ("headers", "[[name, value], …] sent with the upgrade, templated"),
             ("protocols", "subprotocols to offer, in order of preference"),
             ("timeout_ms", "for the connection and the upgrade"),
         ],
@@ -165,9 +165,9 @@ const KINDS: &[Kind] = &[
     Kind {
         kind: "wait_ws",
         fields: &[
-            ("connection", "the id of a ws_connect node; messages since it connected (or since the branch's last send) count"),
+            ("connection", "the id of a ws_connect node; the messages on it since this branch's latest action of any kind count (the connect, a send, an HTTP request, …)"),
             ("mode", "any | contains | regex | hex"),
-            ("pattern", "what the message must match"),
+            ("pattern", "what the message must match, templated"),
             ("timeout_ms", "milliseconds"),
             ("variable", "the message as {{reply.text}}, {{reply.json.field}} when it is JSON"),
         ],
@@ -175,7 +175,7 @@ const KINDS: &[Kind] = &[
     },
     Kind {
         kind: "ws_close",
-        fields: &[("connection", "the id of a ws_connect node"), ("code", "1000, or 3000–4999 for an application's own"), ("reason", "at most 123 bytes")],
+        fields: &[("connection", "the id of a ws_connect node"), ("code", "1000, or 3000–4999 for an application's own"), ("reason", "at most 123 bytes, templated")],
         example: || json!({ "connection": "socket", "code": 1000, "reason": "done" }),
     },
 ];
@@ -296,16 +296,16 @@ pub fn describe(texts: &Texts) -> Value {
     let version = signal_lab_engine::experiment::VERSION;
     json!({
         "document": {
-            "shape": format!("{{ version: {version}, name, params: [{{name, value}}], profiles: [{{name, values: {{param: value}}}}], nodes: [...], edges: [{{from, to, port}}] }}"),
+            "shape": format!("{{ version: {version}, name, params: [{{name, value}}], profiles: [{{name, values: {{param: value}}}}], profile: null or a profile's name (the one that runs), seed: null or a number, cookies: true (keep cookies between the run's requests), nodes: [...], edges: [{{from, to, port}}] }}"),
             "rules": [
-                "Exactly one start and at least one end; every required output of a node is wired; ids are unique.",
-                "A node is {id, type, x, y, ...its fields}; x and y place it on the canvas (any numbers).",
+                "Exactly one start and exactly one end; ids are unique; every required output of a node is wired; every node is reached from start, and nothing leads into start.",
+                "A node is {id, type, x, y, ...its fields}; x and y place it on the canvas (numbers, 0 or more).",
                 "An edge leaves a node by one of its outputs (port, default \"next\") and enters another node.",
                 "Several edges out of one output run in parallel; a join waits for every edge into it.",
                 "A loop's body (from its body output) must lead back to the loop; the loop continues by done, or limit when the iterations ran out.",
                 "Waits listen from the start of the run, so a fast answer is not missed; an action followed by a wait is how a reply is checked.",
                 "An emulator node plays a dependency for the whole run; wait_http then checks what the system under test sent it.",
-                "retry: {attempts, delay_ms, backoff: fixed|exponential} on an action or wait tries it again; repeat: {until: count|duration, count, duration_ms, interval_ms, jitter_ms} on an action sends it again.",
+                "retry: {attempts, delay_ms, backoff: fixed|exponential} on an action or wait tries it again; repeat: {until: count|duration, count, duration_ms, interval_ms, jitter_ms} on an action other than ws_connect sends it again.",
             ],
         },
         "templates": {
@@ -314,8 +314,8 @@ pub fn describe(texts: &Texts) -> Value {
                 "{{param}} — a parameter of the document (or a run's override)",
                 "{{variable}} — what an extract or a wait stored; JSON paths go further: {{reply.args[0]}}, {{token.data.id}}",
                 "{{secret.NAME}} — a secret, never shown in results",
-                "{{run.id}}, {{node.id}}, {{now}} (ms), {{now.iso}}, {{uuid}}, {{counter}} (the send number of a repeat)",
-                "{{random_int(1, 100)}} — from the run's seed, so a seed repeats a run",
+                "{{run.id}}, {{run.seed}}, {{node.id}}, {{now}} (ms), {{now.iso}}, {{uuid}}, {{counter}} (how many times this node ran in the run, this time included: a repeat's send, a loop's iteration)",
+                "{{random_int(1, 100)}}, {{random_float(0, 1, 3)}} (decimals: 0–9, default 3), {{pick(a, b, c)}} — from the run's seed, so a seed repeats a run",
             ],
         },
         "nodes": nodes,
@@ -382,6 +382,61 @@ mod tests {
         // The emulator a node's example carries is one the engine would start.
         let example: signal_lab_engine::emulator::Emulator = serde_json::from_value(catalogue["emulators"]["example"].clone()).unwrap();
         signal_lab_engine::emulator::check(&example, &Default::default()).unwrap();
+    }
+
+    /// What the catalogue says of the document's ends, an HTTP method and a header check is what the engine does.
+    #[test]
+    fn the_catalogue_tells_the_truth_about_ends_methods_and_templated_checks() {
+        use signal_lab_engine::experiment::Experiment;
+        use signal_lab_engine::experiment_validate::{validate_document, validate_with};
+        let catalogue = describe(&Texts::new(Lang::En));
+        let field = |kind: &str, name: &str| {
+            let node = catalogue["nodes"].as_array().unwrap().iter().find(|node| node["type"] == kind).unwrap();
+            node["fields"][name].as_str().unwrap_or_else(|| panic!("{kind}.{name}")).to_string()
+        };
+        let params = std::collections::BTreeMap::from([("api".to_string(), "http://127.0.0.1:8080".to_string())]);
+        let document = |middle: Vec<Value>, ends: usize| -> Experiment {
+            let mut nodes = vec![example_node("start").unwrap()];
+            nodes.extend(middle);
+            for index in 0..ends {
+                let mut end = example_node("end").unwrap();
+                end["id"] = format!("end{index}").into();
+                nodes.push(end);
+            }
+            let ids: Vec<String> = nodes.iter().map(|node| node["id"].as_str().unwrap().to_string()).collect();
+            let edges: Vec<Value> = ids.windows(2).map(|pair| json!({ "from": pair[0], "to": pair[1], "port": "next" })).collect();
+            serde_json::from_value(json!({ "version": signal_lab_engine::experiment::VERSION, "name": "catalogue", "nodes": nodes, "edges": edges })).unwrap()
+        };
+
+        // Exactly one End, as the rule says: none and two are refused (the engine says `doc.start_end_count`).
+        let rules = catalogue["document"]["rules"].as_array().unwrap().iter().map(|rule| rule.as_str().unwrap()).collect::<Vec<_>>().join(" ").to_lowercase();
+        assert!(rules.contains("exactly one start and exactly one end") && !rules.contains("at least one end"), "{rules}");
+        assert!(validate_document(&document(vec![], 1)).is_ok());
+        for ends in [0, 2] {
+            assert_eq!(validate_document(&document(vec![], ends)).unwrap_err().code, "doc.start_end_count", "{ends} ends");
+        }
+
+        // An HTTP method: the editor's seven, and any other token the engine can send.
+        let said = field("http", "request.method");
+        for method in ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"] {
+            assert!(said.contains(method), "{said}");
+            let mut http = example_node("http").unwrap();
+            http["request"]["method"] = method.into();
+            let checked = validate_with(&document(vec![http], 1), &params);
+            assert!(checked.is_ok(), "{method}: {checked:?}");
+        }
+        let mut other = example_node("http").unwrap();
+        other["request"]["method"] = "PROPFIND".into();
+        assert!(validate_with(&document(vec![other], 1), &params).is_ok() && said.contains("any other"), "{said}");
+        let mut broken = example_node("http").unwrap();
+        broken["request"]["method"] = "NOT A METHOD".into();
+        assert_eq!(validate_with(&document(vec![broken], 1), &params).unwrap_err().code, "node.method_invalid");
+
+        // A header check renders both its name and its text as templates.
+        let check: Node = serde_json::from_value(example_node("assert_header").unwrap()).unwrap();
+        let templated: Vec<String> = signal_lab_engine::experiment_data::text_fields(&check.kind).into_iter().map(|(field, _)| field.key).collect();
+        assert_eq!(templated, ["header_name", "expected_text"]);
+        assert!(field("assert_header", "name").contains("templated") && field("assert_header", "contains").contains("templated"));
     }
 
     #[test]

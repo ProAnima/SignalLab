@@ -583,6 +583,7 @@ mod tests {
         let osc = |target: &str| node("cue", json!({ "type": "osc", "target": target, "address": "/cue", "args": [] }));
         let host = json!([{ "name": "api", "value": "http://127.0.0.1" }, { "name": "host", "value": "127.0.0.1" }]);
         assert!(validate(&flow(host.clone(), json!([osc("{{host}}:9000")]), json!([]))).is_ok());
+        assert!(validate(&flow(host.clone(), json!([osc("device.local:9000")]), json!([]))).is_ok(), "a host name is looked up when it sends");
         assert_eq!(problem(validate(&flow(host.clone(), json!([osc("{{host}}")]), json!([])))), ("node.target_invalid".into(), Some("cue".into()), Some("target".into())));
         let syntax = validate(&flow(host, json!([osc("{{host:9000")]), json!([]))).unwrap_err();
         assert_eq!((syntax.code.as_str(), syntax.node.as_deref(), syntax.params["position"].as_str()), ("template.unclosed", Some("cue"), "1"));

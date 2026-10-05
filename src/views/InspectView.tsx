@@ -4,7 +4,9 @@ import { useStore } from "../lib/store";
 import { downloadUrl, saveDownload } from "../lib/platform";
 import { useT } from "../lib/i18n";
 import { fmtBytes, fmtNum, fmtTime } from "../lib/format";
-import { signalFromFrame, wholeFrame } from "../lib/signals";
+import { signalFromFrame } from "../lib/signals";
+import { frameSignalBlock } from "../lib/library";
+import { describeError } from "../lib/errors";
 
 /** Frames kept in the view. The engine's ring holds more for export. */
 const VIEW_CAPACITY = 4000;
@@ -21,7 +23,7 @@ const PROTOS = ["osc", "udp", "tcp", "http", "mqtt", "ws"];
 function verdictClass(v: string | null): string {
   if (!v) return "verdict-ok";
   if (/drop|fail|error/i.test(v)) return "verdict-drop";
-  if (/corrupt|copy|sampled/i.test(v)) return "verdict-warn";
+  if (/corrupt|copy|sampled|not shown/i.test(v)) return "verdict-warn";
   return "verdict-ok";
 }
 
@@ -30,7 +32,7 @@ function verdictClass(v: string | null): string {
  * select (from the experiment timeline); `at` makes a repeat a new request.
  */
 export function InspectView({ reveal }: { reveal?: { seq: number; at: number } | null } = {}) {
-  const { pushLog, pushError, library, setLibrary } = useStore();
+  const { pushLog, pushError, library, setLibrary, libraryError } = useStore();
   const t = useT();
 
   const [rows, setRows] = useState<Row[]>([]);
@@ -161,8 +163,11 @@ export function InspectView({ reveal }: { reveal?: { seq: number; at: number } |
   );
 
   const picked = selected !== null ? rows.find((f) => f.seq === selected) ?? null : null;
-  // Half a packet is a different packet: only a frame kept whole becomes a signal.
-  const canReplay = !!picked && wholeFrame(picked);
+  // Only what a signal can send again as it was: a datagram or an MQTT publish, kept whole —
+  // and only while the library file can be written.
+  const block = picked ? frameSignalBlock(picked) : null;
+  const canReplay = !!picked && block === null && libraryError === null;
+  const replayTip = block ? t(block) : libraryError !== null ? describeError(libraryError, t).text : undefined;
   const shownWhole = !!picked && whole?.seq === picked.seq;
   const armed = stats?.enabled ?? false;
 
@@ -303,7 +308,7 @@ export function InspectView({ reveal }: { reveal?: { seq: number; at: number } |
                 <button
                   className="ghost sm"
                   disabled={!canReplay}
-                  data-tip={canReplay ? undefined : t("ins.noExactCopy")}
+                  data-tip={replayTip}
                   onClick={() => saveAsSignal(picked)}
                 >
                   {t("sig.fromFrame")}

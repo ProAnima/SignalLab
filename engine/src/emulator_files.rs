@@ -69,7 +69,7 @@ pub fn seed() -> EmulatorLibrary {
             ),
             stored(
                 "osc-device",
-                "Answers /ping with /pong and the same number, acknowledges a fader, and takes cues without a word.",
+                "Answers /ping with /pong and a number, acknowledges a fader, and takes cues without a word.",
                 json!({
                     "name": "Demo OSC device", "bind": "127.0.0.1:9100", "protocol": "osc",
                     "rules": [

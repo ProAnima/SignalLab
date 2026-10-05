@@ -1,7 +1,7 @@
 //! Values inside experiments: parameters, templated fields, extraction from a
 //! response and value comparisons. The runner, validation and the editor's
 //! preview commands share these functions, so a field means the same thing
-//! everywhere. Specified in `docs/milestone-3-data.md`; errors are
+//! everywhere. Specified in `docs/develop/design-data.md`; errors are
 //! `EngineError` codes with the node and field they are about.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};

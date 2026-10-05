@@ -36,7 +36,8 @@ use super::matching::{self, Datagram, Matcher, UdpMatcher, UdpMode};
 use super::transport::{self, Cause};
 
 /// The largest message received or sent; a server sending more loses the connection
-/// (`ws.message_too_large`).
+/// (`ws.message_too_large`), a message to send that is larger is refused
+/// (`node.too_long`, as the *WebSocket send* node's field is).
 pub const MAX_MESSAGE: usize = 16 << 20;
 /// A write that takes longer — the peer stopped reading, its window is full — ends
 /// the connection instead of stalling it, and every step waiting on it, forever.
@@ -99,6 +100,14 @@ impl Outgoing {
 
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    /// Within `MAX_MESSAGE`: what the screen, a node or an exchange sends.
+    pub fn check(&self) -> EngineResult<()> {
+        if self.len() > MAX_MESSAGE {
+            return Err(EngineError::new("node.too_long").with("max", MAX_MESSAGE).in_field(Field::new("payload")));
+        }
+        Ok(())
     }
 
     /// `text` as it is, or as hex bytes when `binary`.
@@ -375,8 +384,7 @@ impl Reporter {
             Kind::Text => format!("TEXT {}", inspect::ascii_preview(bytes, 96)),
             Kind::Binary => format!("BINARY {} B {}", bytes.len(), matching::hex(bytes, 16)),
         };
-        let frame = Frame::new("ws", dir, self.source).summary(summary).payload(bytes);
-        self.frame(if refused > 0 { frame.verdict(format!("+{refused} not shown")) } else { frame })
+        self.frame(Frame::new("ws", dir, self.source).summary(summary).payload(bytes).not_shown(refused))
     }
 
     fn control(&self, dir: &str, summary: String) {
@@ -412,7 +420,9 @@ impl Connection {
         Arc::new(Connection { handshake, peer, commands, state })
     }
 
+    /// Send `message`; one over `MAX_MESSAGE` is refused, and the connection stays open.
     pub async fn send(&self, message: Outgoing) -> EngineResult<Sent> {
+        message.check()?;
         let (ack, answer) = oneshot::channel();
         self.commands.send(Command::Send(message, ack)).map_err(|_| self.gone())?;
         answer.await.map_err(|_| self.gone())?
@@ -900,6 +910,9 @@ mod tests {
         assert!(WsPayload::default().outgoing().unwrap_err().is("ws.payload_required"));
         assert!(WsPayload { text: None, hex: Some("xyz".into()) }.outgoing().unwrap_err().is("hex.invalid"));
         assert_eq!(Outgoing::of("01 02", true).unwrap(), Outgoing::Binary(vec![1, 2]));
+        assert!(Outgoing::Text("x".repeat(MAX_MESSAGE)).check().is_ok(), "the limit itself is sent");
+        let over = Outgoing::Binary(vec![0; MAX_MESSAGE + 1]).check().unwrap_err();
+        assert_eq!((over.code.as_str(), over.params["max"].as_str(), over.field.as_ref().unwrap().key.as_str()), ("node.too_long", "16777216", "payload"));
         for code in [1000, 3000, 4999] {
             assert!(check_close_code(code).is_ok());
         }

@@ -3,7 +3,7 @@
 # in the server, on both; and the server image built, smoke-tested and toured
 # for x64 and arm64 (`npm run check:image`), for every push to main and every
 # pull request. The release workflow runs this first, on the tag it is about to
-# build. See docs/delivery.md.
+# build. See docs/develop/delivery.md.
 name: CI
 
 on:

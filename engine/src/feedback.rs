@@ -1,4 +1,4 @@
-//! The feedback form, sent to the studio's hub (`hub`, docs/hub.md), which
+//! The feedback form, sent to the studio's hub (`hub`, docs/develop/hub.md), which
 //! mails it to the developers. The app holds no secret for it — the hub keeps
 //! the mailbox's password and decides where the mail goes. The hub's limits
 //! are checked here first, so nothing it would refuse is uploaded; a refusal

@@ -106,7 +106,7 @@ impl Drop for Service {
     }
 }
 
-/// The engine's version, the same as the app's (one version, see docs/delivery.md).
+/// The engine's version, the same as the app's (one version, see docs/develop/delivery.md).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn parse<T: DeserializeOwned>(command: &str, args: Value) -> Result<T, Failure> {
@@ -192,7 +192,7 @@ impl Service {
         let store = self.secrets.as_ref();
         match command {
             "app_info" => reply(self.info()),
-            // To the studio's hub, which mails it to the developers (docs/hub.md).
+            // To the studio's hub, which mails it to the developers (docs/develop/hub.md).
             "feedback_send" => {
                 let a = args!(command, value, { form: crate::feedback::Form });
                 reply(crate::feedback::send(a.form).await?)

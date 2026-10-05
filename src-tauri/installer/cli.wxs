@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  The MSI's part of the command line (docs/automation.md): signallab.exe next to
+  The MSI's part of the command line (docs/automation/cli.md): signallab.exe next to
   the app, and the install folder on the machine's PATH while it is installed —
   Windows Installer's own Environment element adds it and takes it off again.
   Built by scripts/cli-bundle.mjs before bundling. The MSI leaves the firewall
