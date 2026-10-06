@@ -15,8 +15,9 @@ are all welcome.
 ## Setting up
 
 Signal Lab is a React/TypeScript interface over a Rust engine, run as a Tauri
-desktop app or as a server for browsers. You need Node 24, Rust (the version in
-`rust-toolchain.toml`) and, on Windows, the MSVC build tools and WebView2.
+desktop app or as a server for browsers. You need Node 22.18 or newer (CI uses
+24), Rust (the version in `rust-toolchain.toml`) and, on Windows, the MSVC build
+tools and WebView2.
 
 ```bash
 npm install
@@ -50,7 +51,8 @@ keeps — read the ones near what you change.
 
 - **Never add a default target that points at a host you do not own.** Storm,
   Scanner and Broadcast send real traffic; defaults stay on loopback (a test
-  checks).
+  checks the URLs), except Broadcast's broadcast, multicast and sweep modes,
+  which start on the local segment.
 - The engine never builds sentences: it fails with an error code the interface
   translates.
 - Every clickable thing is a real `<button>`; every field has a name; help goes
@@ -59,7 +61,8 @@ keeps — read the ones near what you change.
 
 ## Translations
 
-The interface and the documentation speak eleven languages. To correct a
+The interface speaks eleven languages; the documentation is complete in eight
+(Portuguese, Japanese and Arabic still have untranslated pages). To correct a
 translation, edit `src/lib/locales/<code>.ts` (the interface) or
 `docs/<code>/…` (the documentation) and open a pull request. Adding a language
 is described in [Localization](https://proanima.github.io/SignalLab/develop/localization.html).

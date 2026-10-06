@@ -6,7 +6,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
-import { frontMatter, headingIds, lint } from "../scripts/docs.mjs";
+import { frontMatter, generate, headingIds, lint } from "../scripts/docs.mjs";
+
+// The generated pages (reference/errors) are not checked in and the build writes
+// them; CI runs the tests before the build, so a fresh checkout has none yet.
+await generate();
 
 const { SECTIONS, DEVELOP, GENERATED, SCREEN_PAGES } = await import("../docs/.vitepress/structure.ts");
 const { TEXT } = await import("../docs/.vitepress/i18n.ts");

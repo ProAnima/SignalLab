@@ -11,7 +11,7 @@
 <p align="center">
   <a href="https://github.com/ProAnima/SignalLab/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/ProAnima/SignalLab/actions/workflows/ci.yml/badge.svg"></a>
   <a href="https://github.com/ProAnima/SignalLab/releases/latest"><img alt="Release" src="https://img.shields.io/github/v/release/ProAnima/SignalLab?color=3ee6b0"></a>
-  <a href="https://proanima.github.io/SignalLab/"><img alt="Documentation" src="https://img.shields.io/badge/docs-11%20languages-38c9ec"></a>
+  <a href="https://proanima.github.io/SignalLab/"><img alt="Documentation" src="https://img.shields.io/badge/docs-8%20of%2011%20languages-38c9ec"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-8b7cff"></a>
 </p>
 
@@ -51,13 +51,16 @@ services and APIs they talk to.
 | **See every byte** | The [Inspector](https://proanima.github.io/SignalLab/tools/inspector.html) captures what Signal Lab sends and receives, decoded and in hex; export it, or save a frame as a signal. |
 | **Keep a library** | [Signals](https://proanima.github.io/SignalLab/tools/signals.html) in folders, fired from anywhere with <kbd>Ctrl</kbd>+<kbd>K</kbd>. |
 | **Fake what is not there** | [Emulators](https://proanima.github.io/SignalLab/tools/emulators.html): HTTP APIs, OSC/UDP responders, TCP devices and an MQTT broker, with rules, templated replies, faults and outages. |
-| **Break the network on purpose** | An [impairment relay](https://proanima.github.io/SignalLab/tools/impairment.html) for UDP and TCP: latency, jitter, loss, duplication, reordering, bandwidth, resets and half-open connections, with presets from a LAN to a satellite link. |
-| **Make it repeatable** | [Experiments](https://proanima.github.io/SignalLab/experiments/): a visual flow of sends, waits, checks, extraction, branches, loops, retries and fault phases — seeded, reproducible, with a report of every run. |
+| **Break the network on purpose** | An [impairment relay](https://proanima.github.io/SignalLab/tools/impairment.html) for UDP and TCP: latency, jitter, loss and bursts of loss, duplication, corruption, reordering, a bandwidth limit, resets, half-open connections and going offline, with presets from a LAN to a satellite link. |
+| **Push and probe** | [Storm](https://proanima.github.io/SignalLab/tools/storm.html), a controlled flood of UDP datagrams or TCP connections with the rate, throughput and errors live; the [Scanner](https://proanima.github.io/SignalLab/tools/scanner.html), a TCP connect scan with the greeting each service sends. |
+| **Make it repeatable** | [Experiments](https://proanima.github.io/SignalLab/experiments/): a visual flow of sends, waits, checks, extraction, branches, loops, parallel branches, retries and fault phases, with parameters, profiles and secrets — seeded, reproducible, with a report of every run. |
 | **Load it** | [Load profiles](https://proanima.github.io/SignalLab/experiments/load.html) on an HTTP request — constant, ramp, steps, spike, random arrivals — with thresholds on p95, errors and rate, and two runs compared. |
 | **Automate it** | [`signallab`](https://proanima.github.io/SignalLab/automation/cli.html), the command line with JUnit reports for [CI and a GitHub Action](https://proanima.github.io/SignalLab/automation/ci.html); [MCP](https://proanima.github.io/SignalLab/automation/mcp.html) for AI assistants; an [HTTP API](https://proanima.github.io/SignalLab/api/) for everything the interface does. |
 
-The interface and the documentation speak **eleven languages**: English, Russian,
-Spanish, French, German, Portuguese, Chinese, Japanese, Korean, Hindi and Arabic.
+The interface speaks **eleven languages**: English, Russian, Spanish, French, German,
+Portuguese, Chinese, Japanese, Korean, Hindi and Arabic. The documentation is complete
+in eight of them; in Portuguese, Japanese and Arabic most of its pages are still being
+translated.
 
 ## Get it
 
@@ -65,7 +68,8 @@ Spanish, French, German, Portuguese, Chinese, Japanese, Korean, Hindi and Arabic
   from the [latest release](https://github.com/ProAnima/SignalLab/releases/latest).
   The installers are not code-signed yet, so SmartScreen may ask: *More info → Run anyway*.
 - **Linux** — `.deb`, `.rpm` or `.AppImage` from the same page.
-- **Server** — on a Linux host, in one command, or with Docker:
+- **Server** — on a Linux host with Docker: in one command (it offers to install Docker
+  if it is missing), or by hand:
 
   ```bash
   curl -fsSL https://raw.githubusercontent.com/ProAnima/SignalLab/main/deploy/install.sh | sh
@@ -73,20 +77,23 @@ Spanish, French, German, Portuguese, Chinese, Japanese, Korean, Hindi and Arabic
 
   ```bash
   docker run -d --name signallab --network host --restart unless-stopped \
-    -v signallab-data:/data ghcr.io/proanima/signallab:latest
+    -v signallab-data:/data --read-only --cap-drop ALL --security-opt no-new-privileges \
+    ghcr.io/proanima/signallab:latest
   docker logs signallab    # the access token, on the first start
   ```
 
-- **Command line** — `signallab` comes with the installers; archives for CI are on the release page.
+- **Command line** — `signallab` comes with the Windows installers, the `.deb` and the `.rpm`
+  (not the AppImage) and is in the server image; archives for CI are on the release page.
 
-The desktop app updates itself from signed releases. Details:
+The desktop app looks for signed releases once a day and installs one when you say so. Details:
 [installing and updating](https://proanima.github.io/SignalLab/guide/install.html),
 [running a server](https://proanima.github.io/SignalLab/server/).
 
 ## Documentation
 
-The documentation is [online](https://proanima.github.io/SignalLab/) and inside the
-app and the server, so it works offline: press <kbd>F1</kbd> on any screen.
+The documentation is [online](https://proanima.github.io/SignalLab/) and, from the
+release after 1.0.0, inside the app and the server, so it works offline: press
+<kbd>F1</kbd> on any screen.
 
 | | |
 | --- | --- |
@@ -103,11 +110,12 @@ app and the server, so it works offline: press <kbd>F1</kbd> on any screen.
 ```bash
 npm install
 npm run tauri dev        # the desktop app with live reload
-npm run check            # what CI checks
+npm run check            # the checks CI runs; CI also tours every screen and builds the image
 ```
 
 You need Node 22.18 or newer (CI uses 24), Rust as pinned in `rust-toolchain.toml`
-and, on Windows, the MSVC build tools. See
+and, on Windows, the MSVC build tools and WebView2 (part of Windows 10 and 11); on
+Linux, WebKitGTK 4.1 and the libraries Tauri needs. See
 [building and running](https://proanima.github.io/SignalLab/develop/building.html)
 and the [architecture](https://proanima.github.io/SignalLab/develop/).
 
@@ -115,9 +123,11 @@ and the [architecture](https://proanima.github.io/SignalLab/develop/).
 
 Storm, Scanner and Broadcast send real traffic to real hosts, and a broadcast or a
 sweep reaches every device on the segment. Point them only at equipment you own or
-are authorised to test. Every default target is on loopback; the engine's guard
-rails — a sweep of at most 1024 hosts, a beacon of at most 50 000 packets a second —
-are guard rails, not permission.
+are authorised to test. Every default unicast target is on loopback — Broadcast's
+broadcast, multicast and sweep modes start on the local segment
+(`255.255.255.255`, `239.1.1.1`, `192.168.1.0/24`); the engine's guard rails — a
+sweep of at most 1024 hosts, a beacon of at most 50 000 packets a second — are
+guard rails, not permission.
 
 ## Contributing
 
