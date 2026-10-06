@@ -29,6 +29,22 @@ const REPOSITORY = "https://github.com/ProAnima/SignalLab";
 /** `/docs/` inside the app and the server; `/SignalLab/` on GitHub Pages (`DOCS_BASE`). */
 const base = process.env.DOCS_BASE ?? "/docs/";
 
+/** The site on GitHub Pages. Only its build speaks to search engines and link previews —
+ * a sitemap, a canonical address and a card (docs/public/social.png, scripts/gen-social.py)
+ * on every page; the copy inside the app and the server stays as it is. */
+const SITE = "https://proanima.github.io/SignalLab/";
+const published = base === "/SignalLab/";
+
+/** `draft: true`: a translation still to be written, kept out of search engines until it is. */
+function isDraft(relativePath: string): boolean {
+  const file = join(docs, relativePath);
+  const front = existsSync(file) && /^---\r?\n([\s\S]*?)\r?\n---/.exec(readFileSync(file, "utf8"));
+  return Boolean(front && /^draft:\s*true\s*$/m.test(front[1]));
+}
+/** A page's address on the site and back: `pt/guide/index.md` ⇄ `pt/guide/`. */
+const urlOf = (relativePath: string) => relativePath.replace(/(^|\/)index\.md$/, "$1").replace(/\.md$/, ".html");
+const pageOf = (url: string) => `${url.replace(/(^|\/)$/, "$1index").replace(/\.html$/, "")}.md`;
+
 const CODES: string[] = LOCALES.map((locale) => locale.code);
 /** A page's language: the first folder when it is one, English otherwise. */
 const languageOf = (relativePath: string) => {
@@ -119,6 +135,36 @@ export default defineConfig({
   lastUpdated: false,
   title: "Signal Lab",
   head: [["link", { rel: "icon", type: "image/png", href: `${base}icon.png` }]],
+  // Every page with its translations (VitePress pairs them by path), drafts left out.
+  sitemap: published
+    ? {
+        hostname: SITE,
+        transformItems: (items) =>
+          items.filter((item) => !isDraft(pageOf(item.url))).map((item) => ({ ...item, links: item.links?.filter((link) => !isDraft(pageOf(link.url))) })),
+      }
+    : undefined,
+  // A start page's title says what Signal Lab is, in the page's language: "Signal Lab | <hero text>".
+  transformPageData: (pageData) => {
+    if (published && pageData.frontmatter.layout === "home" && pageData.frontmatter.hero?.text) pageData.titleTemplate = pageData.frontmatter.hero.text;
+  },
+  transformHead: ({ pageData, title, description }) => {
+    if (!published || pageData.isNotFound) return;
+    if (pageData.frontmatter.draft) return [["meta", { name: "robots", content: "noindex" }]];
+    const url = SITE + urlOf(pageData.relativePath);
+    return [
+      ["link", { rel: "canonical", href: url }],
+      ["meta", { property: "og:type", content: "website" }],
+      ["meta", { property: "og:site_name", content: "Signal Lab" }],
+      ["meta", { property: "og:title", content: title }],
+      ["meta", { property: "og:description", content: description }],
+      ["meta", { property: "og:url", content: url }],
+      ["meta", { property: "og:image", content: `${SITE}social.png` }],
+      ["meta", { property: "og:image:width", content: "1280" }],
+      ["meta", { property: "og:image:height", content: "640" }],
+      ["meta", { property: "og:image:alt", content: "Signal Lab: the lab for the protocols your show, installation and IoT gear speaks" }],
+      ["meta", { name: "twitter:card", content: "summary_large_image" }],
+    ];
+  },
   // Pages that are not pages: the API description and the old design notes' sources.
   srcExclude: ["**/README.md", "api/openapi.json"],
   locales: Object.fromEntries(LOCALES.map((locale) => [key(locale.code), {

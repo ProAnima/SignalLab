@@ -1,0 +1,35 @@
+# The labels in .github/labels.json, on the repository: created or brought up to
+# date (colour, description) whenever the file changes on main, by
+# scripts/labels.mjs. A label the file does not list is left alone.
+name: Labels
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/labels.json"
+      - "scripts/labels.mjs"
+      - ".github/workflows/labels.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: labels
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: The labels of .github/labels.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/labels.mjs sync

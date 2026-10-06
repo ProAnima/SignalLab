@@ -1,0 +1,41 @@
+[
+  { "name": "bug", "color": "d73a4a", "description": "Something does not work as the documentation says" },
+  { "name": "enhancement", "color": "a2eeef", "description": "A new feature or a better way to do something" },
+  { "name": "documentation", "color": "0075ca", "description": "The documentation, the README or the guides for contributors" },
+  { "name": "translation", "color": "fbca04", "description": "A language of the interface or of the documentation" },
+  { "name": "accessibility", "color": "f143ab", "description": "A barrier for people using a keyboard, a screen reader or a zoomed screen" },
+  { "name": "question", "color": "d876e3", "description": "Further information is requested" },
+  { "name": "good first issue", "color": "7057ff", "description": "Small and well described: a good place to start" },
+  { "name": "help wanted", "color": "008672", "description": "A contribution would be welcome" },
+  { "name": "duplicate", "color": "cfd3d7", "description": "This issue or pull request already exists" },
+  { "name": "invalid", "color": "e4e669", "description": "This does not seem right" },
+  { "name": "wontfix", "color": "ffffff", "description": "This will not be worked on" },
+
+  { "name": "protocol: osc", "color": "3ee6b0", "description": "OSC: messages, bundles, the monitor and the generator" },
+  { "name": "protocol: udp/tcp", "color": "3ee6b0", "description": "Raw UDP datagrams and TCP streams" },
+  { "name": "protocol: http", "color": "3ee6b0", "description": "HTTP requests, authentication, cookies and bursts" },
+  { "name": "protocol: websocket", "color": "3ee6b0", "description": "WebSocket connections" },
+  { "name": "protocol: mqtt", "color": "3ee6b0", "description": "MQTT 3.1.1: the client and the broker emulator" },
+  { "name": "protocol: broadcast", "color": "3ee6b0", "description": "Broadcast, multicast, subnet sweeps and discovery" },
+
+  { "name": "area: inspector", "color": "35c8e8", "description": "Capturing, decoding, filtering and exporting traffic" },
+  { "name": "area: signals", "color": "35c8e8", "description": "The library of signals and the Ctrl+K palette" },
+  { "name": "area: emulators", "color": "35c8e8", "description": "Mock HTTP APIs, OSC/UDP/TCP devices and the MQTT broker" },
+  { "name": "area: impairment", "color": "35c8e8", "description": "The relay that delays, drops, corrupts or throttles traffic" },
+  { "name": "area: experiments", "color": "35c8e8", "description": "The flow editor, its nodes, runs and reports" },
+  { "name": "area: load", "color": "35c8e8", "description": "Load profiles, thresholds and comparing runs" },
+  { "name": "area: storm & scanner", "color": "35c8e8", "description": "The UDP/TCP flood and the TCP connect scan" },
+  { "name": "area: cli & ci", "color": "35c8e8", "description": "signallab, the command line, JUnit reports and the GitHub Action" },
+  { "name": "area: mcp", "color": "35c8e8", "description": "The tools Signal Lab gives AI assistants over MCP" },
+  { "name": "area: server & api", "color": "35c8e8", "description": "The server for browsers, its security and the HTTP API" },
+  { "name": "area: install & update", "color": "35c8e8", "description": "Installers, packages and the updater" },
+
+  { "name": "platform: windows", "color": "8b7cff", "description": "Only on Windows" },
+  { "name": "platform: linux", "color": "8b7cff", "description": "Only on Linux" },
+  { "name": "platform: docker", "color": "8b7cff", "description": "Only in the server image" },
+
+  { "name": "dependencies", "color": "0366d6", "description": "Pull requests that update a dependency file" },
+  { "name": "github_actions", "color": "000000", "description": "Pull requests that update GitHub Actions code" },
+  { "name": "javascript", "color": "168700", "description": "Pull requests that update JavaScript code" },
+  { "name": "rust", "color": "000000", "description": "Pull requests that update Rust code" }
+]

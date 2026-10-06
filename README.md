@@ -41,7 +41,10 @@
 Signal Lab is a desktop app for **Windows and Linux** and a **server** you use from
 a browser (also as a Docker image). It is built for bringing up shows, installations
 and networked devices before the rest of the system exists — and for testing the
-services and APIs they talk to.
+services and APIs they talk to. In one window: an OSC sender and monitor, a UDP/TCP
+terminal, an HTTP and WebSocket client, an MQTT client and broker, mock servers for
+the devices and APIs that are not there yet, a network impairment relay, a load
+tester and a test runner for CI.
 
 ## What you can do
 

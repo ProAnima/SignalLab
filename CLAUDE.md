@@ -32,6 +32,8 @@ npm run docs:dev           # the documentation with live reload, http://localhos
 npm run docs:build         # the documentation -> dist/docs (npm run build does it too)
 python scripts/gen-icon.py && npx tauri icon src-tauri/icons/icon-1024.png  # app icon
 python scripts/gen-installer-art.py   # installer sidebar/header/dialog/banner from the icon
+python scripts/gen-social.py          # docs/public/social.png: the link card (og:image, GitHub's social preview)
+node scripts/labels.mjs check         # .github/labels.json against the repository's labels (the Labels workflow syncs them)
 node scripts/install-test.mjs --image signallab:dev   # deploy/install.sh end to end on this Docker
 ```
 
