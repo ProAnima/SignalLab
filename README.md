@@ -23,6 +23,7 @@
 </p>
 
 <p align="center">
+  Documentation in:
   <a href="https://proanima.github.io/SignalLab/">English</a> ·
   <a href="https://proanima.github.io/SignalLab/ru/">Русский</a> ·
   <a href="https://proanima.github.io/SignalLab/es/">Español</a> ·
