@@ -243,6 +243,15 @@ export async function experimentSelection(expect: Expect) {
   const pointer = (target: HTMLElement, kind: string, x: number, y: number, shiftKey = false) => target.dispatchEvent(new PointerEvent(kind,
     { bubbles: true, cancelable: true, pointerId: 9, pointerType: "mouse", button: 0, buttons: kind === "pointerup" ? 0 : 1, clientX: x, clientY: y, shiftKey }));
   nodeOf(http).scrollIntoView({ block: "center", inline: "center" });
+  // A slow machine is still scrolling: the frame is drawn from where the nodes
+  // are once they stop moving (the same place on two reads in a row).
+  let placed = "";
+  await until("the canvas to settle", () => {
+    const now = JSON.stringify([nodeOf(http).getBoundingClientRect(), nodeOf(nextName).getBoundingClientRect()]);
+    const settled = now === placed;
+    placed = now;
+    return settled;
+  });
   const a = nodeOf(http).getBoundingClientRect();
   const b = nodeOf(nextName).getBoundingClientRect();
   const from = { x: Math.min(a.left, b.left) - 14, y: Math.min(a.top, b.top) - 14 };

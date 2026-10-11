@@ -82,7 +82,7 @@ pub struct Subscription {
 
 impl Drop for Subscription {
     fn drop(&mut self) {
-        self.task.abort();
+        super::jobs::abort_and_settle(&self.task);
     }
 }
 

@@ -76,6 +76,18 @@ impl TaskGuard {
     }
 }
 
+/// Abort a task that holds something a stop must see let go (a bound socket),
+/// and have the next stop wait until it is dropped: the run's emulators, relays,
+/// wait listeners and subscriptions go this way when the run drops them.
+pub fn abort_and_settle(task: &tokio::task::AbortHandle) {
+    task.abort();
+    if !task.is_finished() {
+        let mut settling = SETTLING.lock().unwrap();
+        settling.retain(|child| !child.is_finished());
+        settling.push(task.clone());
+    }
+}
+
 impl Drop for TaskGuard {
     fn drop(&mut self) {
         let mut settling = SETTLING.lock().unwrap();

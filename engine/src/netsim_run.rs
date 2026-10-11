@@ -24,7 +24,7 @@ struct Serving(tokio::task::AbortHandle);
 
 impl Drop for Serving {
     fn drop(&mut self) {
-        self.0.abort();
+        super::jobs::abort_and_settle(&self.0);
     }
 }
 
