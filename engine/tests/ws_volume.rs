@@ -205,9 +205,12 @@ async fn a_stopped_job_hangs_up_on_a_flood() {
     }
     assert!(flood.ended.load(Ordering::SeqCst), "the server saw the connection end after a stop");
     assert!(began.elapsed() < Duration::from_secs(4), "{:?}", began.elapsed());
-    // A second connection right after works.
+    // A second connection right after is made. (This stand-in floods only its
+    // first connection — its "ended" flag is shared — so it hangs up on the second
+    // at once, and that job may have ended by itself before it is stopped.)
     let again = service.invoke("ws_connect", json!({ "config": { "url": url } })).await.unwrap();
-    assert!(service.jobs().stop(again["id"].as_u64().unwrap()));
+    assert!(again["id"].as_u64().is_some(), "{again}");
+    service.jobs().stop(again["id"].as_u64().unwrap());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
