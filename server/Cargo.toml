@@ -19,7 +19,7 @@ tokio = { workspace = true, features = ["signal"] }
 tracing.workspace = true
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
 axum = { version = "0.8", features = ["ws"] }
-tower-http = { version = "0.6", features = ["fs", "set-header"] }
+tower-http = { version = "0.7", features = ["fs", "set-header"] }
 # Connections served by hand (lib.rs), as axum does but with a deadline for a
 # request's head and a bound on how long stopping waits: the crates axum already brings in.
 hyper = { version = "1", features = ["server", "http1"] }
