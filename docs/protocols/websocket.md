@@ -26,7 +26,7 @@ script it in an experiment.
 | --- | --- | --- |
 | [[ui:field.url]] | `ws://` or `wss://`, a host, an optional port (80 for `ws`, 443 for `wss`) and a path | `ws://127.0.0.1:9001/` |
 | [[ui:exp.wsProtocols]] | Subprotocols to offer, comma separated, in order of preference; the server picks one. A name has no spaces, commas or slashes. | none |
-| [[ui:http.headers]] | Extra headers for the upgrade request; [[ui:http.addHeader]] adds a row. A row without a name is left out. | none |
+| [[ui:http.headers]] | Extra headers for the upgrade request; [[ui:http.addHeader]] adds a row. A row without a name is left out. A `Host` (or another header the upgrade itself writes, such as `Sec-WebSocket-Version`) replaces the one the upgrade would send. | none |
 
 Connecting — the name lookup, the TCP connection, TLS for `wss://` and the
 upgrade — has 10 seconds. The URL is kept when you switch screens and when you
@@ -81,10 +81,14 @@ Click a message to see it whole below the list: JSON laid out, binary as hex.
 A very long message is shown in part — text up to 64 KiB, binary up to
 4096 bytes — and then cannot be copied, since it would be sent cut.
 
-The screen keeps the latest 2000 messages; [[ui:common.clear]] empties the
-list. If a service sends faster than the screen can take — more than 2000 in a
-tenth of a second — the oldest of those are left out of the list and counted as
-"not shown". The Inspector still has them while capture is armed.
+The screen keeps the latest 2000 messages, fewer when they are long (8
+million characters in all); [[ui:common.clear]] empties the list. The received
+and sent counts above it are the connection's own, every message included. If a
+service sends faster than the screen can take — more than 2000 messages, or
+1 MB of text, in a tenth of a second — the oldest of those are left out of the
+list and counted as "not shown". The Inspector still has them while capture is
+armed. However fast a service floods, [[ui:ws.disconnect]] and a stop still
+take effect at once.
 
 ## Closing {#close}
 
@@ -160,7 +164,7 @@ fails. See [Command line](../automation/cli.md#cli-send-ws).
 | What you see | Usual cause |
 | --- | --- |
 | `… is not a WebSocket address` | The URL does not start with `ws://` or `wss://`, or has no host. |
-| `… answered HTTP n instead of switching to WebSocket` | The server refused the upgrade: a wrong path (404), a missing or wrong token (401, 403). The start of its answer is under the technical details. |
+| `… answered HTTP n instead of switching to WebSocket` | The server refused the upgrade: a wrong path (404), a missing or wrong token (401, 403). The start of its answer's body (over `ws://`, what arrives within 0.3 s) is under the technical details. |
 | `… did not take any of the subprotocols offered` | You offered subprotocols and the server chose none of them, or it answered with one you did not offer. |
 | `… is not a subprotocol name` | A name with a space, a comma or a slash. |
 | `The header … cannot be sent with the upgrade` | A header name or value with characters HTTP does not allow. |

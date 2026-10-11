@@ -98,6 +98,8 @@ pub struct LibraryFile {
     pub library: Library,
     /// True when the file did not exist and the starter set was written.
     pub seeded: bool,
+    /// What the file held when it was read: the `base` a save names (`paths::stamp`).
+    pub stamp: String,
 }
 
 /// 2 added `folders`; a version 1 file reads the same, without empty folders.
@@ -259,13 +261,18 @@ fn io_error(path: &Path, error: std::io::Error) -> EngineError {
 /// reported, never replaced with the starter set. A byte order mark (an
 /// editor's habit) is no error; bytes that are not UTF-8 are one, with where.
 fn parse(bytes: &[u8], path: &Path) -> EngineResult<Library> {
-    serde_json::from_slice(bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(bytes)).map_err(|error| {
+    let library: Library = serde_json::from_slice(bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(bytes)).map_err(|error| {
         EngineError::new("signals.json_invalid")
             .with("path", path.display())
             .with("line", error.line())
             .with("column", error.column())
             .because(error)
-    })
+    })?;
+    // A newer app's file: read here, what it added would be dropped by the next save.
+    if library.version > VERSION {
+        return Err(EngineError::new("doc.version_unsupported").with("version", library.version).with("supported", VERSION).with("path", path.display()));
+    }
+    Ok(library)
 }
 
 /// Read the library, writing the starter set the first time.
@@ -279,15 +286,21 @@ pub fn load() -> EngineResult<LibraryFile> {
                 path: shown,
                 library,
                 seeded: false,
+                stamp: super::paths::stamp(&text),
             })
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             let library = seed();
-            save(&library)?;
+            // Not over a library another page wrote in the meantime: that one is read instead.
+            let saved = match save_based(&library, Some("")) {
+                Err(error) if error.is("file.changed") => return load(),
+                saved => saved?,
+            };
             Ok(LibraryFile {
                 path: shown,
                 library,
                 seeded: true,
+                stamp: saved.stamp,
             })
         }
         Err(e) => Err(io_error(&path, e)),
@@ -298,7 +311,13 @@ pub fn load() -> EngineResult<LibraryFile> {
 /// whole thing — with a few dozen entries there is nothing to be gained from a
 /// merge protocol, and plenty to lose.
 pub fn save(library: &Library) -> EngineResult<String> {
-    save_in(&super::paths::data_dir(), library)
+    save_based(library, None).map(|saved| saved.path)
+}
+
+/// `save`, refused with `file.changed` when the file no longer holds `base`
+/// (the stamp it was read with): another page or a person changed it since.
+pub fn save_based(library: &Library, base: Option<&str>) -> EngineResult<super::paths::Saved> {
+    save_in(&super::paths::data_dir(), library, base)
 }
 
 /// `save`, in `dir`. A file there that does not read as a library is someone's
@@ -306,24 +325,27 @@ pub fn save(library: &Library) -> EngineResult<String> {
 /// is — whoever writes the library, a list that was never read from it must
 /// not land over it. The new file goes through a temporary one in the same
 /// folder, so a write cut short leaves the previous file whole.
-fn save_in(dir: &Path, library: &Library) -> EngineResult<String> {
+fn save_in(dir: &Path, library: &Library, base: Option<&str>) -> EngineResult<super::paths::Saved> {
     std::fs::create_dir_all(dir).map_err(|e| io_error(dir, e))?;
     let path = dir.join("signals.json");
-    match std::fs::read(&path) {
+    let _turn = super::paths::document_lock();
+    let existing = match std::fs::read(&path) {
         Ok(existing) => {
             parse(&existing, &path)?;
+            Some(existing)
         }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
         Err(e) => return Err(io_error(&path, e)),
-    }
+    };
+    super::paths::check_base(&path, existing.as_deref(), base)?;
     let text = serde_json::to_string_pretty(library).map_err(|e| EngineError::new("signals.encode").because(e))?;
     let temporary = dir.join(format!(".signals-{:016x}.tmp", rand::random::<u64>()));
-    std::fs::write(&temporary, text).map_err(|e| io_error(&temporary, e))?;
+    std::fs::write(&temporary, &text).map_err(|e| io_error(&temporary, e))?;
     if let Err(e) = std::fs::rename(&temporary, &path) {
         let _ = std::fs::remove_file(&temporary);
         return Err(io_error(&path, e));
     }
-    Ok(path.display().to_string())
+    Ok(super::paths::Saved { path: path.display().to_string(), stamp: super::paths::stamp(text.as_bytes()) })
 }
 
 #[cfg(test)]
@@ -453,7 +475,7 @@ mod tests {
         let path = dir.0.join("signals.json");
         let broken = b"{\n  \"version\": 2,\n  \"signals\": [ { \"id\": \"half-typed\" \n";
         std::fs::write(&path, broken).unwrap();
-        let error = save_in(&dir.0, &seed()).unwrap_err();
+        let error = save_in(&dir.0, &seed(), None).unwrap_err();
         assert_eq!(error.code, "signals.json_invalid", "the same error as reading it: {error}");
         assert!(error.params["path"].ends_with("signals.json"));
         assert!(error.params.contains_key("line") && error.params.contains_key("column"));
@@ -461,7 +483,7 @@ mod tests {
         assert_eq!(dir.names(), ["signals.json"], "and nothing left beside it");
         // A file of the wrong shape is someone's too.
         std::fs::write(&path, br#"{"signals": "not a list"}"#).unwrap();
-        assert!(save_in(&dir.0, &seed()).unwrap_err().is("signals.json_invalid"));
+        assert!(save_in(&dir.0, &seed(), None).unwrap_err().is("signals.json_invalid"));
         assert_eq!(std::fs::read(&path).unwrap(), br#"{"signals": "not a list"}"#);
     }
 
@@ -469,7 +491,7 @@ mod tests {
     fn a_good_save_replaces_the_file_whole_and_leaves_no_temporary_file() {
         let dir = Scratch::new("save");
         // No file yet: written.
-        let shown = save_in(&dir.0, &seed()).unwrap();
+        let shown = save_in(&dir.0, &seed(), None).unwrap().path;
         assert!(shown.ends_with("signals.json"));
         let path = dir.0.join("signals.json");
         assert_eq!(parse(&std::fs::read(&path).unwrap(), &path).unwrap().signals.len(), seed().signals.len());
@@ -477,7 +499,7 @@ mod tests {
         let mut library = seed();
         library.signals.truncate(1);
         library.folders = vec!["Venue/Stage".into()];
-        save_in(&dir.0, &library).unwrap();
+        save_in(&dir.0, &library, None).unwrap();
         let back = parse(&std::fs::read(&path).unwrap(), &path).unwrap();
         assert_eq!((back.signals.len(), back.folders), (1, vec!["Venue/Stage".to_string()]));
         assert_eq!(dir.names(), ["signals.json"], "the temporary file became the library");

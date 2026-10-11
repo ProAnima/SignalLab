@@ -13,14 +13,18 @@
 .mq-stats .ok { color: var(--accent); }
 .mq-stats .warn { color: var(--amber); }
 
-.topic-tree { flex: 1; min-height: 0; margin: 0 -6px; padding: 0 6px; }
+/* Bounded, so it scrolls and draws only the rows in view, however many topics. */
+.topic-tree { flex: 1; min-height: 0; max-height: 70vh; margin: 0 -6px; padding: 0 6px; }
 /* A row is a button: the tree is walked with the keyboard, and a topic is picked
-   and expanded from the same place. */
+   and expanded from the same place. One height (ROW_HEIGHT in MqttView), so the
+   tree draws only the rows in view. */
 .topic-row {
   display: flex;
   align-items: center;
   gap: 8px;
   width: 100%;
+  height: 28px;
+  overflow: hidden;
   padding: 4px 8px;
   border: 1px solid transparent;
   border-radius: var(--radius-xs);

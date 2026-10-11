@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useImperativeHandle, useRef, useState, type CSSProperties, type Ref } from "react";
 import type { Experiment, ExperimentNode, SignalBody } from "../lib/api";
-import { addAfter, addBranch, anchorAfter, arrangeNodes, createNode, createNodeIn, placeAfter, NODE_HEIGHT as NODE_H, type Anchor, type NodeType, type Port } from "../lib/experimentGraph";
+import { addAfter, addBranch, anchorAfter, arrangeNodes, createNode, createNodeIn, hasRoom, placeAfter, MAX_NODES, NODE_HEIGHT as NODE_H, type Anchor, type NodeType, type Port } from "../lib/experimentGraph";
 import { clipText, copyOf, freshCopy, moveNodes, placeCopy, readClip, removeNodes } from "../lib/experimentClipboard";
 import { copyNow } from "../lib/clipboardSink";
 import { useExperimentDocument } from "../lib/useExperimentDocument";
@@ -161,9 +161,20 @@ export function ExperimentView({ active, focusMode, setFocusMode, onShowFrame, o
     setSelected(null);
   };
 
+  /**
+   * No room for `adding` more nodes: said as the engine says it, and nothing is
+   * added — a document past MAX_NODES could be neither saved nor run.
+   */
+  const full = (adding = 1): boolean => {
+    if (!doc || hasRoom(doc, adding)) return false;
+    setProblem({ code: "doc.node_count", params: { max: String(MAX_NODES) } });
+    return true;
+  };
+
   /** Copies added beside where they came from, selected, and in view: Duplicate and Paste. */
   const addCopies = (clip: ReturnType<typeof copyOf>) => {
     if (!doc || !clip || busy) return false;
+    if (full(clip.nodes.length)) return true;
     const copy = freshCopy(doc, clip);
     commitEdit();
     edit((current) => placeCopy(current, copy));
@@ -228,7 +239,7 @@ export function ExperimentView({ active, focusMode, setFocusMode, onShowFrame, o
 
   /** A click on a response value: an Extract node right after the request, value known at once. */
   const extractPicked = (request: ExperimentNode, path: (string | number)[], value: unknown) => {
-    if (!doc || busy) return;
+    if (!doc || busy || full()) return;
     const taken = [...doc.params.map((param) => param.name), ...doc.nodes.flatMap((node) => { const written = writtenVariable(node); return written ? [written.name] : []; })];
     const name = suggestVariableName(path, taken);
     const anchor = { from: request.id, port: "next" as Port };
@@ -243,6 +254,7 @@ export function ExperimentView({ active, focusMode, setFocusMode, onShowFrame, o
 
   const addFromMenu = (item: MenuItem) => {
     if (!menu || !doc) return;
+    if (full()) { setMenu(null); return; }
     const node = item.kind === "node" ? createNodeIn(doc, item.type, menu.x, menu.y) : nodeFromSignal(item.signal.body, menu.x, menu.y);
     if (!node) return;
     commitEdit();
@@ -254,6 +266,8 @@ export function ExperimentView({ active, focusMode, setFocusMode, onShowFrame, o
   /** A node from a direct instrument, as the next step before End (the selection is only a fallback). */
   const appendNode = (make: (x: number, y: number) => ExperimentNode | null): boolean => {
     if (!doc || busy) return false;
+    // Taken to the editor, which says why nothing was added.
+    if (full()) return true;
     // The end of the flow is the predictable place; the selection is only a fallback.
     const end = doc.nodes.find((node) => node.type === "end");
     const anchor = (end && anchorAfter(doc, end.id)) || (selected ? anchorAfter(doc, selected) : null);

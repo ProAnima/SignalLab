@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{mpsc, Notify};
+use tokio::sync::{mpsc, Notify, OwnedSemaphorePermit, Semaphore};
 use tokio::task::JoinSet;
 
 use crate::host::Host;
@@ -27,6 +27,7 @@ use crate::host::Host;
 use super::error::{EngineError, EngineResult};
 use super::inspect::{self, describe_payload, Frame, Gate};
 use super::net;
+use super::transport;
 use super::netsim::{ImpairProfile, Relay, Stats};
 use super::template::Rng;
 
@@ -38,6 +39,16 @@ const MAX_CHUNKS: usize = 256;
 const CHUNK: usize = 16 * 1024;
 /// Mixed into the seed, so a stream's draws never repeat a datagram's or a template's.
 const TCP_STREAM: u64 = 0x7463_705f_6c65_6701;
+/// Connections relayed at once; one more is closed with a reset and counted
+/// as failed. Each holds two sockets and up to `MAX_CHUNKS` chunks each way.
+pub(crate) const MAX_CONNECTIONS: usize = 1024;
+/// Bytes on their way (delayed) at once, every connection together; past it a
+/// reader waits (backpressure, never a drop) until earlier chunks went.
+const MAX_QUEUED_BYTES: usize = 64 * 1024 * 1024;
+/// Pauses before connecting to the target again when this machine had no local
+/// port or socket for it (thousands of connections closing hold one each for
+/// minutes): such a failure says nothing about the target.
+const LOCAL_RETRY_MS: [u64; 6] = [20, 50, 100, 250, 500, 1000];
 
 /// Bind the port clients connect to.
 pub(crate) async fn open(listen: SocketAddr, listen_text: &str) -> EngineResult<TcpListener> {
@@ -168,11 +179,13 @@ struct Pending {
     delay: Duration,
     phase: Arc<Stats>,
     capture: bool,
+    /// Its share of `MAX_QUEUED_BYTES`, given back once it is written (or dropped).
+    _budget: OwnedSemaphorePermit,
 }
 
 /// Read one stream chunk by chunk and decide each; what goes through is queued
 /// for the writer. Returns at the end of the stream, or when the connection ends.
-async fn read(relay: &Relay, leg: &mut Leg, from: &mut OwnedReadHalf, queue: mpsc::Sender<Pending>, ending: &Ending, tap: &Tap) {
+async fn read(relay: &Relay, leg: &mut Leg, from: &mut OwnedReadHalf, queue: mpsc::Sender<Pending>, ending: &Ending, tap: &Tap, budget: &Arc<Semaphore>) {
     let mut buffer = vec![0u8; CHUNK];
     loop {
         relay.until_online().await;
@@ -204,7 +217,9 @@ async fn read(relay: &Relay, leg: &mut Leg, from: &mut OwnedReadHalf, queue: mps
                 return;
             }
             Fate::Deliver { due, hold } => {
-                let pending = Pending { bytes: buffer[..size].to_vec(), due, delay: due.saturating_duration_since(now), phase: phase.clone(), capture };
+                // The relay's memory is bounded: past it this reader waits for earlier chunks to go.
+                let Ok(permit) = budget.clone().acquire_many_owned(size as u32).await else { return };
+                let pending = Pending { bytes: buffer[..size].to_vec(), due, delay: due.saturating_duration_since(now), phase: phase.clone(), capture, _budget: permit };
                 if queue.send(pending).await.is_err() {
                     return;
                 }
@@ -238,10 +253,10 @@ async fn write(relay: &Relay, to: &mut OwnedWriteHalf, queue: &mut mpsc::Receive
 /// One stream, both its reader and its writer, until it ends — or the
 /// connection does: reset, both sockets close with a reset; left half-open,
 /// both stay open, untouched, until the relay goes.
-async fn stream(relay: &Relay, mut leg: Leg, mut from: OwnedReadHalf, mut to: OwnedWriteHalf, ending: &Ending, tap: &Tap) {
+async fn stream(relay: &Relay, mut leg: Leg, mut from: OwnedReadHalf, mut to: OwnedWriteHalf, ending: &Ending, tap: &Tap, budget: &Arc<Semaphore>) {
     let (queue, mut queued) = mpsc::channel(MAX_CHUNKS);
     tokio::select! {
-        _ = async { tokio::join!(read(relay, &mut leg, &mut from, queue, ending, tap), write(relay, &mut to, &mut queued, tap)) } => {}
+        _ = async { tokio::join!(read(relay, &mut leg, &mut from, queue, ending, tap, budget), write(relay, &mut to, &mut queued, tap)) } => {}
         _ = ending.ended() => {}
     }
     match ending.how() {
@@ -255,17 +270,38 @@ async fn stream(relay: &Relay, mut leg: Leg, mut from: OwnedReadHalf, mut to: Ow
     }
 }
 
+
+/// A connection to the target. This machine running out of local ports is
+/// tried again after a pause; still out of them, it is `Err(true)`; the
+/// target refusing, or not answering, `Err(false)`.
+async fn connect(target: SocketAddr) -> Result<TcpStream, bool> {
+    let mut pauses = LOCAL_RETRY_MS.iter();
+    loop {
+        match TcpStream::connect(target).await {
+            Ok(stream) => return Ok(stream),
+            Err(error) if transport::local_connect_failure(&error) => match pauses.next() {
+                Some(ms) => tokio::time::sleep(Duration::from_millis(*ms)).await,
+                None => return Err(true),
+            },
+            Err(_) => return Err(false),
+        }
+    }
+}
+
 /// One client's connection: joined to the target (once the relay is online),
 /// both streams impaired until both end. A target that refuses is passed on
-/// as a reset.
+/// as a reset and counted as refused; a connection this machine could not
+/// make goes the same way, counted as failed.
 #[allow(clippy::too_many_arguments)]
-async fn connection(relay: Arc<Relay>, host: Host, job_id: u64, name: String, n: u64, client: TcpStream, peer: SocketAddr, gate: Arc<Gate>) {
+async fn connection(relay: Arc<Relay>, host: Host, job_id: u64, name: String, n: u64, client: TcpStream, peer: SocketAddr, gate: Arc<Gate>, budget: Arc<Semaphore>) {
     let (_, phase) = relay.now();
     relay.count(&phase, |stats| &stats.connections, 1);
     relay.until_online().await;
-    let target = match TcpStream::connect(relay.target).await {
+    let target = match connect(relay.target).await {
         Ok(target) => target,
-        Err(_) => {
+        Err(local) => {
+            let (_, phase) = relay.now();
+            relay.count(&phase, if local { |stats: &Stats| &stats.failed } else { |stats: &Stats| &stats.refused }, 1);
             let _ = client.set_zero_linger();
             return;
         }
@@ -279,8 +315,8 @@ async fn connection(relay: Arc<Relay>, host: Host, job_id: u64, name: String, n:
     let outward = Leg::new(relay.seed, format!("{name}:{n}:client"));
     let inward = Leg::new(relay.seed, format!("{name}:{n}:target"));
     tokio::join!(
-        stream(&relay, outward, client_read, target_write, &ending, &to_target),
-        stream(&relay, inward, target_read, client_write, &ending, &to_client),
+        stream(&relay, outward, client_read, target_write, &ending, &to_target, &budget),
+        stream(&relay, inward, target_read, client_write, &ending, &to_client, &budget),
     );
 }
 
@@ -294,6 +330,7 @@ impl Relay {
     /// why. Every connection is a child of the future: dropping it closes them.
     pub(crate) async fn serve_tcp(self: Arc<Self>, host: Host, job_id: u64, name: String, listener: TcpListener) -> EngineError {
         let gate = Arc::new(Gate::new(25));
+        let budget = Arc::new(Semaphore::new(MAX_QUEUED_BYTES));
         let mut connections = JoinSet::new();
         let mut n = 0u64;
         loop {
@@ -301,7 +338,15 @@ impl Relay {
                 Ok((client, peer)) => {
                     n += 1;
                     while connections.try_join_next().is_some() {}
-                    connections.spawn(connection(self.clone(), host.clone(), job_id, name.clone(), n, client, peer, gate.clone()));
+                    // Past the limit (half-open ones count until the relay goes): a reset, counted.
+                    if connections.len() >= MAX_CONNECTIONS {
+                        let (_, phase) = self.now();
+                        self.count(&phase, |stats| &stats.connections, 1);
+                        self.count(&phase, |stats| &stats.failed, 1);
+                        let _ = client.set_zero_linger();
+                        continue;
+                    }
+                    connections.spawn(connection(self.clone(), host.clone(), job_id, name.clone(), n, client, peer, gate.clone(), budget.clone()));
                 }
                 Err(error) if accept_transient(&error) => continue,
                 Err(error) => return EngineError::new("wait.receive_failed").with("target", self.listen).because(error),
@@ -525,10 +570,57 @@ mod tests {
     #[tokio::test]
     async fn a_target_that_refuses_is_passed_on_as_a_reset() {
         let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap();
-        let (_, listen, serving) = relay(closed, calm()).await;
+        let (relay, listen, serving) = relay(closed, calm()).await;
         let mut client = TcpStream::connect(listen).await.unwrap();
         let read = read_some(&mut client, Duration::from_secs(5)).await.expect("the relay hung up");
         assert!(read.is_err() || read.is_ok_and(|bytes| bytes.is_empty()));
+        let counts = relay.counts();
+        assert_eq!((counts.connections, counts.refused, counts.failed), (1, 1, 0), "the target's answer, counted as its own");
+        serving.abort();
+    }
+
+    #[test]
+    fn running_out_of_local_ports_is_this_machine_s_failure_not_the_target_s() {
+        use std::io::{Error, ErrorKind};
+        for local in [Error::from(ErrorKind::AddrInUse), Error::from(ErrorKind::AddrNotAvailable), Error::from_raw_os_error(if cfg!(windows) { 10055 } else { 105 })] {
+            assert!(transport::local_connect_failure(&local), "{local:?}");
+        }
+        for target in [ErrorKind::ConnectionRefused, ErrorKind::TimedOut, ErrorKind::ConnectionReset] {
+            assert!(!transport::local_connect_failure(&Error::from(target)), "{target:?}");
+        }
+    }
+
+    /// Past `MAX_CONNECTIONS` at once a connection is closed at once and
+    /// counted as failed; the ones held stay as they were.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn connections_past_the_limit_are_reset_and_counted() {
+        let (relay, listen, serving) = relay(echo().await, ImpairProfile { latency_ms: 1.0, ..calm() }).await;
+        let mut held = Vec::new();
+        for _ in 0..MAX_CONNECTIONS {
+            held.push(TcpStream::connect(listen).await.unwrap());
+        }
+        // Every one taken and joined to the target before the next.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while relay.counts().connections < MAX_CONNECTIONS as u64 && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        // The reset can come before the client's connect has reported success
+        // (Linux says so in `connect` itself) or after it (Windows: on the first read).
+        match TcpStream::connect(listen).await {
+            Err(error) => assert_eq!(error.kind(), std::io::ErrorKind::ConnectionReset, "{error:?}"),
+            Ok(mut over) => {
+                let read = read_some(&mut over, Duration::from_secs(5)).await.expect("closed at once");
+                assert!(read.is_err() || read.is_ok_and(|bytes| bytes.is_empty()));
+            }
+        }
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while relay.counts().failed < 1 && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let counts = relay.counts();
+        assert_eq!((counts.connections, counts.failed), (MAX_CONNECTIONS as u64 + 1, 1));
+        held[0].write_all(b"still here").await.unwrap();
+        assert_eq!(read_some(&mut held[0], Duration::from_secs(3)).await.expect("echoed").unwrap(), b"still here");
         serving.abort();
     }
 }

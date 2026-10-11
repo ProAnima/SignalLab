@@ -29,16 +29,41 @@ fn same(a: &str, b: &str) -> bool {
 }
 
 /// `host` of a `host[:port]` authority, lowercased; `[::1]:80` → `[::1]`.
-fn host_name(authority: &str) -> String {
+/// `None` when it is no such thing (`a:1:b`, `[::1]x`, `a@b`): a name that
+/// does not parse is not one this server answers to.
+fn host_name(authority: &str) -> Option<String> {
     let authority = authority.trim().to_ascii_lowercase();
-    if authority.starts_with('[') {
-        return authority.split_once(']').map(|(host, _)| format!("{host}]")).unwrap_or(authority);
-    }
-    authority.rsplit_once(':').filter(|(_, port)| port.chars().all(|c| c.is_ascii_digit())).map(|(host, _)| host.to_string()).unwrap_or(authority)
+    let port_ok = |port: &str| port.is_empty() || port.bytes().all(|b| b.is_ascii_digit());
+    let host = if let Some(inside) = authority.strip_prefix('[') {
+        let (address, rest) = inside.split_once(']')?;
+        let port = if rest.is_empty() { "" } else { rest.strip_prefix(':')? };
+        if !port_ok(port) || address.is_empty() || !address.bytes().all(|b| b.is_ascii_hexdigit() || b == b':' || b == b'.') {
+            return None;
+        }
+        format!("[{address}]")
+    } else {
+        let (host, port) = authority.rsplit_once(':').unwrap_or((&authority, ""));
+        if !port_ok(port) || host.is_empty() || !host.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-' || b == b'_') {
+            return None;
+        }
+        host.to_string()
+    };
+    Some(host)
 }
 
+/// A name only this machine can be reached by: `localhost` and its
+/// subdomains, or a loopback address written as one. A DNS name that merely
+/// starts like one (`127.0.0.1.attacker.example`) can point anywhere, and is
+/// exactly what a rebinding page would use.
 fn is_loopback_name(host: &str) -> bool {
-    host == "localhost" || host.ends_with(".localhost") || host == "[::1]" || host.starts_with("127.")
+    let name = host.strip_suffix('.').unwrap_or(host);
+    if name == "localhost" || name.ends_with(".localhost") {
+        return true;
+    }
+    if let Some(address) = name.strip_prefix('[').and_then(|rest| rest.strip_suffix(']')) {
+        return address.parse::<std::net::Ipv6Addr>().is_ok_and(|ip| ip.is_loopback() || ip.to_ipv4_mapped().is_some_and(|v4| v4.is_loopback()));
+    }
+    host.parse::<std::net::Ipv4Addr>().is_ok_and(|ip| ip.is_loopback())
 }
 
 impl Auth {
@@ -59,7 +84,12 @@ impl Auth {
     /// names do (a page served from another name cannot talk to it); with one,
     /// any name unless `--allowed-host` narrows it.
     pub fn host_allowed(&self, headers: &HeaderMap) -> bool {
-        let Some(host) = headers.get(header::HOST).and_then(|value| value.to_str().ok()).map(host_name) else {
+        // Exactly one: with two, a proxy in front may have read the other.
+        let mut hosts = headers.get_all(header::HOST).iter();
+        let (Some(host), None) = (hosts.next(), hosts.next()) else {
+            return false;
+        };
+        let Some(host) = host.to_str().ok().and_then(host_name) else {
             return false;
         };
         if is_loopback_name(&host) || self.allowed_hosts.contains(&host) {
@@ -171,8 +201,16 @@ mod tests {
         assert!(guarded.host_allowed(&headers(&[("host", "10.0.0.5:1430")])), "with a token any name, unless narrowed");
         let narrowed = Auth::new(Some(TOKEN.into()), false, vec!["lab.example".into()]);
         assert!(!narrowed.host_allowed(&headers(&[("host", "10.0.0.5:1430")])));
-        assert_eq!(host_name("[::1]:1430"), "[::1]");
-        assert_eq!(host_name("Example.COM"), "example.com");
+        assert_eq!(host_name("[::1]:1430").as_deref(), Some("[::1]"));
+        assert_eq!(host_name("Example.COM").as_deref(), Some("example.com"));
+        // Names a rebinding page can have that only start like loopback ones.
+        for host in ["127.attacker.example", "127.0.0.1.nip.io:1430", "[::1].attacker.example", "[::1]x:1", "a:1:b", "127.0.0.1@evil", "localhost.attacker.example", "127.1"] {
+            assert!(!open.host_allowed(&headers(&[("host", host)])), "{host}");
+        }
+        for host in ["127.9.8.7:1", "localhost.", "[::ffff:127.0.0.1]:1430"] {
+            assert!(open.host_allowed(&headers(&[("host", host)])), "{host}");
+        }
+        assert!(!open.host_allowed(&headers(&[("host", "127.0.0.1"), ("host", "evil.example")])), "two Host headers");
     }
 
     #[test]

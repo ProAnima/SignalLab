@@ -428,6 +428,12 @@ export function BroadcastView() {
                   <div className="k">{t("common.errors")}</div>
                   <div className="v red">{fmtNum(emitStat?.errors ?? result?.errors ?? 0)}</div>
                 </div>
+                {!!emitStat?.local && (
+                  <div className="metric" data-tip={t("st.localHint")}>
+                    <div className="k">{t("st.local")}</div>
+                    <div className="v amber">{fmtNum(emitStat.local)}</div>
+                  </div>
+                )}
                 {emitStat && (
                   <>
                     <div className="metric">
@@ -509,6 +515,8 @@ export function BroadcastView() {
               <span className="tag-chip">{t("bc.peersSeen", { n: peers.length })}</span>
               {report && <span className="tag-chip">{t("bc.peersPackets", { n: report.packets })}</span>}
               {report && report.responses > 0 && <span className="tag-chip">{t("bc.peersReplies", { n: report.responses })}</span>}
+              {report && report.unlisted > 0 && <span className="tag-chip" data-tip={t("bc.peersUnlistedHint")}>{t("bc.peersUnlisted", { n: report.unlisted })}</span>}
+              {report && report.replies_skipped > 0 && <span className="tag-chip" data-tip={t("bc.repliesSkippedHint")}>{t("bc.repliesSkipped", { n: report.replies_skipped })}</span>}
             </div>
             <div className="scroll-y" style={{ maxHeight: 260, border: "1px solid var(--border)", borderRadius: "var(--radius-sm)" }}>
               <table className="grid">

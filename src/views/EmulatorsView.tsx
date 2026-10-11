@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, type EmulatorProtocol, type StoredEmulator } from "../lib/api";
 import { useStore } from "../lib/store";
-import { useEmulators } from "../lib/emulatorStore";
+import { useEmulatorLive, useEmulators } from "../lib/emulatorStore";
 import { useT, type TKey } from "../lib/i18n";
 import { useFieldIds } from "../lib/hooks";
 import { describeError, type Failure } from "../lib/errors";
@@ -23,7 +23,8 @@ export function EmulatorsView({ reveal, onShowFrame }: { reveal?: { id: string; 
   const t = useT();
   const fid = useFieldIds();
   const { stopJob, pushLog, pushError } = useStore();
-  const { emulators, setEmulators, path, error: libraryError, saveState, reload, running, live, start, startedWith } = useEmulators();
+  const { emulators, setEmulators, path, error: libraryError, saveState, reload, running, start, startedWith } = useEmulators();
+  const live = useEmulatorLive();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [problem, setProblem] = useState<Failure | null>(null);
@@ -141,12 +142,13 @@ export function EmulatorsView({ reveal, onShowFrame }: { reveal?: { id: string; 
             })}
           </div>
           {emulators.length === 0 && <div className="empty-state">{libraryError ? describeError(libraryError, t).text : t("emu.empty")}</div>}
+          {emulators.length > 0 && libraryError !== null && <ErrorMessage className="sig-blocked" error={libraryError} />}
           <div className="sig-foot">
             <span data-tip={path}>{t("emu.count", { n: emulators.length })}</span>
             <span className="spacer" />
             {saveState === "saving" && <span>{t("emu.saving")}</span>}
             {saveState === "saved" && <span className="ok">{t("emu.saved")}</span>}
-            <button className="ghost sm" onClick={reload} data-tip={path}>{t("emu.reload")}</button>
+            <button className={libraryError !== null ? "primary sm" : "ghost sm"} onClick={reload} data-tip={path}>{t("emu.reload")}</button>
           </div>
         </div>
 
@@ -202,6 +204,9 @@ export function EmulatorsView({ reveal, onShowFrame }: { reveal?: { id: string; 
               </div>}
               {!!activity?.counts.missed && <div className="metric" data-tip={t("emu.missedHint")}>
                 <div className="k">{t("emu.missed")}</div><div className="v amber">{fmtNum(activity.counts.missed)}</div>
+              </div>}
+              {!!activity?.counts.refused && <div className="metric" data-tip={t("emu.refusedHint")}>
+                <div className="k">{t("emu.refused")}</div><div className="v red">{fmtNum(activity.counts.refused)}</div>
               </div>}
             </div>
             <p className="section-label" style={{ marginTop: 16 }}>{t("emu.received")}</p>

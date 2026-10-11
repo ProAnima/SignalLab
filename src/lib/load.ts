@@ -43,7 +43,8 @@ function pieces(profile: LoadProfile): Piece[] {
     switch (profile.shape) {
       case "constant": case "poisson": return [[s(profile.duration_ms), profile.rate, profile.rate]];
       case "ramp": return [[s(profile.duration_ms), profile.from, profile.to]];
-      case "steps": return Array.from({ length: Math.max(0, profile.steps) }, (_, k): [number, number, number] => {
+      // Within the engine's bounds whatever is typed: ten million steps would be twenty million points to draw on every key.
+      case "steps": return Array.from({ length: Math.min(MAX_STEPS, Math.max(0, Math.floor(profile.steps) || 0)) }, (_, k): [number, number, number] => {
         const rate = profile.from + profile.step * k;
         return [s(profile.every_ms), rate, rate];
       });

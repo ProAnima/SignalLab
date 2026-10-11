@@ -186,7 +186,7 @@ struct ValidateArgs {
 #[derive(Subcommand, Debug)]
 enum SendCommand {
     /// One OSC message. Arguments are typed: i:3 f:0.5 d:1.5 h:64 s:text b:hex T F N;
-    /// a plain integer is i, a plain decimal is f, anything else is s.
+    /// a plain integer is i (h past 32 bits), a plain decimal or 1e3 is f, anything else is s.
     Osc {
         /// host:port
         target: String,

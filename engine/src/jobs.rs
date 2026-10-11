@@ -78,9 +78,46 @@ impl TaskGuard {
 
 impl Drop for TaskGuard {
     fn drop(&mut self) {
-        for child in &self.children {
+        let mut settling = SETTLING.lock().unwrap();
+        settling.retain(|child| !child.is_finished());
+        for child in self.children.drain(..) {
             child.abort();
+            if !child.is_finished() {
+                settling.push(child);
+            }
         }
+    }
+}
+
+/// Children aborted by a [`TaskGuard`] and not dropped yet: an abort takes
+/// effect when the runtime next polls the task, so a socket a child holds is
+/// still bound for a moment after its job is gone. [`settle`] waits for them.
+static SETTLING: Mutex<Vec<tokio::task::AbortHandle>> = Mutex::new(Vec::new());
+
+/// How long a stop waits for a job to let go. A task that never yields cannot
+/// be cancelled at all; past this, Stop answers anyway rather than hang.
+const SETTLE_LIMIT: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Wait until the aborted `handles` have been dropped, and every child their
+/// guards aborted with them — what they held (a bound port) is free then.
+async fn settle(handles: Vec<JoinHandle<()>>) {
+    let deadline = tokio::time::Instant::now() + SETTLE_LIMIT;
+    for handle in handles {
+        if tokio::time::timeout_at(deadline, handle).await.is_err() {
+            tracing::warn!("a stopped job did not let go within {SETTLE_LIMIT:?}");
+            return;
+        }
+    }
+    loop {
+        let pending = {
+            let mut settling = SETTLING.lock().unwrap();
+            settling.retain(|child| !child.is_finished());
+            !settling.is_empty()
+        };
+        if !pending || tokio::time::Instant::now() >= deadline {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
     }
 }
 
@@ -99,6 +136,10 @@ struct Jobs {
     /// port) may already be over. Inserting one of these is a no-op, so no
     /// job stays listed after it has ended.
     ended_early: HashSet<u64>,
+    /// The last id given out when Stop all last ran: a job numbered before it
+    /// and inserted after it was still starting then (a run opens its ports
+    /// under its number), and is stopped as it arrives rather than left running.
+    stopped_through: u64,
 }
 
 impl JobRegistry {
@@ -107,17 +148,27 @@ impl JobRegistry {
     }
 
     pub fn next_id(&self) -> u64 {
-        self.counter.fetch_add(1, Ordering::Relaxed) + 1
+        self.counter.fetch_add(1, Ordering::SeqCst) + 1
     }
 
     pub fn insert(&self, info: JobInfo, handle: JoinHandle<()>) {
         let mut jobs = self.inner.lock().unwrap();
-        if !jobs.ended_early.remove(&info.id) {
-            jobs.running.insert(info.id, JobEntry { info, handle });
+        if jobs.ended_early.remove(&info.id) {
+            return;
         }
+        if info.id <= jobs.stopped_through {
+            handle.abort();
+            return;
+        }
+        jobs.running.insert(info.id, JobEntry { info, handle });
     }
 
     /// Abort a running job. Returns true if a job with that id existed.
+    ///
+    /// Only asks: the task is dropped — its sockets closed — when the runtime
+    /// next gets to it, which may be after this returns. A front door that
+    /// answers a person's Stop uses [`JobRegistry::stop_and_wait`], so a start
+    /// right after binds the port the job held.
     pub fn stop(&self, id: u64) -> bool {
         if let Some(entry) = self.inner.lock().unwrap().running.remove(&id) {
             entry.handle.abort();
@@ -125,6 +176,34 @@ impl JobRegistry {
         } else {
             false
         }
+    }
+
+    /// Abort a running job and wait until it has let go of what it held: its
+    /// task dropped, and with it the children its [`TaskGuard`] aborts.
+    /// Returns true if a job with that id existed.
+    pub async fn stop_and_wait(&self, id: u64) -> bool {
+        let entry = self.inner.lock().unwrap().running.remove(&id);
+        match entry {
+            Some(entry) => {
+                entry.handle.abort();
+                settle(vec![entry.handle]).await;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// [`JobRegistry::stop_all`], waiting for every job as `stop_and_wait` does.
+    pub async fn stop_all_and_wait(&self) {
+        let handles: Vec<JoinHandle<()>> = {
+            let mut guard = self.inner.lock().unwrap();
+            guard.stopped_through = self.counter.load(Ordering::SeqCst);
+            guard.running.drain().map(|(_, entry)| entry.handle).collect()
+        };
+        for handle in &handles {
+            handle.abort();
+        }
+        settle(handles).await;
     }
 
     /// Remove a job that finished on its own (without abort).
@@ -151,6 +230,7 @@ impl JobRegistry {
 
     pub fn stop_all(&self) {
         let mut guard = self.inner.lock().unwrap();
+        guard.stopped_through = self.counter.load(Ordering::SeqCst);
         for (_, entry) in guard.running.drain() {
             entry.handle.abort();
         }
@@ -174,6 +254,31 @@ mod tests {
         assert_eq!(jobs.list().len(), 1);
         jobs.finish(id);
         assert!(jobs.list().is_empty() && jobs.inner.lock().unwrap().ended_early.is_empty(), "the usual order leaves nothing behind");
+    }
+
+    /// Stop all while a start is still opening its ports (a run takes its
+    /// number first): the job it inserts afterwards is stopped, not left running.
+    #[tokio::test]
+    async fn stop_all_stops_a_job_still_starting() {
+        let jobs = JobRegistry::new();
+        let starting = jobs.next_id();
+        jobs.stop_all_and_wait().await;
+        let handle = tokio::spawn(std::future::pending::<()>());
+        let abort = handle.abort_handle();
+        jobs.insert(JobInfo::new(starting, "experiment", "x"), handle);
+        assert!(jobs.list().is_empty(), "started after Stop all, listed anyway");
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while !abort.is_finished() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("and its task was stopped");
+        // A job numbered after Stop all runs as usual.
+        let later = jobs.next_id();
+        jobs.insert(JobInfo::new(later, "experiment", "y"), tokio::spawn(std::future::pending()));
+        assert_eq!(jobs.list().len(), 1);
+        jobs.stop_all();
     }
 
     #[test]

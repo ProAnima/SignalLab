@@ -9,15 +9,30 @@ mod routes;
 mod run;
 
 use std::future::Future;
-use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
+use axum::extract::ConnectInfo;
+use hyper::server::conn::http1;
+use hyper_util::rt::{TokioIo, TokioTimer};
 use signal_lab_engine::secrets::FileStore;
 use signal_lab_engine::{paths, Capture, Host, Mode, Service};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
+use tokio::task::JoinSet;
+use tower::ServiceExt;
 
 pub use config::{Cli, Command, Config, ConfigError, Options};
+
+/// A client must send a request's head within this (also how long an idle
+/// connection is kept); one that does not is disconnected — a page sends its
+/// head at once, a slow-loris client never finishes it.
+pub const HEAD_TIMEOUT: Duration = Duration::from_secs(30);
+/// Connections served at once; more are closed as they arrive. A browser
+/// keeps a handful; this bounds what a flood of idle ones can hold.
+pub const MAX_CONNECTIONS: usize = 1024;
+/// On stopping, how long requests under way get to finish.
+const DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The data folder must exist and take files before anyone relies on it.
 fn prepare_data_dir(config: &Config) -> std::io::Result<()> {
@@ -59,13 +74,59 @@ pub async fn serve(config: Config, listener: TcpListener, shutdown: impl Future<
         stopping,
     });
     let app = routes::router(state.clone());
-    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
-        .with_graceful_shutdown(async move {
-            shutdown.await;
-            tracing::info!("stopping: closing connections and jobs");
-            let _ = stop.send(true);
-        })
-        .await?;
+    let mut shutdown = std::pin::pin!(shutdown);
+    // Owned here: when serving ends, so does every connection still open.
+    let mut connections = JoinSet::new();
+    loop {
+        while connections.try_join_next().is_some() {}
+        let (stream, peer) = tokio::select! {
+            _ = &mut shutdown => break,
+            accepted = listener.accept() => match accepted {
+                Ok(accepted) => accepted,
+                // A client that gave up during the handshake, a moment without file handles: carry on.
+                Err(error) => {
+                    tracing::debug!(%error, "accept failed");
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                    continue;
+                }
+            },
+        };
+        if connections.len() >= MAX_CONNECTIONS {
+            tracing::warn!(client = %peer, max = MAX_CONNECTIONS, "too many connections: closed as it arrived");
+            drop(stream);
+            continue;
+        }
+        let _ = stream.set_nodelay(true);
+        let router = app.clone();
+        // What `ConnectInfo` reads: who is asking (the server logs who started a job).
+        let service = hyper::service::service_fn(move |mut request: hyper::Request<hyper::body::Incoming>| {
+            request.extensions_mut().insert(ConnectInfo(peer));
+            router.clone().oneshot(request)
+        });
+        let mut stopping = stop.subscribe();
+        connections.spawn(async move {
+            let connection = http1::Builder::new()
+                .timer(TokioTimer::new())
+                .header_read_timeout(HEAD_TIMEOUT)
+                .serve_connection(TokioIo::new(stream), service)
+                .with_upgrades();
+            let mut connection = std::pin::pin!(connection);
+            tokio::select! {
+                _ = connection.as_mut() => return,
+                _ = stopping.wait_for(|stop| *stop) => connection.as_mut().graceful_shutdown(),
+            }
+            let _ = connection.await;
+        });
+    }
+    tracing::info!("stopping: closing connections and jobs");
+    drop(listener);
+    let _ = stop.send(true);
+    // Requests under way get a moment to finish (a followed run says it was stopped);
+    // a client that would hold the server open past it is cut off.
+    if tokio::time::timeout(DRAIN_TIMEOUT, async { while connections.join_next().await.is_some() {} }).await.is_err() {
+        tracing::debug!(open = connections.len(), "connections cut off on stopping");
+        connections.abort_all();
+    }
     state.service.jobs().stop_all();
     Ok(())
 }

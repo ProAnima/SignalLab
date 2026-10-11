@@ -336,7 +336,8 @@ The editor checks the experiment as you edit, and once more when you press
 An experiment runs when, among other things:
 
 - it has a name, exactly one [[ui:exp.node.start]] and one
-  [[ui:exp.node.end]], and at most 64 nodes;
+  [[ui:exp.node.end]], and at most 64 nodes — the editor adds, pastes or
+  duplicates nothing past them, and says so;
 - every node is reachable from [[ui:exp.node.start]] and every required output has a wire;
 - the only cycles are the bodies of [[ui:exp.node.loop]] nodes leading back to
   them;

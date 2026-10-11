@@ -69,6 +69,7 @@ export async function generate() {
     const lines = [
       "---",
       `title: ${JSON.stringify(words.title)}`,
+      `description: ${JSON.stringify(words.intro.split(/(?<=[.。।؟!])\s*/)[0])}`,
       "# Written by scripts/docs.mjs from src/lib/locales — edit the dictionary, not this page.",
       "---",
       "",

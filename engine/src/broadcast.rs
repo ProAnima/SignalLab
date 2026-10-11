@@ -275,7 +275,15 @@ struct EmitStat {
     packets: u64,
     bytes: u64,
     errors: u64,
+    /// Sends this machine could not make (out of buffers or sockets): not the
+    /// network's answer, so not among `errors`. Left out while 0.
+    #[serde(skip_serializing_if = "is_zero")]
+    local: u64,
     pps: f64,
+}
+
+fn is_zero(n: &u64) -> bool {
+    *n == 0
 }
 
 /// Build the send socket and apply broadcast / multicast options. Left to
@@ -409,7 +417,13 @@ pub async fn start_beacon(
     let targets = resolve_targets(cfg.mode, &cfg.target, cfg.port).await?;
     let payload = cfg.payload.encode()?;
     let rate = cfg.rate;
-    if rate <= 0.0 {
+    // Finite and above 0, with a period a clock can hold and tick on: a rate so
+    // small its interval overflows `Duration`, or so large (or infinite) the
+    // interval rounds to zero, would panic the ticker instead of running.
+    let rate_ok = rate.is_finite()
+        && rate > 0.0
+        && Duration::try_from_secs_f64(1.0 / rate).is_ok_and(|period| !period.is_zero());
+    if !rate_ok {
         return Err(EngineError::new("broadcast.rate_invalid"));
     }
     let aggregate = rate * targets.len() as f64;
@@ -439,6 +453,7 @@ pub async fn start_beacon(
         let packets = Arc::new(AtomicU64::new(0));
         let bytes = Arc::new(AtomicU64::new(0));
         let errors = Arc::new(AtomicU64::new(0));
+        let local_failures = Arc::new(AtomicU64::new(0));
         let rounds = Arc::new(AtomicU64::new(0));
         let gate = Gate::new(50);
         // Stopping the beacon must stop its reporter; the guard aborts it when
@@ -446,11 +461,12 @@ pub async fn start_beacon(
         let mut guard = TaskGuard::new();
 
         let reporter = {
-            let (host_r, p, b, e, r, fanout) = (
+            let (host_r, p, b, e, l, r, fanout) = (
                 host_cl.clone(),
                 packets.clone(),
                 bytes.clone(),
                 errors.clone(),
+                local_failures.clone(),
                 rounds.clone(),
                 targets.len(),
             );
@@ -471,6 +487,7 @@ pub async fn start_beacon(
                             packets: now,
                             bytes: b.load(Ordering::Relaxed),
                             errors: e.load(Ordering::Relaxed),
+                            local: l.load(Ordering::Relaxed),
                             pps,
                         },
                     );
@@ -515,10 +532,16 @@ pub async fn start_beacon(
                         }
                     }
                     Err(e) => {
-                        errors.fetch_add(1, Ordering::Relaxed);
+                        // Out of buffers at a high rate is this machine's limit,
+                        // not the network refusing: counted apart.
+                        if transport::out_of_resources(&e) {
+                            local_failures.fetch_add(1, Ordering::Relaxed);
+                        } else {
+                            errors.fetch_add(1, Ordering::Relaxed);
+                        }
                         // A persistent send error (no route, blocked broadcast)
                         // would otherwise spin silently.
-                        if errors.load(Ordering::Relaxed) > 32 && packets.load(Ordering::Relaxed) == 0
+                        if errors.load(Ordering::Relaxed) + local_failures.load(Ordering::Relaxed) > 32 && packets.load(Ordering::Relaxed) == 0
                         {
                             error = Some(transport::of_io(&e).error(&t.to_string()).because(e));
                         }
@@ -545,6 +568,7 @@ pub async fn start_beacon(
                 packets: packets.load(Ordering::Relaxed),
                 bytes: bytes.load(Ordering::Relaxed),
                 errors: errors.load(Ordering::Relaxed),
+                local: local_failures.load(Ordering::Relaxed),
                 pps: 0.0,
             },
         );

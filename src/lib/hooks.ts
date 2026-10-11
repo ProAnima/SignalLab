@@ -64,6 +64,33 @@ export function useSeries(capacity = 240) {
 }
 
 /** A capped rolling list of items (newest last). */
+/**
+ * Only the rows a scrolled box shows, for lists that can run to tens of
+ * thousands (a full port scan): rows of one fixed height, the rest stood in
+ * for by padding, so scrolling and the scroll bar stay true. Hidden screens
+ * measure 0 high and draw a screenful until they are shown.
+ */
+export function useWindowedRows(rowHeight: number, count: number, overscan = 12) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [top, setTop] = useState(0);
+  const [height, setHeight] = useState(0);
+  useEffect(() => {
+    const box = ref.current;
+    if (!box) return;
+    const measure = () => setHeight(box.clientHeight);
+    const scrolled = () => setTop(box.scrollTop);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(box);
+    box.addEventListener("scroll", scrolled, { passive: true });
+    return () => { observer.disconnect(); box.removeEventListener("scroll", scrolled); };
+  }, []);
+  const shown = Math.ceil((height || 600) / rowHeight) + overscan * 2;
+  const start = Math.max(0, Math.min(count - 1, Math.floor(top / rowHeight) - overscan));
+  const end = Math.min(count, Math.max(0, start) + shown);
+  return { ref, start: Math.max(0, start), end, before: Math.max(0, start) * rowHeight, after: Math.max(0, count - end) * rowHeight };
+}
+
 export function useRollingList<T>(capacity = 300) {
   const [items, setItems] = useState<T[]>([]);
   const push = useCallback(

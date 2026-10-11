@@ -1,6 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { api } from "../lib/api";
-import { logText, useStore, type LogEntry } from "../lib/store";
+import { logText, useLog, useStore, type LogEntry } from "../lib/store";
 import { translator, useI18n } from "../lib/i18n";
 import { usePersistentState } from "../lib/hooks";
 import { fmtBytes } from "../lib/format";
@@ -25,7 +25,8 @@ function consoleText(entries: LogEntry[], where: { host: HostInfo | null; dataDi
  */
 export function FeedbackDialog({ onClose }: { onClose: () => void }) {
   const { t, lang } = useI18n();
-  const { info, host, jobs, log, connection, pushLog } = useStore();
+  const { info, host, jobs, connection, pushLog } = useStore();
+  const { log } = useLog();
   const id = useId();
   const dialog = useRef<HTMLDialogElement>(null);
   const picker = useRef<HTMLInputElement>(null);

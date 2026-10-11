@@ -204,10 +204,26 @@ struct FileQuery {
     path: String,
 }
 
+/// Whether `path` is inside `root` by its words alone: under it, with no `..`
+/// anywhere. Decided before anything on disk is touched — resolving a path
+/// opens it, and a share on another machine (`\\host\share`), a device or a
+/// named pipe must never be opened just because a request named it.
+pub(crate) fn named_inside(path: &std::path::Path, root: &std::path::Path) -> bool {
+    !path.components().any(|part| matches!(part, std::path::Component::ParentDir)) && path.starts_with(root)
+}
+
 /// A file the engine wrote — only from the data folder, never anything else on the machine.
 async fn download(Query(query): Query<FileQuery>) -> Response {
     let outside = || failure(StatusCode::NOT_FOUND, EngineError::new("file.not_found").with("path", &query.path));
-    let (Ok(root), Ok(file)) = (std::fs::canonicalize(paths::data_dir()), std::fs::canonicalize(&query.path)) else {
+    let data = paths::data_dir();
+    let Ok(root) = std::fs::canonicalize(&data) else { return outside() };
+    // The engine hands out paths under the data folder as it was given, or as resolved.
+    let requested = std::path::Path::new(&query.path);
+    if !named_inside(requested, &data) && !named_inside(requested, &root) {
+        return outside();
+    }
+    // Resolved too, so a link inside the folder cannot lead out of it.
+    let Ok(file) = std::fs::canonicalize(requested) else {
         return outside();
     };
     let Ok(meta) = std::fs::metadata(&file) else { return outside() };

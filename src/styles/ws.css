@@ -2,11 +2,14 @@
 
 /* Newest last, like a chat: the list follows the end while it is scrolled there. */
 .ws-list { flex: 1; min-height: 0; max-height: 520px; margin: 0 -6px; padding: 0 6px; }
-/* A row is a button: a message is picked with the keyboard as with the mouse. */
+/* A row is a button: a message is picked with the keyboard as with the mouse.
+   One height (ROW_HEIGHT in WsView), so the list draws only the rows in view. */
 .ws-row {
   display: grid;
   grid-template-columns: 86px 14px minmax(0, 1fr) auto;
-  align-items: baseline;
+  align-items: center;
+  height: 26px;
+  overflow: hidden;
   gap: 8px;
   width: 100%;
   padding: 4px 8px;

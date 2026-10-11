@@ -12,6 +12,13 @@ use reqwest::header::HeaderValue;
 use reqwest::Url;
 use serde::Serialize;
 
+/// Cookies a jar keeps at most — RFC 6265's 3000 (section 6.1), as browsers
+/// keep about that many. A server setting a new one with every answer would
+/// otherwise grow the jar for as long as a burst runs, and every request would
+/// carry all of them; past the limit a new cookie is not kept (one the jar
+/// holds is still updated or removed).
+pub const MAX_COOKIES: usize = 3000;
+
 #[derive(Default)]
 pub struct CookieJar(Mutex<cookie_store::CookieStore>);
 
@@ -79,13 +86,33 @@ impl CookieJar {
     }
 }
 
+/// Takes the expired cookies out of `store`: one expired by its server stays
+/// in it, and would count against `MAX_COOKIES` forever.
+fn purge_expired(store: &mut cookie_store::CookieStore) {
+    let expired: Vec<(String, String, String)> = store
+        .iter_any()
+        .filter(|cookie| cookie.is_expired())
+        .map(|cookie| (String::from(&cookie.domain), cookie.path.as_ref().to_string(), cookie.name().to_string()))
+        .collect();
+    for (domain, path, name) in expired {
+        store.remove(&domain, &path, &name);
+    }
+}
+
 impl reqwest::cookie::CookieStore for CookieJar {
     fn set_cookies(&self, cookie_headers: &mut dyn Iterator<Item = &HeaderValue>, url: &Url) {
-        let cookies: Vec<cookie_store::RawCookie<'static>> = cookie_headers
-            .filter_map(|value| value.to_str().ok())
-            .filter_map(|text| cookie_store::RawCookie::parse(text.to_string()).ok())
-            .collect();
-        self.0.lock().unwrap().store_response_cookies(cookies.into_iter(), url);
+        let mut store = self.0.lock().unwrap();
+        for raw in cookie_headers.filter_map(|value| value.to_str().ok()).filter_map(|text| cookie_store::RawCookie::parse(text.to_string()).ok()) {
+            let Ok(cookie) = cookie_store::Cookie::try_from_raw_cookie(&raw, url) else { continue };
+            let known = cookie.domain.as_cow().is_some_and(|domain| store.contains_any(&domain, cookie.path.as_ref(), cookie.name()));
+            if !known && store.iter_any().count() >= MAX_COOKIES {
+                purge_expired(&mut store);
+                if store.iter_any().count() >= MAX_COOKIES {
+                    continue;
+                }
+            }
+            let _ = store.insert(cookie.into_owned(), url);
+        }
     }
 
     fn cookies(&self, url: &Url) -> Option<HeaderValue> {
@@ -130,5 +157,22 @@ mod tests {
         assert!(listed.iter().find(|cookie| cookie.name == "remember").unwrap().expires.is_some());
         jar.clear();
         assert!(jar.list().is_empty() && jar.header_for("http://api.lab.test/").is_none());
+    }
+
+    #[test]
+    fn a_server_that_sets_a_new_cookie_with_every_answer_fills_the_jar_only_so_far() {
+        let jar = CookieJar::new();
+        for n in 0..MAX_COOKIES + 500 {
+            set(&jar, "http://api.lab.test/", &[&format!("c{n}=1; Path=/")]);
+        }
+        assert_eq!(jar.list().len(), MAX_COOKIES, "the jar stops at the limit");
+        // One it holds is still updated and removed; and a removal makes room.
+        set(&jar, "http://api.lab.test/", &["c0=2; Path=/", "c1=; Max-Age=0; Path=/"]);
+        let listed = jar.list();
+        assert_eq!(listed.iter().find(|cookie| cookie.name == "c0").map(|cookie| cookie.value.as_str()), Some("2"));
+        assert!(!listed.iter().any(|cookie| cookie.name == "c1"));
+        set(&jar, "http://api.lab.test/", &["late=1; Path=/"]);
+        assert!(jar.list().iter().any(|cookie| cookie.name == "late"), "the removed one's place is taken");
+        assert_eq!(jar.list().len(), MAX_COOKIES);
     }
 }

@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { StoreProvider, useStore, logText } from "./lib/store";
+import { StoreProvider, useLog, useStore, logText } from "./lib/store";
 import { I18nProvider, useI18n, type TKey } from "./lib/i18n";
 import { LanguageMenu } from "./components/LanguageMenu";
 import { Brand } from "./components/Brand";
@@ -71,8 +71,82 @@ function useCaptureStats(): CaptureStats | null {
   return stats;
 }
 
+/**
+ * The Inspector's tab, with its live count. Its own component: the count
+ * changes with every batch (eight a second while capture is on), and only the
+ * tab is drawn again for it — not the shell and every screen inside it.
+ */
+function InspectorTab({ on, onShow }: { on: boolean; onShow: () => void }) {
+  const { t } = useI18n();
+  const capture = useCaptureStats();
+  return (
+    <button role="tab" className={`dock-tab ${on ? "on" : ""}`} aria-selected={on} aria-controls="dock-inspector"
+      data-tip={capture?.enabled ? t("dock.inspectorLive", { n: capture.total }) : t("dock.inspectorHint")} onClick={onShow}>
+      <span className={`rec-dot ${capture?.enabled ? "live" : ""}`} aria-hidden="true" />
+      {t("dock.inspector")}
+      {!!capture?.total && <span className="dock-count">{fmtNum(capture.total)}</span>}
+    </button>
+  );
+}
+
+/** The console's lines: drawn again for a line, not the shell (lines come batched, ≤ 10 draws a second). */
+function ConsoleLines({ hidden, follow }: { hidden: boolean; follow: boolean }) {
+  const { t } = useI18n();
+  const { log } = useLog();
+  const end = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!follow) return;
+    // Scroll the log's own container, not the page — scrollIntoView on an
+    // ancestor-scrolling element makes the whole layout jump.
+    const list = end.current?.parentElement;
+    if (list) list.scrollTop = list.scrollHeight;
+  }, [log, follow]);
+  return (
+    <div id="dock-console" role="tabpanel" className="log-list" hidden={hidden}>
+      {log.map((l) => (
+        <div className={"log-line " + l.level} key={l.id}>
+          <span className="t">{fmtTime(l.ts)}</span>
+          <span className="tag">{l.tag}</span>
+          <span className="msg">{logText(l, t)}</span>
+        </div>
+      ))}
+      <div ref={end} />
+    </div>
+  );
+}
+
+/**
+ * Collapsed, the console still says what the last action did; with no job
+ * running, an open console (or one with nothing said yet) says so.
+ */
+function ConsoleLast({ open, idle, onOpen }: { open: boolean; idle: boolean; onOpen: () => void }) {
+  const { t } = useI18n();
+  const { log } = useLog();
+  const lastLine = log[log.length - 1];
+  return <>
+    {idle && (open || !lastLine) && (
+      <span style={{ color: "var(--text-faint)", fontFamily: "var(--mono)", fontSize: 11 }}>
+        {t("console.empty")}
+      </span>
+    )}
+    {!open && lastLine ? (
+      <button className={"console-last " + lastLine.level} data-tip={t("console.expand")} onClick={onOpen}>
+        <span className="t">{fmtTime(lastLine.ts).slice(0, 8)}</span>
+        <span className="tag">{lastLine.tag}</span>
+        <span className="msg">{logText(lastLine, t)}</span>
+      </button>
+    ) : <div className="spacer" />}
+  </>;
+}
+
+function ConsoleClear() {
+  const { t } = useI18n();
+  const { clearLog } = useLog();
+  return <button className="ghost sm" onClick={clearLog}>{t("common.clear")}</button>;
+}
+
 function Shell() {
-  const { host, info, connection, jobs, stopJob, stopAll, log, clearLog, pushLog } = useStore();
+  const { host, info, connection, jobs, stopJob, stopAll, pushLog } = useStore();
   // In a browser: whether this server asks for a token, so Sign out makes sense.
   const [signedIn, setSignedIn] = useState(false);
   useEffect(() => { serverNeedsSignIn().then(setSignedIn); }, []);
@@ -150,15 +224,12 @@ function Shell() {
     setRevealEmulator({ id, at: Date.now() });
     go("emulators");
   };
-  const lastLine = log[log.length - 1];
-  const logEndRef = useRef<HTMLDivElement>(null);
   const [autoscroll, setAutoscroll] = useState(true);
   // Open or not, and how tall, as it was left.
   const [consoleOpen, setConsoleOpen] = usePersistentState("signal-lab.console.open", false);
   const [dockTab, setDockTab] = usePersistentState<DockTab>("signal-lab.dock.tab", "console", (value) => value === "console" || value === "inspector");
   // Mounted once first shown, then kept: its list and selection survive closing the panel.
   const [inspectorShown, setInspectorShown] = useState(consoleOpen && dockTab === "inspector");
-  const capture = useCaptureStats();
   // The height to go back to after the panel was made as tall as the window.
   const [restoreHeight, setRestoreHeight] = useState<number | null>(null);
   const showDock = (tab: DockTab) => {
@@ -191,15 +262,6 @@ function Shell() {
     window.addEventListener("keydown", help);
     return () => window.removeEventListener("keydown", help);
   }, []);
-
-  useEffect(() => {
-    if (!autoscroll || !consoleOpen) return;
-    // Scroll the log's own container, not the page — scrollIntoView on an
-    // ancestor-scrolling element makes the whole layout jump.
-    const end = logEndRef.current;
-    const list = end?.parentElement;
-    if (list) list.scrollTop = list.scrollHeight;
-  }, [log, autoscroll, consoleOpen]);
 
   return (
     <div className={"app" + (consoleOpen ? "" : " console-collapsed") + (compactNav ? " sidebar-compact" : "") + (view === "experiment" ? " experiment-active" : "") + (focusMode && view === "experiment" ? " experiment-focus" : "")}
@@ -295,12 +357,7 @@ function Shell() {
           <div className="dock-tabs" role="tablist" aria-label={t("dock.tabs")}>
             <button role="tab" className={`dock-tab ${dockTab === "console" ? "on" : ""}`} aria-selected={dockTab === "console"} aria-controls="dock-console"
               data-tip={t("dock.consoleHint")} onClick={() => showDock("console")}>{t("console.title")}</button>
-            <button role="tab" className={`dock-tab ${dockTab === "inspector" ? "on" : ""}`} aria-selected={dockTab === "inspector"} aria-controls="dock-inspector"
-              data-tip={capture?.enabled ? t("dock.inspectorLive", { n: capture.total }) : t("dock.inspectorHint")} onClick={() => showDock("inspector")}>
-              <span className={`rec-dot ${capture?.enabled ? "live" : ""}`} aria-hidden="true" />
-              {t("dock.inspector")}
-              {!!capture?.total && <span className="dock-count">{fmtNum(capture.total)}</span>}
-            </button>
+            <InspectorTab on={dockTab === "inspector"} onShow={() => showDock("inspector")} />
           </div>
           <div className="jobs-strip">
             {jobs.map((j) => (
@@ -312,20 +369,8 @@ function Shell() {
                 </button>
               </div>
             ))}
-            {jobs.length === 0 && (consoleOpen || !lastLine) && (
-              <span style={{ color: "var(--text-faint)", fontFamily: "var(--mono)", fontSize: 11 }}>
-                {t("console.empty")}
-              </span>
-            )}
           </div>
-          {/* Collapsed, the console still says what the last action did. */}
-          {!consoleOpen && lastLine ? (
-            <button className={"console-last " + lastLine.level} data-tip={t("console.expand")} onClick={() => setConsoleOpen(true)}>
-              <span className="t">{fmtTime(lastLine.ts).slice(0, 8)}</span>
-              <span className="tag">{lastLine.tag}</span>
-              <span className="msg">{logText(lastLine, t)}</span>
-            </button>
-          ) : <div className="spacer" />}
+          <ConsoleLast open={consoleOpen} idle={jobs.length === 0} onOpen={() => setConsoleOpen(true)} />
           {dockTab === "console" && <>
             <label className="checkbox" style={{ fontSize: 11 }} data-tip={t("console.autoscrollHint")}>
               <input
@@ -335,7 +380,7 @@ function Shell() {
               />
               {t("console.autoscroll")}
             </label>
-            <button className="ghost sm" onClick={clearLog}>{t("common.clear")}</button>
+            <ConsoleClear />
           </>}
           <button className="ghost sm dock-maximise" aria-pressed={restoreHeight !== null} onClick={toggleMaximised}
             aria-label={restoreHeight !== null ? t("dock.restore") : t("dock.maximise")} data-tip={restoreHeight !== null ? t("dock.restore") : t("dock.maximise")}>
@@ -344,16 +389,7 @@ function Shell() {
         {inspectorShown && <div id="dock-inspector" role="tabpanel" className="dock-body" hidden={!consoleOpen || dockTab !== "inspector"}>
           <InspectView reveal={revealFrame} />
         </div>}
-        <div id="dock-console" role="tabpanel" className="log-list" hidden={dockTab !== "console"}>
-          {log.map((l) => (
-            <div className={"log-line " + l.level} key={l.id}>
-              <span className="t">{fmtTime(l.ts)}</span>
-              <span className="tag">{l.tag}</span>
-              <span className="msg">{logText(l, t)}</span>
-            </div>
-          ))}
-          <div ref={logEndRef} />
-        </div>
+        <ConsoleLines hidden={dockTab !== "console"} follow={autoscroll && consoleOpen} />
       </section>
 
       <Palette />

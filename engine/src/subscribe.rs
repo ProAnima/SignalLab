@@ -104,14 +104,14 @@ impl Subscription {
             will: None,
             subscribe: vec![],
         };
-        let (mut stream, broker) = mqtt_dial::dial(&config).await.map_err(|failure| mqtt_error(failure, &broker))?;
+        let (mut stream, broker, after) = mqtt_dial::dial(&config).await.map_err(|failure| mqtt_error(failure, &broker))?;
         let peer: SocketAddr = stream.peer_addr().unwrap_or_else(|_| SocketAddr::from(([0, 0, 0, 0], port)));
         let local = stream.local_addr().map(|address| address.to_string()).unwrap_or_default();
         let lost = |error: std::io::Error| EngineError::new("wait.receive_failed").with("target", &broker).because(error).in_field(Field::new("broker"));
         stream.write_all(&encode_subscribe(1, &[(filter.to_string(), 0)])).await.map_err(lost)?;
 
         // The answer to the SUBSCRIBE; anything else that arrives first is ignored.
-        let mut buffer = Vec::with_capacity(256);
+        let mut buffer = after;
         let mut chunk = [0u8; 4096];
         let codes = tokio::time::timeout(mqtt_dial::HANDSHAKE_TIMEOUT, async {
             loop {

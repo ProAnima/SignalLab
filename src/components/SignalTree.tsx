@@ -1,15 +1,24 @@
-import { useEffect, useMemo, useState, type DragEvent, type KeyboardEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent } from "react";
 import type { Signal } from "../lib/api";
 import { useStore } from "../lib/store";
 import { useT } from "../lib/i18n";
 import { usePersistentState } from "../lib/hooks";
-import { allFolders, ancestors, libraryTree, moveFolder, moveSignal, removeFolder, renameFolder, within, type FolderNode } from "../lib/library";
+import { allFolders, ancestors, libraryRows, libraryTree, moveFolder, moveSignal, removeFolder, renameFolder, within, type FolderNode, type LibraryRow } from "../lib/library";
 import { signalTarget, transportKey } from "../lib/signals";
 
 /** What is being dragged in the tree. */
 type Dragged = { kind: "signal" | "folder"; id: string };
 const DRAG_TYPE = "application/x-signal-lab-tree";
 const isPaths = (value: unknown) => Array.isArray(value) && value.every((item) => typeof item === "string");
+/**
+ * Rows of one height each, margins included (library.css: `.sig-rows`): a
+ * library of ten thousand draws only what its box shows, as a scan's table does.
+ */
+const ROW_HEIGHT = { folder: 30, signal: 57 } as const;
+/** Pixels drawn above and below the box, so a quick scroll does not show blank space. */
+const OVERSCAN = 600;
+/** A line to bring into view, and what to do once it is drawn. */
+type Bring = { match: (row: LibraryRow) => boolean; then?: () => void };
 
 /**
  * The signal library as folders: open and close them (kept for next time),
@@ -20,7 +29,7 @@ const isPaths = (value: unknown) => Array.isArray(value) && value.every((item) =
  * (the store's `libraryError`), nothing moves, is renamed or removed: the file
  * is being fixed, and only a reload lifts that.
  */
-export function SignalTree({ signals, searching, selectedId, onSelect, onFire, folder, onFolder, reveal, onNewFolder }: {
+export function SignalTree({ signals, searching, selectedId, onSelect, onFire, folder, onFolder, reveal, onNewFolder, renameRequest }: {
   /** The signals to show (already filtered by the search). */
   signals: Signal[];
   searching: boolean;
@@ -34,6 +43,8 @@ export function SignalTree({ signals, searching, selectedId, onSelect, onFire, f
   reveal?: string | null;
   /** Make a folder inside `folder`. */
   onNewFolder: () => void;
+  /** A folder to rename now (one just made): brought into view, its name being edited. */
+  renameRequest?: { path: string; at: number } | null;
 }) {
   const t = useT();
   const { library, folders, setLibraryState, pushLog, libraryError } = useStore();
@@ -45,16 +56,66 @@ export function SignalTree({ signals, searching, selectedId, onSelect, onFire, f
   const [dropAt, setDropAt] = useState<string | null>(null);
   const tree = useMemo(() => libraryTree(signals, searching ? [] : folders), [signals, folders, searching]);
 
+  const isOpen = (path: string) => searching || !collapsed.includes(path);
+  // The tree as lines, and where each starts: only those in the box's view are drawn.
+  const rows = useMemo(() => {
+    const closed = new Set(collapsed);
+    return libraryRows(tree, (path) => searching || !closed.has(path));
+  }, [tree, collapsed, searching]);
+  const offsets = useMemo(() => {
+    const at = new Array<number>(rows.length + 1);
+    at[0] = 0;
+    rows.forEach((row, i) => { at[i + 1] = at[i] + ROW_HEIGHT[row.kind]; });
+    return at;
+  }, [rows]);
+  const list = useRef<HTMLDivElement>(null);
+  const [view, setView] = useState({ top: 0, height: 0 });
+  useEffect(() => {
+    const box = list.current;
+    if (!box) return;
+    const measure = () => setView({ top: box.scrollTop, height: box.clientHeight });
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(box);
+    box.addEventListener("scroll", measure, { passive: true });
+    return () => { observer.disconnect(); box.removeEventListener("scroll", measure); };
+  }, []);
+  // A hidden screen measures 0 high: it draws a screenful until it is shown.
+  const from = firstAt(offsets, view.top - OVERSCAN);
+  const to = Math.min(rows.length, firstAt(offsets, view.top + (view.height || 800) + OVERSCAN) + 1);
+
+  // A line to scroll into view once the rows are what they will be (it may not be drawn yet).
+  const [bring, setBring] = useState<Bring | null>(null);
+  useLayoutEffect(() => {
+    if (!bring) return;
+    setBring(null);
+    const index = rows.findIndex(bring.match);
+    const box = list.current;
+    if (index < 0 || !box) return;
+    const top = offsets[index], bottom = offsets[index + 1];
+    if (top < box.scrollTop) box.scrollTop = top;
+    else if (bottom > box.scrollTop + box.clientHeight) box.scrollTop = bottom - box.clientHeight;
+    setView({ top: box.scrollTop, height: box.clientHeight });
+    if (bring.then) requestAnimationFrame(bring.then);
+  }, [bring, rows, offsets]);
+
   // A signal brought from elsewhere (a sender's chip) is shown: its folders open.
   useEffect(() => {
     const signal = reveal ? library.find((item) => item.id === reveal) : null;
     if (!signal) return;
     const open = ancestors(signal.group);
     setCollapsed((prior) => prior.filter((path) => !open.includes(path)));
-    requestAnimationFrame(() => document.querySelector(`[data-signal="${CSS.escape(signal.id)}"]`)?.scrollIntoView({ block: "nearest" }));
+    setBring({ match: (row) => row.kind === "signal" && row.signal.id === signal.id });
   }, [reveal]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const isOpen = (path: string) => searching || !collapsed.includes(path);
+  // A folder just made: shown, and its name edited straight away, as a file manager does.
+  useEffect(() => {
+    if (!renameRequest) return;
+    const open = ancestors(renameRequest.path).slice(0, -1);
+    setCollapsed((prior) => prior.filter((path) => !open.includes(path)));
+    setBring({ match: (row) => row.kind === "folder" && row.node.path === renameRequest.path, then: () => setRenaming(renameRequest.path) });
+  }, [renameRequest]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const toggle = (path: string) => setCollapsed((prior) => prior.includes(path) ? prior.filter((item) => item !== path) : [...prior, path]);
   const state = { signals: library, folders };
 
@@ -120,8 +181,7 @@ export function SignalTree({ signals, searching, selectedId, onSelect, onFire, f
 
   const renderFolder = (node: FolderNode, depth: number) => {
     const open = isOpen(node.path);
-    return <div key={node.path} className="sig-folder-block" role="group" aria-label={node.name}>
-      <div className={`sig-folder-row ${folder === node.path ? "current" : ""} ${dropAt === node.path ? "drop" : ""}`} style={indent(depth)}
+    return <div key={`folder:${node.path}`} className={`sig-folder-row ${folder === node.path ? "current" : ""} ${dropAt === node.path ? "drop" : ""}`} style={indent(depth)}
         onDragOver={(event) => over(event, node.path)} onDragLeave={() => setDropAt((at) => at === node.path ? null : at)} onDrop={(event) => drop(event, node.path)}>
         {renaming === node.path
           ? <input className="sig-folder-rename" autoFocus defaultValue={node.name} aria-label={t("sig.folderName")}
@@ -141,9 +201,7 @@ export function SignalTree({ signals, searching, selectedId, onSelect, onFire, f
             onClick={() => confirming === node.path ? remove(node.path) : setConfirming(node.path)} onBlur={() => setConfirming((at) => at === node.path ? null : at)}>
             {confirming === node.path ? t("sig.confirmRemoveFolder") : "×"}</button>
         </span>}
-      </div>
-      {open && <>{node.folders.map((child) => renderFolder(child, depth + 1))}{node.signals.map((signal) => renderSignal(signal, depth + 1))}</>}
-    </div>;
+      </div>;
   };
 
   const everyFolder = allFolders(library, folders);
@@ -154,13 +212,24 @@ export function SignalTree({ signals, searching, selectedId, onSelect, onFire, f
       <button className="ghost xs" data-tip={t("sig.newFolderHint")} disabled={locked} onClick={onNewFolder}>＋ {t("sig.newFolder")}</button>
       {folder && <button className="link-btn sig-current-folder" data-tip={t("sig.currentFolderHint")} onClick={() => onFolder("")}>{t("sig.inFolder", { folder: folder.split("/").join(" / ") })} ×</button>}
     </div>
-    <div className={`sig-list scroll-y ${dropAt === "" ? "drop" : ""}`}
+    <div ref={list} className={`sig-list sig-rows scroll-y ${dropAt === "" ? "drop" : ""}`}
       onDragOver={(event) => { if (!dragged) return; event.preventDefault(); setDropAt(""); }} onDragLeave={(event) => { if (event.target === event.currentTarget) setDropAt(null); }}
       onDrop={(event) => drop(event, "")}>
-      {tree.folders.map((node) => renderFolder(node, 0))}
-      {tree.signals.map((signal) => renderSignal(signal, 0))}
+      <div style={{ height: offsets[from] }} aria-hidden="true" />
+      {rows.slice(from, to).map((row) => row.kind === "folder" ? renderFolder(row.node, row.depth) : renderSignal(row.signal, row.depth))}
+      <div style={{ height: offsets[rows.length] - offsets[to] }} aria-hidden="true" />
     </div>
   </>;
+}
+
+/** The index of the line at `y`: `offsets` are where each line starts, ascending, and where the last ends. */
+function firstAt(offsets: number[], y: number): number {
+  let low = 0, high = Math.max(0, offsets.length - 2);
+  while (low < high) {
+    const mid = (low + high) >> 1;
+    if (offsets[mid + 1] <= y) low = mid + 1; else high = mid;
+  }
+  return low;
 }
 
 /** What another window or a test dragged, from the transfer data. */

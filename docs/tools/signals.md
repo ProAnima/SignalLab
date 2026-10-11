@@ -258,6 +258,12 @@ the full path.
   it. After editing it, or replacing it with one from another machine, press
   [[ui:sig.reload]]. Reloading reads the file again and drops a change that was
   still waiting to be written.
+- **Changed somewhere else.** Each save says which file it read. If the file
+  changed since — you edited it, or another page of the same server saved its
+  own change — the save is refused, the file keeps that change, and the tree
+  shows the error and stops writing, as for a broken file below. Press
+  [[ui:sig.reload]] to see what is there now; the change this page could not
+  save is gone with the reload, so make it again.
 - **Never replaced while it is broken.** If the file is not valid JSON, or not
   a signal library, the tree shows the error with the file's path, line and
   column, and the console says the same. The file is left as it is, and
@@ -272,8 +278,8 @@ the full path.
   something unreadable and the app then saves a change, the save is refused
   with the same error, the file is left as you made it, and the app stops
   writing until you fix it and press [[ui:sig.reload]]. A file you edited and
-  left valid is replaced by the app's list at its next save, as above: reload
-  first.
+  left valid is not replaced either: the next save is refused as changed
+  somewhere else, and [[ui:sig.reload]] reads your edit.
 
 A short example of the file:
 

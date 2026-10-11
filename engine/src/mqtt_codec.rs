@@ -586,6 +586,48 @@ mod tests {
         }
     }
 
+    /// The specification's own vectors: Table 2.4's Remaining Length bounds,
+    /// 1.5.3's string example (U+A9B4 … "A𪛔"), and 3.1.2.11's CONNECT flags
+    /// and keep-alive example (0xCE, 10 s).
+    #[test]
+    fn the_specification_s_vectors_byte_for_byte() {
+        for (length, bytes) in [
+            (0usize, &[0x00][..]),
+            (127, &[0x7f]),
+            (128, &[0x80, 0x01]),
+            (16_383, &[0xff, 0x7f]),
+            (16_384, &[0x80, 0x80, 0x01]),
+            (2_097_151, &[0xff, 0xff, 0x7f]),
+            (2_097_152, &[0x80, 0x80, 0x80, 0x01]),
+            (MAX_REMAINING, &[0xff, 0xff, 0xff, 0x7f]),
+        ] {
+            let mut out = Vec::new();
+            put_remaining(&mut out, length);
+            assert_eq!(out, bytes, "{length}");
+            let mut packet = vec![PINGRESP << 4];
+            packet.extend_from_slice(bytes);
+            let header = fixed_header(&packet, MAX_REMAINING).unwrap();
+            assert!(header.is_none() || length == 0, "{length}: waits for the body");
+        }
+        // A fifth length byte is malformed (2.2.3).
+        assert!(fixed_header(&[0x30, 0xff, 0xff, 0xff, 0xff, 0x01, 0x00], MAX_REMAINING).is_err());
+
+        let mut out = Vec::new();
+        put_str(&mut out, "A\u{2A6D4}");
+        assert_eq!(out, [0x00, 0x05, 0x41, 0xf0, 0xaa, 0x9b, 0x94]);
+
+        let will = Will { topic: "w".into(), payload: "x".into(), qos: 1, retain: false };
+        let bytes = encode_connect(&ConnectOpts { client_id: "c", username: Some("u"), password: Some("p"), keep_alive_s: 10, clean_session: true, will: Some(&will) });
+        assert_eq!(&bytes[2..12], &[0x00, 0x04, b'M', b'Q', b'T', b'T', 0x04, 0xce, 0x00, 0x0a]);
+        // The payload's order (3.1.3): client id, will topic, will message, user name, password.
+        assert_eq!(&bytes[12..], &[0, 1, b'c', 0, 1, b'w', 0, 1, b'x', 0, 1, b'u', 0, 1, b'p']);
+        // 3.3.1: PUBLISH QoS 1, DUP, RETAIN is 0x3b; 3.8.1 SUBSCRIBE 0x82; 3.10.1 UNSUBSCRIBE 0xa2; 3.6.1 PUBREL 0x62.
+        assert_eq!(encode_publish("a/b", b"", 1, true, 10, true)[..2], [0x3b, 0x07]);
+        assert_eq!(encode_subscribe(10, &[("a/b".into(), 1), ("c/d".into(), 2)]), [0x82, 0x0e, 0x00, 0x0a, 0x00, 0x03, b'a', b'/', b'b', 0x01, 0x00, 0x03, b'c', b'/', b'd', 0x02]);
+        assert_eq!(encode_unsubscribe(10, &["a/b".into()]), [0xa2, 0x07, 0x00, 0x0a, 0x00, 0x03, b'a', b'/', b'b']);
+        assert_eq!((encode_pubrel(10), encode_pingreq(), encode_disconnect()), (vec![0x62, 0x02, 0x00, 0x0a], vec![0xc0, 0x00], vec![0xe0, 0x00]));
+    }
+
     #[test]
     fn connect_matches_the_wire_format() {
         let bytes = encode_connect(&ConnectOpts {

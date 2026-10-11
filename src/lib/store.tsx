@@ -1,9 +1,10 @@
 import {
-  createContext, useCallback, useContext, useEffect, useRef, useState,
+  createContext, useCallback, useContext, useEffect, useMemo, useRef, useState,
   type ReactNode,
 } from "react";
 import { localizeSeed, mqttConnectionFor, type LibraryState } from "./library";
 import { onFlush } from "./flush";
+import { appendLines, batcher } from "./consoleLog";
 import {
   api, on, EV,
   type AppInfo, type JobInfo, type JobEnded, type HostInfo, type MqttBatch, type Signal,
@@ -77,10 +78,9 @@ interface Store {
   jobGone: (job: JobInfo | null) => boolean;
   stopJob: (id: number) => void;
   stopAll: () => void;
-  log: LogEntry[];
+  /** Add a console line; lines are drawn together, at most every `LOG_FLUSH_MS` (`useLog` reads them). */
   pushLog: PushLog;
   pushError: PushError;
-  clearLog: () => void;
 
   /** The signal library, in file order. */
   library: Signal[];
@@ -103,12 +103,24 @@ interface Store {
   fire: (signal: Signal) => Promise<void>;
   /** id -> when it last went out, this session only. */
   lastFired: Record<string, number>;
+}
 
-  /**
-   * What the broker holds, as a live index. Kept here rather than in the MQTT
-   * view: a retained value arrives once, on subscribe, so a tree that only
-   * exists while its tab is open would lose the broker's state on a click.
-   */
+/**
+ * The console's lines, a context of their own: a line (up to ten draws a
+ * second in a storm) redraws the console, not every screen that reads the store.
+ */
+interface ConsoleLog {
+  log: LogEntry[];
+  clearLog: () => void;
+}
+
+/**
+ * What the broker holds, as a live index. Kept here rather than in the MQTT
+ * view: a retained value arrives once, on subscribe, so a tree that only
+ * exists while its tab is open would lose the broker's state on a click. A
+ * context of its own, since it changes with every batch (ten a second).
+ */
+interface MqttTopics {
   mqttTopics: { current: TopicNode };
   /** Bumped whenever the index changes, since the index itself is mutable. */
   mqttVersion: number;
@@ -118,9 +130,12 @@ interface Store {
 }
 
 const Ctx = createContext<Store | null>(null);
+const LogCtx = createContext<ConsoleLog | null>(null);
+const MqttCtx = createContext<MqttTopics | null>(null);
 
-const LOG_CAPACITY = 500;
 let logSeq = 0;
+/** A job that ends asks for the list again this long after, so a hundred ending at once ask once. */
+const JOBS_REFRESH_MS = 150;
 /** Long enough that typing a name is one write, short enough to feel saved. */
 const SAVE_DEBOUNCE_MS = 700;
 
@@ -154,11 +169,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [mqttVersion, setMqttVersion] = useState(0);
   const [mqttDropped, setMqttDropped] = useState(0);
 
+  // Lines wait here and are drawn together: one draw per LOG_FLUSH_MS in a storm, not one per line.
+  const lines = useRef<ReturnType<typeof batcher<LogEntry>> | null>(null);
+  if (lines.current === null) lines.current = batcher<LogEntry>((entries) => setLog((prev) => appendLines(prev, entries)));
   const append = useCallback((entry: Omit<LogEntry, "id" | "ts">) => {
-    setLog((prev) => {
-      const next = [...prev, { ...entry, id: ++logSeq, ts: Date.now() }];
-      return next.length > LOG_CAPACITY ? next.slice(next.length - LOG_CAPACITY) : next;
-    });
+    lines.current!.push({ ...entry, id: ++logSeq, ts: Date.now() });
   }, []);
 
   const pushLog = useCallback<PushLog>((level, tag, key, params) => append({ level, tag, key, params }), [append]);
@@ -202,7 +217,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     });
   }, [pushLog, refreshJobs]);
 
-  const clearLog = useCallback(() => setLog([]), []);
+  const clearLog = useCallback(() => { lines.current!.clear(); setLog([]); }, []);
+
+  // A job that ended asks for the list again shortly: a hundred ending at once (Stop all) ask once.
+  const refreshTimer = useRef<number | null>(null);
+  const refreshSoon = useCallback(() => {
+    if (refreshTimer.current !== null) return;
+    refreshTimer.current = window.setTimeout(() => { refreshTimer.current = null; refreshJobs(); }, JOBS_REFRESH_MS);
+  }, [refreshJobs]);
 
   const clearMqttTopics = useCallback(() => {
     mqttTopics.current = makeTopicRoot();
@@ -226,17 +248,33 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setSaveState("idle");
   }, []);
 
+  /**
+   * What the file held when this page last read or wrote it. A save names it,
+   * and the engine refuses one over a file changed since — by another page of
+   * a server, or a person in an editor — rather than drop their change.
+   */
+  const stamp = useRef("");
+  // One write at a time: each names the stamp the one before it left.
+  const writes = useRef<Promise<unknown>>(Promise.resolve());
+  const saveLibrary = useCallback((next: LibraryState) => {
+    const write = writes.current.catch(() => {}).then(() =>
+      api.signalsSave({ version: 2, signals: next.signals, folders: next.folders }, stamp.current).then((saved) => { stamp.current = saved.stamp; }));
+    writes.current = write;
+    return write;
+  }, []);
+
   const loadLibrary = useCallback(() => {
     // What the file holds wins over an edit not written yet: that is what reloading asks for.
     dropPending();
     api.signalsLoad().then(
       (file) => {
+        stamp.current = file.stamp;
         latestLibrary.current = { signals: file.library.signals, folders: file.library.folders ?? [] };
         if (file.seeded) {
           // The starter set, in the language of the person who opened it first.
           const text = (key: string) => key in en ? translate.current(key) : null;
           latestLibrary.current = { ...latestLibrary.current, signals: localizeSeed(file.library.signals, text) };
-          api.signalsSave({ version: 2, ...latestLibrary.current }).catch((e) => pushError("signals", e));
+          saveLibrary(latestLibrary.current).catch((e) => pushError("signals", e));
         }
         setSignals(latestLibrary.current.signals);
         setFolders(latestLibrary.current.folders);
@@ -253,19 +291,20 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         pushError("signals", e);
       }
     );
-  }, [pushLog, pushError, block, dropPending]);
+  }, [pushLog, pushError, block, dropPending, saveLibrary]);
 
   const writeLibrary = useCallback((next: LibraryState) => {
-    return api.signalsSave({ version: 2, signals: next.signals, folders: next.folders }).then(
+    return saveLibrary(next).then(
       () => setSaveState("saved"),
       (e) => {
         setSaveState("error");
-        // Broken on disk since it was read: the engine left it alone, and so does everything here now.
-        if (isEngineError(e) && e.code === "signals.json_invalid") block(e);
+        // Broken on disk since it was read, or changed by someone else: the engine left it
+        // alone, and so does everything here until Reload reads what is there now.
+        if (isEngineError(e) && (e.code === "signals.json_invalid" || e.code === "file.changed")) block(e);
         pushError("signals", e);
       }
     );
-  }, [pushError, block]);
+  }, [pushError, block, saveLibrary]);
 
   /**
    * The file is ours alone, so there is nothing to merge and no reason to make
@@ -316,14 +355,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         const p = e.payload;
         if (p.error) pushError(p.kind, p.error, "log.jobFailed", { id: p.job_id });
         else pushLog("ok", p.kind, "log.jobFinished", { id: p.job_id });
-        refreshJobs();
+        refreshSoon();
       })
     );
 
     unlisteners.push(
       on<MqttBatch>(EV.mqttMessages, (e) => {
-        for (const m of e.payload.messages) ingestTopic(mqttTopics.current, m);
-        if (e.payload.dropped > 0) setMqttDropped((d) => d + e.payload.dropped);
+        // A message on a topic the full tree cannot take is counted as not shown.
+        let dropped = e.payload.dropped;
+        for (const m of e.payload.messages) if (!ingestTopic(mqttTopics.current, m)) dropped += m.count ?? 1;
+        if (dropped > 0) setMqttDropped((d) => d + dropped);
         setMqttVersion((v) => v + 1);
       })
     );
@@ -345,10 +386,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const poll = setInterval(refreshJobs, 2000);
     return () => {
       clearInterval(poll);
+      if (refreshTimer.current !== null) window.clearTimeout(refreshTimer.current);
+      refreshTimer.current = null;
       stopWatching();
       unlisteners.forEach((u) => u.then((f) => f()));
     };
-  }, [pushLog, pushError, refreshJobs, loadLibrary]);
+  }, [pushLog, pushError, refreshJobs, refreshSoon, loadLibrary]);
 
   // Before an update restarts the app: the write waiting for its debounce, now.
   useEffect(() => onFlush(() => {
@@ -371,17 +414,42 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (pending) writeLibrary(pending);
   }, [writeLibrary]);
 
-  const value: Store = {
-    host, info, connection, jobs, refreshJobs, jobGone, stopJob, stopAll, log, pushLog, pushError, clearLog,
+  // Each value changes only with what it holds: a console line or an MQTT
+  // batch redraws what reads them, not every screen that reads the store.
+  const value = useMemo<Store>(() => ({
+    host, info, connection, jobs, refreshJobs, jobGone, stopJob, stopAll, pushLog, pushError,
     library, folders, setLibraryState, libraryPath, libraryError, saveState, setLibrary,
     reloadLibrary: loadLibrary, fire, lastFired,
-    mqttTopics, mqttVersion, mqttDropped, clearMqttTopics,
-  };
-  return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
+  }), [host, info, connection, jobs, refreshJobs, jobGone, stopJob, stopAll, pushLog, pushError,
+    library, folders, setLibraryState, libraryPath, libraryError, saveState, setLibrary, loadLibrary, fire, lastFired]);
+  const consoleLog = useMemo<ConsoleLog>(() => ({ log, clearLog }), [log, clearLog]);
+  const topics = useMemo<MqttTopics>(() => ({ mqttTopics, mqttVersion, mqttDropped, clearMqttTopics }),
+    [mqttVersion, mqttDropped, clearMqttTopics]);
+  return (
+    <Ctx.Provider value={value}>
+      <LogCtx.Provider value={consoleLog}>
+        <MqttCtx.Provider value={topics}>{children}</MqttCtx.Provider>
+      </LogCtx.Provider>
+    </Ctx.Provider>
+  );
 }
 
 export function useStore(): Store {
   const s = useContext(Ctx);
   if (!s) throw new Error("useStore must be used within StoreProvider");
+  return s;
+}
+
+/** The console's lines (the store's `pushLog` adds to them). */
+export function useLog(): ConsoleLog {
+  const s = useContext(LogCtx);
+  if (!s) throw new Error("useLog must be used within StoreProvider");
+  return s;
+}
+
+/** The MQTT topic index, live (see `MqttTopics`). */
+export function useMqttTopics(): MqttTopics {
+  const s = useContext(MqttCtx);
+  if (!s) throw new Error("useMqttTopics must be used within StoreProvider");
   return s;
 }

@@ -11,7 +11,7 @@ use crate::host::Host;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
-use super::error::{EngineError, EngineResult};
+use super::error::{EngineError, EngineResult, Field};
 use super::experiment_actions::host_port;
 use super::inspect::{self, Frame};
 use super::mqtt::MqttConfig;
@@ -93,8 +93,11 @@ pub fn broker_of(cfg: &MqttConfig) -> String {
 
 /// Dial and complete CONNECT/CONNACK before the job exists, so a wrong password
 /// or a closed port is an error on the button rather than a job that dies a
-/// moment later somewhere else.
-pub(crate) async fn dial(cfg: &MqttConfig) -> Result<(TcpStream, String), MqttFailure> {
+/// moment later somewhere else. Also returns what came after the CONNACK in
+/// the same reads — a broker sends what it kept for a session, or a retained
+/// message, right behind it, often in the same segment; dropped, those
+/// messages were lost and the next packet read from its middle.
+pub(crate) async fn dial(cfg: &MqttConfig) -> Result<(TcpStream, String, Vec<u8>), MqttFailure> {
     let broker = broker_of(cfg);
     let mut stream = tokio::time::timeout(HANDSHAKE_TIMEOUT, TcpStream::connect(&broker))
         .await
@@ -117,9 +120,18 @@ pub(crate) async fn dial(cfg: &MqttConfig) -> Result<(TcpStream, String), MqttFa
                 Ok(n) => buf.extend_from_slice(&chunk[..n]),
                 Err(e) => return Err(MqttFailure::io(&e)),
             }
+            // A CONNACK is four bytes, type 2, length 2: anything else is refused on
+            // its first bytes — never read whole, nor written into the reason, since
+            // a broker could send hundreds of megabytes there.
+            if buf[0] >> 4 != 2 {
+                return Err(protocol(format!("answered CONNECT with a packet of type {}", buf[0] >> 4)));
+            }
+            if buf.len() >= 2 && buf[1] != 2 {
+                return Err(protocol(format!("malformed CONNACK: remaining length byte {:#04x}", buf[1])));
+            }
             match decode(&buf) {
-                Ok(Some((Packet::ConnAck { code, .. }, _))) => return Ok(code),
-                Ok(Some((other, _))) => return Err(protocol(format!("answered CONNECT with {other:?}"))),
+                Ok(Some((Packet::ConnAck { code, .. }, used))) => return Ok((code, buf.split_off(used))),
+                Ok(Some(_)) => return Err(protocol("answered CONNECT with another packet".into())),
                 Ok(None) => continue,
                 Err(e) => return Err(protocol(format!("malformed CONNACK: {e}"))),
             }
@@ -128,10 +140,11 @@ pub(crate) async fn dial(cfg: &MqttConfig) -> Result<(TcpStream, String), MqttFa
     .await
     .map_err(|_| MqttFailure::new(MqttCause::NoAnswer, ""))??;
 
+    let (connack, after) = connack;
     if connack != 0 {
         return Err(MqttFailure::new(MqttCause::Refused(connack), connack_reason(connack)));
     }
-    Ok((stream, broker))
+    Ok((stream, broker, after))
 }
 
 // ---------------------------------------------------------------------------
@@ -147,7 +160,44 @@ pub(crate) fn validate_publish_topic(topic: &str) -> Option<EngineError> {
     if topic.contains('+') || topic.contains('#') {
         return Some(EngineError::new("node.topic_wildcard"));
     }
+    // A string's length is two bytes on the wire: a longer topic would go out
+    // with its length wrapped — the broker reading a shorter topic and the rest
+    // as payload, a publish to somewhere else. And 3.1.1 forbids U+0000 in one.
+    if topic.len() > MAX_STRING {
+        return Some(EngineError::new("node.too_long").with("max", MAX_STRING));
+    }
+    if topic.contains('\0') {
+        return Some(EngineError::new("mqtt.topic_invalid"));
+    }
     None
+}
+
+/// The longest string MQTT can carry: its length is a 16-bit number.
+pub(crate) const MAX_STRING: usize = u16::MAX as usize;
+
+/// What a CONNECT carries fits it: every string within `MAX_STRING` (its
+/// length would wrap, and the broker read another packet), a will on a topic
+/// it could be published to.
+pub(crate) fn check_connect(cfg: &MqttConfig) -> EngineResult<()> {
+    let too_long = |field: &str| EngineError::new("node.too_long").with("max", MAX_STRING).in_field(Field::new(field));
+    if cfg.username.len() > MAX_STRING {
+        return Err(too_long("username"));
+    }
+    if cfg.password.len() > MAX_STRING {
+        return Err(too_long("password"));
+    }
+    if cfg.client_id.len() > MAX_STRING {
+        return Err(EngineError::new("node.too_long").with("max", MAX_STRING));
+    }
+    if let Some(will) = &cfg.will {
+        if let Some(refused) = validate_publish_topic(&will.topic) {
+            return Err(refused.in_field(Field::new("topic")));
+        }
+        if will.payload.len() > MAX_STRING {
+            return Err(too_long("payload"));
+        }
+    }
+    Ok(())
 }
 
 /// Connect, publish, wait for the acknowledgement the QoS calls for, disconnect.
@@ -165,6 +215,7 @@ pub async fn publish_once(
     if let Some(refused) = validate_publish_topic(&topic) {
         return Err(refused);
     }
+    check_connect(&cfg)?;
     let broker = broker_of(&cfg);
     publish(host, cfg, topic, payload, qos, retain).await.map_err(|failure| failure.error(&broker))
 }
@@ -189,7 +240,7 @@ pub async fn publish(
     let base: String = cfg.client_id.trim().chars().take(12).collect();
     cfg.client_id = format!("{base}-o{:x}", ONCE.fetch_add(1, Ordering::Relaxed) & 0xffff);
 
-    let (mut stream, broker) = dial(&cfg).await?;
+    let (mut stream, broker, _) = dial(&cfg).await?;
     let qos = qos.min(2);
     let bytes = payload.into_bytes();
     let framed = encode_publish(&topic, &bytes, qos, retain, 1, false);

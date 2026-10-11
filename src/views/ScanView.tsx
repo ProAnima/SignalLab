@@ -1,8 +1,8 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, EV, type JobInfo, type OpenPort, type ScanProgress } from "../lib/api";
 import { useStore } from "../lib/store";
 import { useT, type TKey } from "../lib/i18n";
-import { useFieldIds, useJobStream, useRollingList } from "../lib/hooks";
+import { useFieldIds, useJobStream, useWindowedRows } from "../lib/hooks";
 import { fmtTime, fmtNum } from "../lib/format";
 
 const PRESETS: { key: TKey; range: [number, number] }[] = [
@@ -11,6 +11,13 @@ const PRESETS: { key: TKey; range: [number, number] }[] = [
   { key: "sc.preset.osc", range: [8000, 9100] },
   { key: "sc.preset.full", range: [1, 65535] },
 ];
+
+/** A TCP port: 1 to 65 535 (what is typed past either end stops there). */
+const port = (value: number) => Math.min(65535, Math.max(1, Math.round(value) || 1));
+/** Found ports reach the table at most this often: a loopback scan finds thousands a second. */
+const DRAW_MS = 150;
+/** One row of the found ports, fixed so the table can draw only what is in view. */
+const ROW_HEIGHT = 28;
 
 export function ScanView() {
   const { pushLog, pushError, refreshJobs, stopJob, jobGone } = useStore();
@@ -26,10 +33,33 @@ export function ScanView() {
 
   const [job, setJob] = useState<JobInfo | null>(null);
   const [prog, setProg] = useState<ScanProgress | null>(null);
-  const { items: open, push: pushOpen, clear: clearOpen } = useRollingList<OpenPort>(2000);
+  // Every port found, once each — at most 65 535, so nothing is dropped; drawn
+  // in batches, never one render per port.
+  const found = useRef(new Map<number, OpenPort>());
+  const [drawn, setDrawn] = useState(0);
+  const timer = useRef<number | null>(null);
+  const pushOpen = useCallback((hit: OpenPort) => {
+    found.current.set(hit.port, hit);
+    timer.current ??= window.setTimeout(() => { timer.current = null; setDrawn((n) => n + 1); }, DRAW_MS);
+  }, []);
+  const clearOpen = () => { found.current = new Map(); setDrawn((n) => n + 1); };
+  useEffect(() => () => { if (timer.current !== null) window.clearTimeout(timer.current); }, []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const open = useMemo(() => [...found.current.values()].sort((a, b) => a.port - b.port), [drawn]);
+  const rows = useWindowedRows(ROW_HEIGHT, open.length);
 
   useJobStream<OpenPort>(EV.scanOpen, job?.id ?? null, pushOpen);
-  useJobStream<ScanProgress>(EV.scanProgress, job?.id ?? null, setProg);
+  // The last progress (every port tried) draws what is still waiting at once:
+  // a finished scan shows all it found together with its 100 %.
+  const onProgress = useCallback((report: ScanProgress) => {
+    if (report.done >= report.total && timer.current !== null) {
+      window.clearTimeout(timer.current);
+      timer.current = null;
+      setDrawn((n) => n + 1);
+    }
+    setProg(report);
+  }, []);
+  useJobStream<ScanProgress>(EV.scanProgress, job?.id ?? null, onProgress);
 
   useEffect(() => {
     if (jobGone(job)) setJob(null);
@@ -70,11 +100,11 @@ export function ScanView() {
           <div className="row">
             <div className="field">
               <label htmlFor={fid("from")}>{t("sc.fromPort")}</label>
-              <input id={fid("from")} type="number" value={portStart} onChange={(e) => setPortStart(+e.target.value)} disabled={!!job} />
+              <input id={fid("from")} type="number" value={portStart} min={1} max={65535} onChange={(e) => setPortStart(port(+e.target.value))} disabled={!!job} />
             </div>
             <div className="field">
               <label htmlFor={fid("to")} data-tip={t("sc.rangeHint")}>{t("sc.toPort")}</label>
-              <input id={fid("to")} type="number" value={portEnd} onChange={(e) => setPortEnd(+e.target.value)} disabled={!!job} />
+              <input id={fid("to")} type="number" value={portEnd} min={1} max={65535} onChange={(e) => setPortEnd(port(+e.target.value))} disabled={!!job} />
             </div>
           </div>
           <div className="field">
@@ -121,7 +151,10 @@ export function ScanView() {
               </div>
               <div style={{ display: "flex", justifyContent: "space-between", fontFamily: "var(--mono)", fontSize: 11, color: "var(--text-dim)", marginTop: 6 }}>
                 <span>{fmtNum(prog.done)} / {fmtNum(prog.total)} ({pct}%)</span>
-                <span style={{ color: "var(--accent)" }}>{t("sc.open", { n: prog.open })}</span>
+                <span>
+                  {prog.unchecked > 0 && <span style={{ color: "var(--amber)", marginInlineEnd: 10 }} data-tip={t("sc.uncheckedHint")} tabIndex={0}>{t("sc.unchecked", { n: prog.unchecked })}</span>}
+                  <span style={{ color: "var(--accent)" }}>{t("sc.open", { n: prog.open })}</span>
+                </span>
               </div>
             </div>
           )}
@@ -133,8 +166,8 @@ export function ScanView() {
             <div style={{ flex: 1 }} />
             <span className="tag-chip">{t("sc.found", { n: open.length })}</span>
           </div>
-          <div className="scroll-y" style={{ flex: 1, border: "1px solid var(--border)", borderRadius: "var(--radius-sm)" }}>
-            <table className="grid">
+          <div ref={rows.ref} className="scroll-y" style={{ flex: 1, minHeight: 0, maxHeight: "70vh", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)" }}>
+            <table className="grid fixed-rows">
               <thead>
                 <tr>
                   <th style={{ width: 80 }}>{t("sc.port")}</th>
@@ -143,13 +176,15 @@ export function ScanView() {
                 </tr>
               </thead>
               <tbody>
-                {open.slice().sort((a, b) => a.port - b.port).map((o, i) => (
-                  <tr key={i}>
+                {rows.before > 0 && <tr aria-hidden="true" style={{ height: rows.before }}><td colSpan={3} /></tr>}
+                {open.slice(rows.start, rows.end).map((o) => (
+                  <tr key={o.port} style={{ height: ROW_HEIGHT }}>
                     <td style={{ color: "var(--accent)", fontWeight: 700 }}>{o.port}</td>
                     <td style={{ color: "var(--text-faint)" }}>{fmtTime(o.ts)}</td>
                     <td style={{ color: "var(--text-dim)" }}>{o.banner ?? "—"}</td>
                   </tr>
                 ))}
+                {rows.after > 0 && <tr aria-hidden="true" style={{ height: rows.after }}><td colSpan={3} /></tr>}
                 {open.length === 0 && (
                   <tr><td colSpan={3} className="empty-state">{job ? t("sc.scanning") : t("sc.noOpen")}</td></tr>
                 )}

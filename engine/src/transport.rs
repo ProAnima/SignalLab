@@ -35,6 +35,10 @@ pub enum Cause {
     Tls,
     /// The target is not `IP:port` / `host:port`, or not a valid URL.
     TargetInvalid,
+    /// This machine ran out of sockets, local ports or buffers (thousands of
+    /// connections closing, each holding a port for minutes): it says nothing
+    /// about the target, and is never counted as its answer.
+    Exhausted,
     /// Anything else; the detail says what.
     Failed,
 }
@@ -53,6 +57,7 @@ impl Cause {
             Cause::Denied => EngineError::new("transport.denied"),
             Cause::Tls => EngineError::new("transport.tls"),
             Cause::TargetInvalid => EngineError::new("transport.target_invalid"),
+            Cause::Exhausted => EngineError::new("transport.exhausted"),
             Cause::Failed => EngineError::new("transport.failed"),
         };
         error.with("target", target)
@@ -66,8 +71,26 @@ fn is_dns(error: &io::Error) -> bool {
         || error.to_string().contains("failed to lookup address")
 }
 
+/// Whether `error` is this machine running out of sockets or buffers.
+pub fn out_of_resources(error: &io::Error) -> bool {
+    // WSAENOBUFS 10055, WSAEMFILE 10024 (Windows); ENOBUFS 105, EMFILE 24, ENFILE 23 (Linux).
+    error.kind() == io::ErrorKind::OutOfMemory || matches!(error.raw_os_error(), Some(10055 | 10024 | 105 | 24 | 23))
+}
+
+/// A connect that failed on this machine, before it reached the target: out of
+/// local ports (a port in use, or none to bind — what TIME_WAIT exhaustion looks
+/// like) or of sockets and buffers. Such a failure says nothing about the target,
+/// so a scanner, a load and a relay count it apart and try again, never as the
+/// target's answer.
+pub fn local_connect_failure(error: &io::Error) -> bool {
+    out_of_resources(error) || matches!(error.kind(), io::ErrorKind::AddrInUse | io::ErrorKind::AddrNotAvailable)
+}
+
 pub fn of_io(error: &io::Error) -> Cause {
     use io::ErrorKind::*;
+    if out_of_resources(error) {
+        return Cause::Exhausted;
+    }
     match error.kind() {
         ConnectionRefused => Cause::Refused,
         TimedOut => Cause::Timeout,
@@ -94,6 +117,12 @@ pub fn of_reqwest(error: &reqwest::Error) -> Cause {
     let mut source = error.source();
     while let Some(inner) = source {
         if let Some(io) = inner.downcast_ref::<io::Error>() {
+            // An outgoing connection takes any free local port: one "in use" or
+            // "not available" there means none was left (TIME_WAIT), not a
+            // port somebody chose.
+            if error.is_connect() && matches!(io.kind(), io::ErrorKind::AddrInUse | io::ErrorKind::AddrNotAvailable) {
+                return Cause::Exhausted;
+            }
             match of_io(io) {
                 Cause::Failed => {}
                 cause => return cause,
@@ -152,8 +181,13 @@ pub fn unspecified_for(target: &SocketAddr) -> &'static str {
     if target.is_ipv6() { "[::]:0" } else { "0.0.0.0:0" }
 }
 
+/// The longest a name lookup may take. The system resolver can wait far longer
+/// for a name nobody answers for (tries × timeouts × search domains: over 10 s
+/// in a container without DNS), and a command must answer, not hang on it.
+pub const DNS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// `IP:port`, or `host:port` resolved through DNS, to one address (IPv4 when
-/// the name has one).
+/// the name has one), within [`DNS_TIMEOUT`].
 pub async fn resolve(spec: &str) -> EngineResult<SocketAddr> {
     let spec = spec.trim();
     if let Ok(address) = spec.parse::<SocketAddr>() {
@@ -162,7 +196,10 @@ pub async fn resolve(spec: &str) -> EngineResult<SocketAddr> {
     if !is_target(spec) {
         return Err(Cause::TargetInvalid.error(spec));
     }
-    match tokio::net::lookup_host(spec).await {
+    let Ok(looked_up) = tokio::time::timeout(DNS_TIMEOUT, tokio::net::lookup_host(spec)).await else {
+        return Err(Cause::Dns.error(spec));
+    };
+    match looked_up {
         Ok(found) => preferred(found).ok_or_else(|| Cause::Dns.error(spec)),
         Err(error) => {
             let cause = match of_io(&error) {
@@ -188,8 +225,13 @@ mod tests {
             (io::ErrorKind::ConnectionReset, Cause::Reset),
             (io::ErrorKind::PermissionDenied, Cause::Denied),
             (io::ErrorKind::Other, Cause::Failed),
+            (io::ErrorKind::OutOfMemory, Cause::Exhausted),
         ] {
             assert_eq!(of_io(&io::Error::new(kind, "x")), cause, "{kind:?}");
+        }
+        // Out of sockets or buffers, as each system says it: never the target's doing.
+        for code in if cfg!(windows) { [10055, 10024] } else { [105, 24] } {
+            assert_eq!(of_io(&io::Error::from_raw_os_error(code)), Cause::Exhausted, "{code}");
         }
         let error = Cause::Refused.error("127.0.0.1:9");
         assert_eq!((error.code.as_str(), error.params["target"].as_str()), ("transport.refused", "127.0.0.1:9"));

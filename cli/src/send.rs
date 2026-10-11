@@ -30,7 +30,7 @@ async fn invoke(service: &Service, command: &str, args: Value) -> Result<Value, 
 }
 
 /// One OSC argument from the command line: `i:3 f:0.5 d:1.5 h:64 s:text b:hex T F N`;
-/// a plain integer is i, a plain decimal is f, anything else is s.
+/// a plain integer is i (h past 32 bits), a plain decimal or 1e3 is f, anything else is s.
 pub(crate) fn osc_arg(text: &str) -> Result<OscArg, EngineError> {
     let invalid = || EngineError::new("cli.osc_arg_invalid").with("value", text);
     match text {
@@ -46,6 +46,8 @@ pub(crate) fn osc_arg(text: &str) -> Result<OscArg, EngineError> {
             "d" => value.trim().parse().map(OscArg::Double).map_err(|_| invalid()),
             "h" => value.trim().parse().map(OscArg::Long).map_err(|_| invalid()),
             "s" => Ok(OscArg::Str(value.to_string())),
+            // An empty blob is OSC too: its size, 0, and nothing after it.
+            "b" if value.trim().is_empty() => Ok(OscArg::Blob(Vec::new())),
             "b" => hex_bytes(value).map(OscArg::Blob).ok_or_else(invalid),
             _ => Err(invalid()),
         };
@@ -53,9 +55,20 @@ pub(crate) fn osc_arg(text: &str) -> Result<OscArg, EngineError> {
     if let Ok(int) = text.parse::<i32>() {
         return Ok(OscArg::Int(int));
     }
-    if text.contains('.') {
-        if let Ok(float) = text.parse::<f32>() {
+    // An integer past 32 bits is an int64, as the MCP tool reads one — not the
+    // text "3000000000", which a device expecting a number takes for a string.
+    if let Ok(long) = text.parse::<i64>() {
+        return Ok(OscArg::Long(long));
+    }
+    // A decimal, or a number with an exponent (1e3): never "inf" or "nan", which are words.
+    let numeric = text.bytes().any(|byte| byte.is_ascii_digit()) && text.bytes().all(|byte| byte.is_ascii_digit() || b"+-.eE".contains(&byte));
+    if numeric {
+        if let Some(float) = text.parse::<f32>().ok().filter(|float| float.is_finite()) {
             return Ok(OscArg::Float(float));
+        }
+        // Past float32's range (1e39): a double rather than infinity.
+        if let Some(double) = text.parse::<f64>().ok().filter(|double| double.is_finite()) {
+            return Ok(OscArg::Double(double));
         }
     }
     Ok(OscArg::Str(text.to_string()))
@@ -365,6 +378,27 @@ mod tests {
                 json!({ "type": "int", "value": -3 }),
             ]
         );
+        // Numbers past i (3000000000), with an exponent (1e3, -2.5E-3), past f (1e39); words stay strings.
+        let inferred: Vec<Value> = ["3000000000", "-9223372036854775808", "1e3", "-2.5E-3", "1e39", "inf", "nan", "e", "1.2.3", "99999999999999999999"]
+            .iter()
+            .map(|text| serde_json::to_value(osc_arg(text).unwrap()).unwrap())
+            .collect();
+        assert_eq!(
+            inferred,
+            [
+                json!({ "type": "long", "value": 3_000_000_000_i64 }),
+                json!({ "type": "long", "value": i64::MIN }),
+                json!({ "type": "float", "value": 1000.0 }),
+                json!({ "type": "float", "value": -0.0025_f32 }),
+                json!({ "type": "double", "value": 1e39 }),
+                json!({ "type": "str", "value": "inf" }),
+                json!({ "type": "str", "value": "nan" }),
+                json!({ "type": "str", "value": "e" }),
+                json!({ "type": "str", "value": "1.2.3" }),
+                json!({ "type": "float", "value": 1e20_f32 }),
+            ]
+        );
+        assert_eq!(osc_arg("b:").unwrap(), OscArg::Blob(Vec::new()));
         for bad in ["i:x", "f:", "b:abc", "q:1"] {
             assert_eq!(osc_arg(bad).unwrap_err().code, "cli.osc_arg_invalid", "{bad}");
         }

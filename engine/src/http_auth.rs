@@ -175,6 +175,14 @@ pub fn digest_challenge<'a>(values: impl IntoIterator<Item = &'a str>) -> Engine
                     }
                 }
             };
+            // `-sess` hashes the client nonce into its first hash, and without qop
+            // RFC 2617 forbids sending one (and RFC 7616 requires qop): no answer
+            // the server could check exists. Said so, not answered wrongly — a
+            // wrong answer reads as wrong credentials.
+            if sess && qop.is_none() {
+                refused = Some(EngineError::new("http.digest_unsupported").with("algorithm", format!("{named} (no qop)")));
+                continue;
+            }
             let (Some(realm), Some(nonce)) = (param("realm"), param("nonce")) else {
                 refused = Some(EngineError::new("http.digest_invalid"));
                 continue;
@@ -410,6 +418,10 @@ mod tests {
         assert_eq!(digest_challenge(["Basic realm=\"only\"", "Bearer"]).unwrap(), None, "no Digest asked for");
         assert!(digest_challenge(["Digest realm=\"r\", nonce=\"1\", algorithm=SHA-512-256"]).unwrap_err().is("http.digest_unsupported"));
         assert!(digest_challenge(["Digest realm=\"r\""]).unwrap_err().is("http.digest_invalid"), "no nonce");
+        // -sess without qop cannot be answered so that a server could check it.
+        let sess = digest_challenge(["Digest realm=\"r\", nonce=\"n\", algorithm=MD5-sess"]).unwrap_err();
+        assert_eq!((sess.code.as_str(), sess.params["algorithm"].as_str()), ("http.digest_unsupported", "MD5-sess (no qop)"));
+        assert!(digest_challenge(["Digest realm=\"r\", nonce=\"n\", algorithm=SHA-256-sess, qop=\"auth\""]).unwrap().is_some());
         let escaped = digest_challenge([r#"Digest realm="a \"quoted\" realm", nonce="n""#]).unwrap().unwrap();
         assert_eq!(escaped.realm, "a \"quoted\" realm");
         // A qop list some servers leave unquoted is still one list, and what follows it still counts.

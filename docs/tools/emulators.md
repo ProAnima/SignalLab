@@ -100,6 +100,7 @@ While it runs, [[ui:emu.live]] counts:
 | [[ui:emu.failed]] | Exchanges where a reply could not be made or sent. |
 | [[ui:emu.down]] | What arrived while the emulator was down. Shown when it has an outage set or something met it down. Never counted as [[ui:emu.unmatched]]. |
 | [[ui:emu.missed]] | MQTT only, when it happens: messages a client was too far behind to take. |
+| [[ui:emu.refused]] | When it happens: connections closed as they arrived because the emulator already served as many as it may (see [Limits](#limits)). Not requests, so not in [[ui:emu.total]]. |
 
 Each rule's header shows how many times it matched since the start.
 
@@ -408,11 +409,11 @@ parameters and generators, a value out of range. [[ui:emu.start]] refuses an emu
 | A body, reply or greeting as written | 256 KiB | Refused. |
 | A delay or a jitter | 60 000 ms | Refused. |
 | HTTP request body | 1 MiB | 413. |
-| HTTP connections at once | 512 | More are closed as they arrive. |
+| HTTP connections at once | 512 | More are closed as they arrive; counted as [[ui:emu.refused]]. |
 | HTTP request head | 30 s | A client must send it within this. |
-| TCP connections at once | 256 | More are closed as they arrive. |
+| TCP connections at once | 256 | More are closed as they arrive; counted as [[ui:emu.refused]]. |
 | OSC and UDP replies waiting for their delay | 1024 | More are dropped and counted as [[ui:emu.failed]]. |
-| MQTT clients at once | 256 | More are closed as they arrive. |
+| MQTT clients at once | 256 | More are closed as they arrive; counted as [[ui:emu.refused]]. |
 | MQTT packet | 256 KiB | The client's connection ends. |
 | MQTT subscriptions per client | 100 | More are refused. |
 | MQTT retained topics | 1000 topics, 16 MiB | A new retained message is routed, not retained. |
@@ -470,8 +471,12 @@ The library is `emulators.json` in the data folder (see
 path. It is written whole 0.7 s after the last change, through a temporary
 file, so a failed write leaves the previous one. If the file cannot be read,
 the list shows the error with the path, line and column, and the file is left
-as it is: fix it and press [[ui:emu.reload]]. Press [[ui:emu.reload]] too after
-editing it by hand. With no file, the starter set is written again.
+as it is — also when it breaks while the app runs: the save is refused. Fix it
+and press [[ui:emu.reload]]. Press [[ui:emu.reload]] too after editing it by
+hand. A save over a file that changed since it was read — by hand, or by
+another page of the same server — is refused and the file keeps that change;
+the list says so and stops writing until [[ui:emu.reload]] reads it. With no
+file, the starter set is written again.
 
 ```json
 {

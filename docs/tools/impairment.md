@@ -150,11 +150,12 @@ Over UDP:
 | [[ui:ns.received]] | Datagrams that reached the relay. |
 | [[ui:ns.forwarded]] | Datagrams sent on; a duplicated one counts twice. |
 | [[ui:ns.dropped]] | Lost on purpose: offline, a burst, or loss. |
-| [[ui:ns.throttled]] | Dropped by the bandwidth limit, or because 10 000 were already on their way. |
+| [[ui:ns.throttled]] | Dropped by the bandwidth limit, or because 10 000 — or 64 MB — were already on their way. |
 | [[ui:ns.duplicated]] | Datagrams sent twice. |
 | [[ui:ns.corrupted]] | Copies with a bit flipped. |
 | [[ui:ns.reordered]] | Copies held back so later ones overtook them. |
 | [[ui:common.volume]] | Bytes sent on. |
+| [[ui:ns.notRelayed]] | Shown once there are any: datagrams the system would not send on. Never the profile's doing. |
 
 Over TCP:
 
@@ -163,10 +164,18 @@ Over TCP:
 | [[ui:ns.connections]] | Connections clients made to the relay. |
 | [[ui:ns.received]] | Chunks the relay read, both ways. |
 | [[ui:ns.forwarded]] | Chunks it wrote on. |
+| [[ui:ns.refused]] | Connections the target refused or did not answer; the client got a reset. |
 | [[ui:ns.resets]] | Connections reset. |
 | [[ui:ns.stalled]] | Connections left half-open. |
-| [[ui:ns.held]] | How often a stream waited for the bandwidth limit: the sender was slowed down, nothing was dropped. |
+| [[ui:ns.held]] | How often a stream waited for the bandwidth limit: the sender was slowed down, nothing was dropped. A relay also holds at most 64 MB on its way, all connections together, and waits the same way past it. |
 | [[ui:common.volume]] | Bytes written on. |
+| [[ui:ns.notRelayed]] | Shown once there are any: connections this computer could not make to the target — no local port or socket left, still after two seconds of trying — and connections past 1 024 at once. Each got a reset. Never the target's answer. |
+
+A relay that closes its side of a connection first keeps a local port for a
+couple of minutes afterwards (the system's TIME_WAIT), as any program does.
+Many hundreds of short connections a second through one relay use up this
+computer's ports; the relay then waits and tries again, and what still cannot
+go is counted in [[ui:ns.notRelayed]], never passed off as the target refusing.
 
 With capture on, the [Inspector](inspector.md) shows relayed datagrams and
 chunks — at most one every 25 ms, both directions together — each with its

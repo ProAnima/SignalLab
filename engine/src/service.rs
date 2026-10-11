@@ -127,6 +127,16 @@ fn firewall_programs() -> Vec<std::path::PathBuf> {
     programs
 }
 
+/// The arguments of a command that takes none: nothing, `null` or `{}` —
+/// anything else is refused, as an argument a command does not know always is.
+fn nothing(command: &str, value: Value) -> Result<(), Failure> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Nothing {}
+    let _: Nothing = parse(command, value)?;
+    Ok(())
+}
+
 fn reply(value: impl Serialize) -> Reply {
     serde_json::to_value(value).map_err(|error| EngineError::new("command.reply_invalid").because(error).into())
 }
@@ -191,14 +201,20 @@ impl Service {
         let jobs = || self.jobs.clone();
         let store = self.secrets.as_ref();
         match command {
-            "app_info" => reply(self.info()),
+            "app_info" => {
+                nothing(command, value)?;
+                reply(self.info())
+            }
             // To the studio's hub, which mails it to the developers (docs/develop/hub.md).
             "feedback_send" => {
                 let a = args!(command, value, { form: crate::feedback::Form });
                 reply(crate::feedback::send(a.form).await?)
             }
             // Whether the firewall lets other machines reach this program (Windows: per program).
-            "firewall_status" => reply(firewall::status(firewall_programs()).await?),
+            "firewall_status" => {
+                nothing(command, value)?;
+                reply(firewall::status(firewall_programs()).await?)
+            }
             // Asked by a person: the system shows its own administrator prompt. Not on a server,
             // where nobody is at the screen to answer it: its firewall is the host's admin's.
             "firewall_allow" => {
@@ -209,21 +225,32 @@ impl Service {
                 firewall::allow(firewall_programs(), a.public).await?;
                 reply(firewall::status(firewall_programs()).await?)
             }
-            "get_host_info" => reply(net::host_info().await),
+            "get_host_info" => {
+                nothing(command, value)?;
+                reply(net::host_info().await)
+            }
 
             // ---- jobs
-            "jobs_list" => reply(self.jobs.list()),
+            "jobs_list" => {
+                nothing(command, value)?;
+                reply(self.jobs.list())
+            }
             "job_stop" => {
                 let a = args!(command, value, { id: u64 });
-                reply(self.jobs.stop(a.id))
+                // Answered once the job has let go: a start right after binds its port again.
+                reply(self.jobs.stop_and_wait(a.id).await)
             }
             "jobs_stop_all" => {
-                self.jobs.stop_all();
+                nothing(command, value)?;
+                self.jobs.stop_all_and_wait().await;
                 reply(())
             }
 
             // ---- experiments: failures are EngineErrors
-            "experiment_load" => reply(experiment_files::load()?),
+            "experiment_load" => {
+                nothing(command, value)?;
+                reply(experiment_files::load()?)
+            }
             "experiment_save" => {
                 let a = args!(command, value, { document: Experiment });
                 reply(experiment_files::save(&a.document)?)
@@ -319,8 +346,12 @@ impl Service {
                 let a = args!(command, value, { config: BurstConfig });
                 reply(http::start_burst(host(), jobs(), a.config, Some(self.cookies.clone())).await?)
             }
-            "http_cookies" => reply(self.cookies.list()),
+            "http_cookies" => {
+                nothing(command, value)?;
+                reply(self.cookies.list())
+            }
             "http_cookies_clear" => {
+                nothing(command, value)?;
                 self.cookies.clear();
                 reply(())
             }
@@ -365,18 +396,22 @@ impl Service {
                 self.capture().set_enabled(a.enabled);
                 reply(self.capture().stats())
             }
-            "inspect_stats" => reply(self.capture().stats()),
+            "inspect_stats" => {
+                nothing(command, value)?;
+                reply(self.capture().stats())
+            }
             "inspect_snapshot" => {
                 let a = args!(command, value, { limit: usize });
                 reply(self.capture().snapshot(a.limit.clamp(1, inspect::RING_CAPACITY)))
             }
             "inspect_clear" => {
+                nothing(command, value)?;
                 self.capture().clear();
                 reply(self.capture().stats())
             }
             "inspect_export" => {
                 let a = args!(command, value, { format: String });
-                reply(self.capture().export(&a.format)?)
+                reply(self.capture().export_file(a.format).await?)
             }
             // The bytes a frame keeps, past the preview its batch carried.
             "inspect_payload" => {
@@ -437,17 +472,31 @@ impl Service {
             }
 
             // ---- signal library: storage only; firing goes through the commands above
-            "signals_load" => reply(signals::load()?),
+            "signals_load" => {
+                nothing(command, value)?;
+                reply(signals::load()?)
+            }
+            // `base`: the stamp the library was read with; a file changed since is
+            // `file.changed`, not overwritten. With it the answer is `{ path, stamp }`.
             "signals_save" => {
-                let a = args!(command, value, { library: Library });
-                reply(signals::save(&a.library)?)
+                let a = args!(command, value, { library: Library, base: Option<String> });
+                match a.base {
+                    Some(base) => reply(signals::save_based(&a.library, Some(&base))?),
+                    None => reply(signals::save(&a.library)?),
+                }
             }
 
             // ---- emulators: Signal Lab as the other side
-            "emulators_load" => reply(emulator_files::load()?),
+            "emulators_load" => {
+                nothing(command, value)?;
+                reply(emulator_files::load()?)
+            }
             "emulators_save" => {
-                let a = args!(command, value, { library: EmulatorLibrary });
-                reply(emulator_files::save(&a.library)?)
+                let a = args!(command, value, { library: EmulatorLibrary, base: Option<String> });
+                match a.base {
+                    Some(base) => reply(emulator_files::save_based(&a.library, Some(&base))?),
+                    None => reply(emulator_files::save(&a.library)?),
+                }
             }
             // The problems an emulator would be refused for, before anyone presses Start.
             "emulator_check" => {
@@ -508,6 +557,9 @@ mod tests {
         // A misspelled or extra argument is a clear error, not silently ignored.
         assert_eq!(code(service.invoke("job_stop", json!({ "jobid": 1 })).await), "command.args_invalid");
         assert_eq!(code(service.invoke("job_stop", json!({ "id": 1, "force": true })).await), "command.args_invalid");
+        // So does a command that takes none.
+        assert_eq!(code(service.invoke("jobs_list", json!({ "all": true })).await), "command.args_invalid");
+        assert_eq!(service.invoke("jobs_list", Value::Null).await.unwrap(), json!([]));
         assert_eq!(service.invoke("job_stop", json!({ "id": 99 })).await.unwrap(), json!(false));
         // camelCase arguments, as the interface sends them.
         let parsed = service.invoke("experiment_parse", json!({ "text": serde_json::to_string(&crate::experiment::starter()).unwrap() })).await.unwrap();

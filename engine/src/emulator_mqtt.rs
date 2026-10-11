@@ -170,6 +170,7 @@ pub(crate) async fn serve(listener: TcpListener, context: Arc<Context>) -> Engin
         failures = 0;
         if active.load(Ordering::Relaxed) >= MAX_CONNECTIONS {
             drop(stream);
+            shared.context.emulation.refuse();
             continue;
         }
         active.fetch_add(1, Ordering::Relaxed);

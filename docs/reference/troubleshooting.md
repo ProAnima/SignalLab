@@ -9,7 +9,7 @@ Every failure Signal Lab reports has a code; the message for each is in
 [error messages](errors.md). Network failures are the
 [`transport`](errors.md#transport) codes: `refused`, `timeout`, `dns`,
 `unreachable`, `reset`, `address_in_use`, `address_unavailable`, `denied`,
-`tls`, `target_invalid`, `failed`. The problems below are the common ones.
+`tls`, `target_invalid`, `exhausted`, `failed`. The problems below are the common ones.
 
 ## Nothing arrives {#nothing-arrives}
 

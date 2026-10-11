@@ -37,7 +37,8 @@ websocat -H "Authorization: Bearer $TOKEN" ws://127.0.0.1:1430/api/events
   commands (`jobs_list`, `inspect_snapshot`, `emulator_exchanges`…).
 - **Falling behind.** Up to 4096 events wait for one socket. A client that
   falls further behind gets [`server://lagged`](#event-server-lagged) with how
-  many it missed.
+  many it missed. A client that stops reading altogether — nothing it takes for
+  10 s — is disconnected; reconnect and read the state again.
 
 ## Message format {#format}
 
@@ -65,7 +66,8 @@ milliseconds. Errors in payloads are
 | [`experiment://step`](#event-experiment-step) | A run | A step starts, passes, fails, retries, repeats or reports load |
 | [`experiment://ended`](#event-experiment-ended) | A run | Once, when the run ends on its own |
 | [`job://ended`](#event-job-ended) | Every job | Once, when the job ends on its own or fails |
-| [`osc://message`](#event-osc-message) | OSC monitor | Every packet |
+| [`osc://message`](#event-osc-message) | OSC monitor | Every packet, sampled to 200/s under a flood |
+| [`osc://monitor-stat`](#event-osc-monitor-stat) | OSC monitor | Every 250 ms, and at the end |
 | [`osc://gen-tick`](#event-osc-gen-tick) | OSC generator | Every message, or 30 to 45 times a second above 60 messages a second |
 | [`http://burst-progress`](#event-http-burst-progress) | HTTP burst | Every 100 ms, and at the end |
 | [`ws://state`](#event-ws-state) | WebSocket connection | Connected, closed |
@@ -102,6 +104,7 @@ the same steps on its response (see [runs](run.md)).
 | `error` | `EngineError` | Why it failed, or why the attempt did (`retry`); left out otherwise |
 | `frame` | number | The Inspector frame of the message a wait (or a send's expected reply) matched, when capture was armed; left out otherwise |
 | `load` | object | What a load measured, its thresholds read — on a load step's last event, passed or failed; left out otherwise. See [load](../experiments/load.md) |
+| `omitted` | number | Steps just before this one that were left out; left out when none. A run reports its first 5 000 steps one by one, then one a second (and every failure), and as it ends its last 500 — so a Loop of a thousand iterations stays readable |
 
 A run's [[ui:exp.node.end]] node shows `running` when the first branch reaches it and
 `passed` once every branch has finished without a failure. Secret values are
@@ -155,8 +158,10 @@ A run's `job://ended` carries the fields of
 
 ### `osc://message` {#event-osc-message}
 
-One UDP packet an OSC monitor received, decoded. Sent for every packet, without
-batching.
+One UDP packet an OSC monitor received, decoded. Decoded packets are sampled to
+at most 200 events a second so a flood cannot swamp the link to the interface
+([`osc://monitor-stat`](#event-osc-monitor-stat) says how many were received and
+how many were not forwarded); a malformed packet is always sent.
 
 | Field | Type | Meaning |
 | --- | --- | --- |
@@ -166,6 +171,20 @@ batching.
 | `bytes` | number | The packet's size |
 | `messages` | object[] | Each message of the packet (a bundle has several): `address` and `args` ([`OscArg`](commands.md#type-oscarg)`[]`) |
 | `error` | `EngineError` or null | `osc.packet_malformed` when the packet did not decode (then `messages` is empty) |
+
+### `osc://monitor-stat` {#event-osc-monitor-stat}
+
+An OSC monitor's running totals, every 250 ms and once more when it ends, so a
+sampled list shows how much traffic it stands for.
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `job_id` | number | The monitor's job |
+| `ts` | number | When |
+| `packets` | number | Packets received, decoded or not |
+| `bytes` | number | Bytes received |
+| `not_shown` | number | Packets received but not forwarded as [`osc://message`](#event-osc-message) (the rate sample held them) |
+| `malformed` | number | Packets that did not decode as OSC |
 
 ### `osc://gen-tick` {#event-osc-gen-tick}
 
@@ -190,8 +209,9 @@ An HTTP burst's numbers, every 100 ms while it runs, and once more with
 | `job_id` | number | The burst's job |
 | `ts` | number | When |
 | `sent` | number | Requests answered or failed so far |
-| `ok` | number | Of those, answered with a 2xx status |
-| `failed` | number | Of those, any other status or no answer |
+| `ok` | number | Of those, answered with a 2xx status and the whole body |
+| `failed` | number | Of those, any other status, a body cut short, or no answer — never one this machine could not send |
+| `local` | number | Of those, requests this machine could not send: it ran out of sockets or local ports (`transport.exhausted`). Not in `failed`, nor in the latencies |
 | `missed` | number | A paced burst's requests that waited too long for a free worker and were skipped |
 | `rps` | number | Requests per second over the last 100 ms; in the last event, over the whole burst |
 | `last_latency_ms`, `min_latency_ms`, `max_latency_ms`, `avg_latency_ms` | number | Latencies so far |
@@ -220,8 +240,9 @@ What a WebSocket connection sent and received since the last event, every
 | --- | --- | --- |
 | `job_id` | number | The connection's job |
 | `ts` | number | When |
-| `messages` | object[] | In order: `ts`, `dir` (`rx` received, `tx` sent), `kind` (`text` or `binary`), `text` (the first 64 KiB as UTF-8, a binary message's too; bytes that are not become `�`), `hex` (a binary message's first 4096 bytes as hex, else null), `bytes` (the full size) and `truncated` (more than was shown: past 64 KiB of text, past 4096 bytes of binary) |
-| `dropped` | number | Messages left out of this event because there were more than 2000; the oldest go first |
+| `messages` | object[] | In order: `ts`, `dir` (`rx` received, `tx` sent), `kind` (`text` or `binary`), `text` (the first 64 KiB as UTF-8; of a binary message the first 4096 bytes; bytes that are not UTF-8 become `�`), `hex` (a binary message's first 4096 bytes as hex, else null), `bytes` (the full size) and `truncated` (more than was shown: past 64 KiB of text, past 4096 bytes of binary) |
+| `dropped` | number | Messages left out of this event because there were more than 2000, or more than 1 MiB of `text` and `hex`; the oldest go first |
+| `received`, `sent` | number | Messages received and sent on the connection so far, shown or not |
 
 ### `mqtt://state` {#event-mqtt-state}
 
@@ -245,8 +266,8 @@ is something. A redelivered QoS 2 message is shown once.
 | --- | --- | --- |
 | `job_id` | number | The connection's job |
 | `ts` | number | When |
-| `messages` | object[] | `ts`, `topic`, `payload` (as UTF-8; bytes that are not become `�`), `bytes`, `qos`, `retain`, `dup` |
-| `dropped` | number | Messages left out because more than 4000 arrived in 100 ms; the oldest go first |
+| `messages` | object[] | One per topic, the latest that arrived on it: `ts`, `topic`, `payload` (its first 4096 bytes as UTF-8; bytes that are not become `�`), `bytes` (the whole payload's size), `truncated` (`payload` is only the start), `qos`, `retain`, `dup`, and `count` (messages on the topic since the last event, this one included) |
+| `dropped` | number | Always 0: when an event would carry more than 4000 topics or 2 MiB of payload, the connection stops reading until it has gone out, and the broker waits |
 
 ### `mqtt://ack` {#event-mqtt-ack}
 
@@ -273,6 +294,7 @@ A beacon's counters, every 250 ms, and once more when it ends on its own with
 | `rounds` | number | Rounds sent |
 | `packets`, `bytes` | number | Datagrams and bytes sent |
 | `errors` | number | Sends that failed |
+| `local` | number | Sends this machine could not make (out of buffers or sockets), not among `errors`; left out while 0 |
 | `pps` | number | Datagrams per second over the last 250 ms |
 
 ### `broadcast://peers` {#event-broadcast-peers}
@@ -286,6 +308,8 @@ What a discovery listener has heard, every 400 ms.
 | `peers` | object[] | Most recently heard first: `addr`, `proto`, `packets`, `bytes`, `first_ms`, `last_ms`, `last_summary`, `responded` (its packets that were answered, counted as they arrived); at most 512 |
 | `packets`, `bytes` | number | Everything received |
 | `responses` | number | Answers sent |
+| `unlisted` | number | Distinct peers past the 512 the table holds: counted here, not in `peers` |
+| `replies_skipped` | number | Probes not answered because too many auto-replies (1024) were already in flight — the cap that keeps a probe flood from being amplified without bound |
 
 ### `netsim://stat` {#event-netsim-stat}
 
@@ -302,6 +326,8 @@ An impairment relay's counters, every 250 ms. Relays of a run's
 | `duplicated`, `corrupted`, `reordered` | number | What the profile did to them |
 | `bytes` | number | Bytes passed on |
 | `connections`, `reset`, `stalled` | number | TCP: connections taken, reset, left half-open; left out while 0 |
+| `refused` | number | TCP: connections the target refused or did not answer, passed on to the client as a reset; left out while 0 |
+| `failed` | number | What this machine could not pass on: a datagram the system would not send, a connection it had no local port or socket for (tried again for about two seconds first), or one past the relay's 1 024 connections at once; left out while 0 |
 | `profile` | string | The profile it impairs with now, as the timeline names it: its name, or what it does (`60 ms ±25 · loss 2%`) |
 
 ### `storm://stat` {#event-storm-stat}
@@ -314,7 +340,8 @@ A storm's counters, every 250 ms, and once more when it ends on its own with
 | `job_id` | number | The storm's job |
 | `ts` | number | When |
 | `packets`, `bytes` | number | Datagrams (or TCP connections) and bytes sent |
-| `errors` | number | Sends or connections that failed |
+| `errors` | number | Sends or connections the target refused, reset or did not answer |
+| `local` | number | Units this machine could not send — it ran out of local ports, sockets or buffers, not the target refusing; never counted as `errors` |
 | `pps` | number | Per second over the last 250 ms |
 | `mbps` | number | Megabits per second over the last 250 ms |
 
@@ -341,6 +368,7 @@ with `done` equal to `total` (that one can arrive twice).
 | `done` | number | Ports tried |
 | `total` | number | Ports in the range |
 | `open` | number | Open ports found |
+| `unchecked` | number | Ports this machine could not try (it ran out of local ports or sockets), so neither open nor closed; 0 normally |
 
 ### `emulator://activity` {#event-emulator-activity}
 
@@ -353,7 +381,7 @@ are in the run's report.
 | --- | --- | --- |
 | `job_id` | number | The emulator's job |
 | `ts` | number | When |
-| `counts` | object | `total`, `unmatched`, `failed`, `down`, `hits` (per rule), and `missed` (MQTT; left out while 0) — as [`emulator_exchanges`](commands.md#emulator_exchanges) |
+| `counts` | object | `total`, `unmatched`, `failed`, `down`, `hits` (per rule), `missed` (MQTT; left out while 0) and `refused` (connections past the limit; left out while 0) — as [`emulator_exchanges`](commands.md#emulator_exchanges) |
 | `forced` | string | `unavailable`, `reset` or `timeout` while it is taken down; left out otherwise |
 | `exchanges` | object[] | The new exchanges, as `emulator_exchanges` lists them but without `data`; at most 200 |
 | `dropped` | number | Exchanges past the first 200 of the interval, not sent here; `emulator_exchanges` still has the last 500 |

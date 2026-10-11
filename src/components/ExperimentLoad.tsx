@@ -140,6 +140,7 @@ export function LoadResult({ metrics }: { metrics: LoadMetrics }) {
       {metric("exp.loadRps", fmtRate(Math.round(metrics.rps * 10) / 10), "accent")}
       {metric("exp.loadErrors", fmtNum(metrics.failed), metrics.failed ? "red" : "", `${percent(metrics.error_rate)} %`)}
       {metric("http.missed", fmtNum(metrics.missed), metrics.missed ? "amber" : "")}
+      {!!metrics.local && <div className="metric"><div className="k" data-tip={t("http.localHint")}>{t("http.local")}</div><div className="v amber">{fmtNum(metrics.local)}</div></div>}
     </div>
     <div className="metrics latency experiment-load-metrics">
       {latency("http.p50", metrics.p50_ms)}

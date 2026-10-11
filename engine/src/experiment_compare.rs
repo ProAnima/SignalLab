@@ -7,7 +7,7 @@
 
 use std::path::PathBuf;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::error::{EngineError, EngineResult};
@@ -95,29 +95,52 @@ pub fn change(metric: Metric, a: f64, b: f64) -> MetricChange {
     MetricChange { metric, a, b, change, percent, worse }
 }
 
+/// What a listing and a comparison read of a report: its head, and of each
+/// step only the node and a load's measurements. The rest of a step (its
+/// texts, variables, errors) is skipped as it is parsed, never held: a history
+/// of hundreds of reports is read in one listing.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct Report {
+    experiment: String,
+    started_ms: u64,
+    ended_ms: u64,
+    outcome: String,
+    seed: u64,
+    profile: Option<String>,
+    steps: Vec<ReportStep>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct ReportStep {
+    node_id: String,
+    load: Option<Value>,
+}
+
 /// Each load step's last measurements in a report, in the order they ran.
-fn loads_of(report: &Value) -> Vec<(String, LoadMetrics)> {
+fn loads_of(report: &Report) -> Vec<(String, LoadMetrics)> {
     let mut found: Vec<(String, LoadMetrics)> = Vec::new();
-    for step in report["steps"].as_array().into_iter().flatten() {
-        let (Some(node), Some(load)) = (step["node_id"].as_str(), step.get("load").filter(|load| !load.is_null())) else { continue };
+    for step in &report.steps {
+        let Some(load) = step.load.as_ref().filter(|load| !load.is_null()) else { continue };
         let Ok(metrics) = serde_json::from_value::<LoadMetrics>(load.clone()) else { continue };
-        match found.iter_mut().find(|(id, _)| id == node) {
+        match found.iter_mut().find(|(id, _)| *id == step.node_id) {
             Some(slot) => slot.1 = metrics,
-            None => found.push((node.to_string(), metrics)),
+            None => found.push((step.node_id.clone(), metrics)),
         }
     }
     found
 }
 
-fn summary(name: &str, report: &Value) -> RunSummary {
+fn summary(name: &str, report: &Report) -> RunSummary {
     RunSummary {
         name: name.to_string(),
-        experiment: report["experiment"].as_str().unwrap_or_default().to_string(),
-        started_ms: report["started_ms"].as_u64().unwrap_or(0),
-        ended_ms: report["ended_ms"].as_u64().unwrap_or(0),
-        outcome: report["outcome"].as_str().unwrap_or_default().to_string(),
-        seed: report["seed"].as_u64().unwrap_or(0),
-        profile: report["profile"].as_str().map(str::to_string),
+        experiment: report.experiment.clone(),
+        started_ms: report.started_ms,
+        ended_ms: report.ended_ms,
+        outcome: report.outcome.clone(),
+        seed: report.seed,
+        profile: report.profile.clone(),
         loads: loads_of(report)
             .into_iter()
             .map(|(node, metrics)| LoadHeadline {
@@ -133,7 +156,7 @@ fn summary(name: &str, report: &Value) -> RunSummary {
 }
 
 /// Two reports side by side, load step by load step.
-pub fn compare(a: (&str, &Value), b: (&str, &Value)) -> Comparison {
+pub fn compare(a: (&str, &Report), b: (&str, &Report)) -> Comparison {
     let (before, after) = (loads_of(a.1), loads_of(b.1));
     let empty = LoadMetrics::default();
     let mut steps: Vec<StepComparison> = before
@@ -176,14 +199,14 @@ fn check_name(name: &str) -> EngineResult<()> {
     }
 }
 
-fn read(name: &str) -> EngineResult<Value> {
+fn read(name: &str) -> EngineResult<Report> {
     check_name(name)?;
     let path = runs_dir().join(name);
-    let text = std::fs::read_to_string(&path).map_err(|error| match error.kind() {
+    let text = std::fs::read(&path).map_err(|error| match error.kind() {
         std::io::ErrorKind::NotFound => EngineError::new("runs.not_found").with("name", name),
         _ => EngineError::new("file.io").with("path", path.display()).because(error),
     })?;
-    serde_json::from_str(&text).map_err(|error| EngineError::new("file.json_invalid").with("line", error.line()).with("column", error.column()).because(error))
+    serde_json::from_slice(&text).map_err(|error| EngineError::new("file.json_invalid").with("line", error.line()).with("column", error.column()).because(error))
 }
 
 /// The runs in the runs folder, newest first — of the experiment `name` when
@@ -228,12 +251,12 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn report(experiment: &str, started: u64, loads: &[(&str, Value)]) -> Value {
+    fn report(experiment: &str, started: u64, loads: &[(&str, Value)]) -> Report {
         let steps: Vec<Value> = loads
             .iter()
-            .flat_map(|(node, load)| [json!({ "node_id": node, "state": "running" }), json!({ "node_id": node, "state": "passed", "load": load })])
+            .flat_map(|(node, load)| [json!({ "node_id": node, "state": "running", "detail": "", "vars": { "x": [1, 2] } }), json!({ "node_id": node, "state": "passed", "load": load })])
             .collect();
-        json!({ "version": 5, "experiment": experiment, "seed": 3, "profile": null, "started_ms": started, "ended_ms": started + 10, "outcome": "passed", "steps": steps })
+        serde_json::from_value(json!({ "version": 6, "experiment": experiment, "seed": 3, "profile": null, "started_ms": started, "ended_ms": started + 10, "outcome": "passed", "steps": steps })).unwrap()
     }
 
     fn load(p95: f64, errors: f64, rps: f64, held: bool) -> Value {

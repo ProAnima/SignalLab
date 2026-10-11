@@ -179,6 +179,8 @@ async fn handle(state: &Arc<State>, tasks: &Arc<Mutex<HashMap<String, tokio::tas
             let progress = params["_meta"]["progressToken"].clone();
             let request = key(&id);
             let (state, registry, mine) = (state.clone(), tasks.clone(), request.clone());
+            // Held until the task is registered: one that ends at once removes itself only after.
+            let mut registered = tasks.lock().unwrap();
             let task = tokio::spawn(async move {
                 let answer = call(&state, &name, &arguments, &mine, progress).await;
                 state.runs.lock().unwrap().remove(&mine);
@@ -190,7 +192,7 @@ async fn handle(state: &Arc<State>, tasks: &Arc<Mutex<HashMap<String, tokio::tas
                 registry.lock().unwrap().remove(&mine);
             });
             // Kept so a cancellation can stop it; a call that is already done just leaves a finished handle.
-            tasks.lock().unwrap().insert(request, task);
+            registered.insert(request, task);
         }
         ("notifications/cancelled", None) => {
             let request = key(&params["requestId"]);
@@ -239,4 +241,37 @@ fn print_config(client: &str, args: &McpArgs) -> Exit {
         }
     }
     Exit::Passed
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::i18n::{Lang, Texts};
+
+    /// A call that is over before its task is registered must not stay
+    /// registered: a session of quick calls would keep a handle for each.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_call_leaves_nothing_behind_however_quickly_it_ends() {
+        let dir = std::env::temp_dir().join(format!("signallab-mcp-unit-{}", std::process::id()));
+        let place = crate::Place { server: None, token_file: None, secrets: crate::SecretSource::Files, secrets_dir: None };
+        let engine = Engine::here(&place, Some(&dir)).unwrap();
+        let (out, mut answers) = mpsc::unbounded_channel();
+        let ctx = Ctx { texts: Texts::new(Lang::En), json: false };
+        let state = Arc::new(State { ctx, engine, library: None, emulators: None, runs: Mutex::default(), out });
+        let tasks: Arc<Mutex<HashMap<String, tokio::task::JoinHandle<()>>>> = Arc::default();
+        for id in 0..3000 {
+            handle(&state, &tasks, json!({ "jsonrpc": "2.0", "id": id, "method": "tools/call", "params": { "name": "run_experiment", "arguments": {} } })).await;
+        }
+        for _ in 0..3000 {
+            answers.recv().await.expect("every call answered");
+        }
+        // Each task removes itself last, just after its answer.
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while !tasks.lock().unwrap().is_empty() {
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("{} calls still registered after they ended", tasks.lock().unwrap().len()));
+    }
 }

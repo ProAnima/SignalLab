@@ -8,9 +8,12 @@
 //!
 //! Inbound messages are batched to the UI every 100 ms. A `#` subscription on a
 //! busy broker is a firehose, and a topic tree only needs the latest value per
-//! topic — but dropping events silently would make the tree quietly wrong, so
-//! the batch carries every message and says how many it had to shed if the
-//! accumulator ever overflows.
+//! topic and how many came: a batch keeps one message per topic, the latest,
+//! with the count it stands for, so a firehose on a few topics costs a few
+//! entries and loses nothing. A batch that is full — `BATCH_TOPICS` topics or
+//! `BATCH_BYTES` of payload, as 50 000 retained topics on subscribing make it —
+//! stops the reading until it has gone out, so the broker waits rather than the
+//! tree missing topics that are sent only once.
 
 
 use std::collections::{HashMap, HashSet};
@@ -30,7 +33,8 @@ use super::mqtt_codec::{
     decode, encode_pingreq, encode_puback, encode_pubcomp, encode_publish, encode_pubrec, encode_pubrel, encode_subscribe,
     encode_unsubscribe, summarize, Packet, Will,
 };
-use super::mqtt_dial::{broker_of, dial, validate_publish_topic};
+use super::mqtt_dial::{broker_of, check_connect, dial, validate_publish_topic};
+use super::subscribe::filter_valid;
 use super::transport::{self, Cause};
 
 /// One subscription: a filter and the QoS we ask the broker for.
@@ -69,24 +73,41 @@ fn default_true() -> bool {
 }
 
 const FLUSH_EVERY: Duration = Duration::from_millis(100);
-/// Beyond this the accumulator sheds oldest and reports the count: the alternative
-/// is unbounded memory while the UI is behind.
-const BATCH_CAP: usize = 4_000;
+/// Topics one batch carries at most; reading waits for the next batch past it.
+const BATCH_TOPICS: usize = 4_000;
+/// Payload and topic text one batch carries at most.
+const BATCH_BYTES: usize = 2 << 20;
+/// Payload a screen message carries; `bytes` is the whole, the Inspector keeps more.
+const SHOWN_PAYLOAD: usize = 4096;
+/// The read buffer is given back past this, once a large packet has gone through it.
+const KEEP_BUFFER: usize = 64 << 10;
 
 // ---------------------------------------------------------------------------
 // events
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 struct MqttMessage {
     ts: u64,
     topic: String,
     /// UTF-8 as the gear sends it; lossy so a stray binary payload still shows.
+    /// Its first `SHOWN_PAYLOAD` bytes.
     payload: String,
+    /// The whole payload's size.
     bytes: usize,
+    /// `payload` is only the start of it.
+    truncated: bool,
     qos: u8,
     retain: bool,
     dup: bool,
+    /// Messages on this topic since the last batch, this the latest of them.
+    count: u64,
+}
+
+impl MqttMessage {
+    fn weight(&self) -> usize {
+        self.payload.len() + self.topic.len()
+    }
 }
 
 #[derive(Clone, Serialize)]
@@ -94,7 +115,43 @@ struct MessageBatch {
     job_id: u64,
     ts: u64,
     messages: Vec<MqttMessage>,
+    /// Always 0: a full batch holds the reading back instead of shedding.
+    /// Kept for clients that read it.
     dropped: u64,
+}
+
+/// What arrived since the last batch: the latest message per topic, in the
+/// order the topics first came.
+#[derive(Default)]
+struct Pending {
+    messages: Vec<MqttMessage>,
+    index: HashMap<String, usize>,
+    held: usize,
+}
+
+impl Pending {
+    fn add(&mut self, message: MqttMessage) {
+        if let Some(&at) = self.index.get(&message.topic) {
+            let count = self.messages[at].count + message.count;
+            self.held = self.held - self.messages[at].weight() + message.weight();
+            self.messages[at] = MqttMessage { count, ..message };
+        } else {
+            self.held += message.weight();
+            self.index.insert(message.topic.clone(), self.messages.len());
+            self.messages.push(message);
+        }
+    }
+
+    /// No more reading until it has gone out.
+    fn full(&self) -> bool {
+        self.messages.len() >= BATCH_TOPICS || self.held >= BATCH_BYTES
+    }
+
+    fn take(&mut self) -> Vec<MqttMessage> {
+        self.index.clear();
+        self.held = 0;
+        std::mem::take(&mut self.messages)
+    }
 }
 
 #[derive(Clone, Serialize)]
@@ -190,9 +247,23 @@ impl MqttHub {
     /// none) is refused here, as the one-shot publish refuses it; a
     /// subscription takes filters.
     pub fn send(&self, id: u64, cmd: Cmd) -> EngineResult<()> {
-        if let Cmd::Publish { topic, .. } = &cmd {
-            if let Some(refused) = validate_publish_topic(topic) {
-                return Err(refused.in_field(Field::new("topic")));
+        match &cmd {
+            Cmd::Publish { topic, .. } => {
+                if let Some(refused) = validate_publish_topic(topic) {
+                    return Err(refused.in_field(Field::new("topic")));
+                }
+            }
+            // A filter 3.1.1 forbids (`a/#/b`, `a+`) is a protocol violation:
+            // brokers close the whole connection over it.
+            Cmd::Subscribe(subs) => {
+                if let Some(bad) = subs.iter().find(|sub| !filter_valid(&sub.filter)) {
+                    return Err(EngineError::new("node.topic_filter").with("value", &bad.filter).in_field(Field::new("topic")));
+                }
+            }
+            Cmd::Unsubscribe(filters) => {
+                if let Some(bad) = filters.iter().find(|filter| !filter_valid(filter)) {
+                    return Err(EngineError::new("node.topic_filter").with("value", bad).in_field(Field::new("topic")));
+                }
             }
         }
         let closed = || EngineError::new("mqtt.not_connected").with("id", id);
@@ -215,10 +286,16 @@ impl Drop for HubGuard {
     }
 }
 
-fn next_packet_id(counter: &mut u16) -> u16 {
-    *counter = counter.checked_add(1).unwrap_or(1);
-    if *counter == 0 {
-        *counter = 1;
+/// The next packet id: never 0, and never one still waiting for its
+/// acknowledgement (3.1.1, 2.3.1: an id is free again only once its exchange
+/// is complete) — after 65 535 packets the count comes round, and a publish
+/// the broker has not acknowledged yet keeps its id.
+fn next_packet_id(counter: &mut u16, busy: impl Fn(u16) -> bool) -> u16 {
+    for _ in 0..u16::MAX {
+        *counter = counter.checked_add(1).unwrap_or(1);
+        if !busy(*counter) {
+            break;
+        }
     }
     *counter
 }
@@ -237,7 +314,11 @@ pub async fn start_client(
     if cfg.client_id.trim().is_empty() {
         return Err(EngineError::new("mqtt.client_id_required"));
     }
-    let (stream, broker) = dial(&cfg).await.map_err(|failure| failure.error(&broker_of(&cfg)))?;
+    check_connect(&cfg)?;
+    if let Some(bad) = cfg.subscribe.iter().find(|sub| !filter_valid(&sub.filter)) {
+        return Err(EngineError::new("node.topic_filter").with("value", &bad.filter).in_field(Field::new("topic")));
+    }
+    let (stream, broker, after) = dial(&cfg).await.map_err(|failure| failure.error(&broker_of(&cfg)))?;
 
     let id = jobs.next_id();
     let info = JobInfo::new(id, "mqtt", format!("MQTT {broker} as {}", cfg.client_id))
@@ -250,7 +331,7 @@ pub async fn start_client(
     let jobs_cl = jobs.clone();
     let handle = tokio::spawn(async move {
         let guard = HubGuard { hub, id };
-        let error = run(&host, id, &broker, stream, cfg, rx).await;
+        let error = run(&host, id, &broker, stream, after, cfg, rx).await;
         emit_state(&host, id, &broker, "closed", error.clone(), Vec::new());
         host.emit(
             "job://ended",
@@ -270,6 +351,7 @@ async fn run(
     id: u64,
     broker: &str,
     stream: TcpStream,
+    after: Vec<u8>,
     cfg: MqttConfig,
     mut rx: UnboundedReceiver<Cmd>,
 ) -> Option<EngineError> {
@@ -289,12 +371,17 @@ async fn run(
     let mut pending_in: HashSet<u16> = HashSet::new();
     let mut pending_subs: HashMap<u16, Vec<Sub>> = HashMap::new();
     let mut pending_pub: HashMap<u16, String> = HashMap::new();
-    let mut batch: Vec<MqttMessage> = Vec::new();
-    let mut dropped: u64 = 0;
+    let mut pending_unsubs: HashSet<u16> = HashSet::new();
+    let mut batch = Pending::default();
+    // When the broker was last heard from: a broker that answers no PINGREQ is
+    // gone even while the TCP connection looks open (a cable pulled, a host
+    // that froze), and the connection ends instead of saying `connected` for ever.
+    let mut heard = tokio::time::Instant::now();
+    let silent_for = Duration::from_millis(u64::from(cfg.keep_alive_s) * 1500);
     let gate = Gate::new(200);
 
     if !cfg.subscribe.is_empty() {
-        let pid = next_packet_id(&mut counter);
+        let pid = next_packet_id(&mut counter, |_| false);
         let filters: Vec<(String, u8)> = cfg
             .subscribe
             .iter()
@@ -317,17 +404,23 @@ async fn run(
     let mut flusher = tokio::time::interval(FLUSH_EVERY);
     flusher.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
-    let mut inbuf: Vec<u8> = Vec::with_capacity(8192);
+    // What came behind the CONNACK is read first, as if it had just arrived.
+    let mut inbuf: Vec<u8> = after;
+    inbuf.reserve(8192);
     let mut chunk = [0u8; 8192];
+    let mut held = !inbuf.is_empty();
 
     loop {
         tokio::select! {
-            read = rd.read(&mut chunk) => {
+            // `None`: no read, the bytes held from the handshake are decoded.
+            read = async { if std::mem::take(&mut held) { Ok(None) } else { rd.read(&mut chunk).await.map(Some) } }, if !batch.full() => {
                 match read {
-                    Ok(0) => return Some(Cause::Reset.error(broker)),
-                    Ok(n) => inbuf.extend_from_slice(&chunk[..n]),
+                    Ok(Some(0)) => return Some(Cause::Reset.error(broker)),
+                    Ok(Some(n)) => inbuf.extend_from_slice(&chunk[..n]),
+                    Ok(None) => {}
                     Err(e) => return lost(e),
                 }
+                heard = tokio::time::Instant::now();
                 let mut at = 0usize;
                 loop {
                     match decode(&inbuf[at..]) {
@@ -339,16 +432,14 @@ async fn run(
                                     // before PUBREL is an ack we owe, not a message.
                                     let fresh = qos < 2 || pending_in.insert(packet_id);
                                     if fresh {
-                                        if batch.len() >= BATCH_CAP {
-                                            batch.remove(0);
-                                            dropped += 1;
-                                        }
-                                        batch.push(MqttMessage {
+                                        batch.add(MqttMessage {
                                             ts: now_ms(),
-                                            payload: String::from_utf8_lossy(&payload).into_owned(),
+                                            payload: String::from_utf8_lossy(&payload[..payload.len().min(SHOWN_PAYLOAD)]).into_owned(),
                                             bytes: payload.len(),
+                                            truncated: payload.len() > SHOWN_PAYLOAD,
                                             topic: topic.clone(),
                                             qos, retain, dup,
+                                            count: 1,
                                         });
                                         if inspect::armed(host) && gate.allow() {
                                             inspect::publish(host, gate.mark(Frame::rx("mqtt", "mqtt")
@@ -403,6 +494,7 @@ async fn run(
                                     emit_state(host, id, broker, "subscribed", None, grants);
                                 }
                                 Packet::UnsubAck(pid) => {
+                                    pending_unsubs.remove(&pid);
                                     host.emit("mqtt://ack", AckEvent {
                                         job_id: id, ts: now_ms(), kind: "unsubscribed",
                                         packet_id: pid, topic: None,
@@ -416,14 +508,19 @@ async fn run(
                     }
                 }
                 if at > 0 { inbuf.drain(..at); }
+                if inbuf.capacity() > KEEP_BUFFER && inbuf.len() <= KEEP_BUFFER {
+                    inbuf.shrink_to(KEEP_BUFFER);
+                }
             }
 
             cmd = rx.recv() => {
                 let cmd = cmd?;
+                let busy = |pid: u16| pending_pub.contains_key(&pid) || pending_subs.contains_key(&pid) || pending_unsubs.contains(&pid);
+                let pid = next_packet_id(&mut counter, busy);
                 let bytes = match cmd {
                     Cmd::Publish { topic, payload, qos, retain } => {
                         let qos = qos.min(2);
-                        let pid = if qos > 0 { next_packet_id(&mut counter) } else { 0 };
+                        let pid = if qos > 0 { pid } else { 0 };
                         if qos > 0 { pending_pub.insert(pid, topic.clone()); }
                         let framed = encode_publish(&topic, &payload, qos, retain, pid, false);
                         if inspect::armed(host) {
@@ -440,14 +537,13 @@ async fn run(
                         framed
                     }
                     Cmd::Subscribe(subs) => {
-                        let pid = next_packet_id(&mut counter);
                         let filters: Vec<(String, u8)> =
                             subs.iter().map(|s| (s.filter.clone(), s.qos)).collect();
                         pending_subs.insert(pid, subs);
                         encode_subscribe(pid, &filters)
                     }
                     Cmd::Unsubscribe(filters) => {
-                        let pid = next_packet_id(&mut counter);
+                        pending_unsubs.insert(pid);
                         encode_unsubscribe(pid, &filters)
                     }
                 };
@@ -458,6 +554,11 @@ async fn run(
 
             _ = pinger.tick() => {
                 if cfg.keep_alive_s > 0 {
+                    // Silent for one and a half keep-alives with pings going out: the
+                    // broker would have closed a client this quiet, and nothing answers.
+                    if !batch.full() && heard.elapsed() > silent_for {
+                        return Some(Cause::Timeout.error(broker).because(format!("no answer to PINGREQ for {} s", silent_for.as_secs_f64())));
+                    }
                     if let Err(e) = wr.write_all(&encode_pingreq()).await {
                         return lost(e);
                     }
@@ -465,12 +566,12 @@ async fn run(
             }
 
             _ = flusher.tick() => {
-                if !batch.is_empty() || dropped > 0 {
+                if !batch.messages.is_empty() {
                     host.emit("mqtt://messages", MessageBatch {
                         job_id: id,
                         ts: now_ms(),
-                        messages: std::mem::take(&mut batch),
-                        dropped: std::mem::take(&mut dropped),
+                        messages: batch.take(),
+                        dropped: 0,
                     });
                 }
             }
@@ -483,11 +584,41 @@ mod tests {
     use super::*;
     use crate::mqtt_dial::publish_once;
 
+    fn message(topic: &str, payload: &str) -> MqttMessage {
+        MqttMessage { ts: 0, topic: topic.into(), payload: payload.into(), bytes: payload.len(), truncated: false, qos: 0, retain: false, dup: false, count: 1 }
+    }
+
+    #[test]
+    fn a_batch_keeps_the_latest_per_topic_with_its_count_and_fills_up() {
+        let mut batch = Pending::default();
+        for value in 0..1000 {
+            batch.add(message("hall/fader1", &value.to_string()));
+            batch.add(message("hall/fader2", "x"));
+        }
+        let taken = batch.take();
+        assert_eq!(taken.iter().map(|m| (m.topic.as_str(), m.payload.as_str(), m.count)).collect::<Vec<_>>(), [("hall/fader1", "999", 1000), ("hall/fader2", "x", 1000)]);
+        assert!(!batch.full() && batch.held == 0);
+        for n in 0..BATCH_TOPICS {
+            assert!(!batch.full());
+            batch.add(message(&format!("t/{n}"), ""));
+        }
+        assert!(batch.full(), "a batch of BATCH_TOPICS topics holds the reading");
+        batch.take();
+        batch.add(message("big", &"x".repeat(BATCH_BYTES)));
+        assert!(batch.full(), "and one of BATCH_BYTES");
+    }
+
     #[test]
     fn packet_ids_never_land_on_zero() {
         let mut counter = u16::MAX - 1;
-        assert_eq!(next_packet_id(&mut counter), u16::MAX);
-        assert_eq!(next_packet_id(&mut counter), 1, "must wrap past zero");
+        assert_eq!(next_packet_id(&mut counter, |_| false), u16::MAX);
+        assert_eq!(next_packet_id(&mut counter, |_| false), 1, "must wrap past zero");
+        // Round again past 65 535 while 2 and 3 still wait for their PUBACK: they are skipped.
+        let mut counter = u16::MAX;
+        let busy = |pid: u16| pid == 1 || pid == 2 || pid == 3;
+        assert_eq!(next_packet_id(&mut counter, busy), 4, "an id in flight is never given twice");
+        let mut counter = 0;
+        assert_eq!(next_packet_id(&mut counter, |pid| pid != 9), 9);
     }
     #[test]
     fn the_live_connection_refuses_a_publish_to_a_wildcard_and_subscribes_to_one() {

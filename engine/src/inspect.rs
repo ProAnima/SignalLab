@@ -36,8 +36,11 @@ pub const RING_CAPACITY: usize = 8192;
 /// Upper bound on frames handed to the webview per pump tick.
 const MAX_BATCH: usize = 250;
 const PUMP_INTERVAL_MS: u64 = 120;
-/// Bytes of payload shown as a hex preview with each frame.
-pub const HEX_LIMIT: usize = 1024;
+/// Bytes of payload shown as a hex preview with each frame. Every frame of a
+/// batch carries it (about 4 characters a byte), so it stays short: a full
+/// batch at 1 KiB each was 1.3 MB of JSON, ~10 MB/s at full rate. The rest is
+/// `inspect_payload`'s, one click away.
+pub const HEX_LIMIT: usize = 256;
 /// Bytes of payload a frame keeps: a whole UDP datagram (64 KiB at most), an
 /// ordinary HTTP body or WebSocket message; past it, the frame says how much.
 pub const FRAME_LIMIT: usize = 256 << 10;
@@ -338,17 +341,16 @@ impl Capture {
     }
 
     /// Take everything the UI hasn't seen, newest-capped at [`MAX_BATCH`].
+    /// Under the ring's lock, which every source pushing waits for: the ring
+    /// is in number order, so the first fresh frame is found by binary search
+    /// and only the frames shipped are copied — never the whole ring.
     fn drain(&self) -> (Vec<Frame>, u64) {
         let cursor = self.inner.cursor.load(Ordering::Relaxed);
-        let fresh: Vec<Frame> = {
+        let batch: Vec<Frame> = {
             let ring = self.inner.ring.lock().unwrap();
-            ring.frames.iter().filter(|f| f.seq > cursor).cloned().collect()
-        };
-
-        let batch: Vec<Frame> = if fresh.len() > MAX_BATCH {
-            fresh[fresh.len() - MAX_BATCH..].to_vec()
-        } else {
-            fresh
+            let first = ring.frames.partition_point(|f| f.seq <= cursor);
+            let start = first.max(ring.frames.len().saturating_sub(MAX_BATCH));
+            ring.frames.range(start..).cloned().collect()
         };
 
         let Some(last) = batch.last() else {
@@ -366,6 +368,16 @@ impl Capture {
         (batch, skipped_now)
     }
 
+    /// `export`, on a thread of its own: a full ring is hundreds of megabytes of
+    /// text, and the async runtime's workers serve every other command meanwhile.
+    pub async fn export_file(&self, format: String) -> EngineResult<String> {
+        let capture = self.clone();
+        match tokio::task::spawn_blocking(move || capture.export(&format)).await {
+            Ok(written) => written,
+            Err(failed) => std::panic::resume_unwind(failed.into_panic()),
+        }
+    }
+
     /// Write the whole ring to the data folder. Returns the file path.
     pub fn export(&self, format: &str) -> EngineResult<String> {
         let frames = self.snapshot(RING_CAPACITY);
@@ -377,8 +389,17 @@ impl Capture {
         std::fs::create_dir_all(&dir).map_err(|e| failed(&dir, &e))?;
 
         let ext = if format == "txt" { "txt" } else { "jsonl" };
-        let path = dir.join(format!("capture-{}.{ext}", now_ms()));
-        let file = std::fs::File::create(&path).map_err(|e| failed(&path, &e))?;
+        // Never over another export: two in the same millisecond (two pages, a script) get two files.
+        let stamp = now_ms();
+        let mut attempt = 1u32;
+        let (path, file) = loop {
+            let path = dir.join(if attempt == 1 { format!("capture-{stamp}.{ext}") } else { format!("capture-{stamp}-{attempt}.{ext}") });
+            match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
+                Ok(file) => break (path, file),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && attempt < 1000 => attempt += 1,
+                Err(e) => return Err(failed(&path, &e)),
+            }
+        };
         let mut out = std::io::BufWriter::new(file);
         let io = |e: std::io::Error| failed(&path, &e);
 
@@ -534,17 +555,29 @@ pub fn plain_hex(bytes: &[u8]) -> String {
         if index > 0 {
             out.push(' ');
         }
-        out.push_str(&format!("{byte:02x}"));
+        push_hex(&mut out, *byte);
     }
     out
 }
 
+/// Two lowercase hex digits. Every captured payload is dumped as it is
+/// pushed, on the sending or receiving task itself: a `format!` per byte
+/// made a 1 KiB frame cost ~50 µs there, and a full ring's text export seconds.
+fn push_hex(out: &mut String, byte: u8) {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    out.push(DIGITS[usize::from(byte >> 4)] as char);
+    out.push(DIGITS[usize::from(byte & 0x0f)] as char);
+}
+
 fn dump_rows(shown: &[u8]) -> String {
-    let mut out = String::with_capacity(shown.len() * 4 + 16);
+    use std::fmt::Write as _;
+    // A row: offset, 16 × "hh ", two spaces, |ascii|, newline.
+    let mut out = String::with_capacity(shown.len().div_ceil(16) * 80);
     for (row, chunk) in shown.chunks(16).enumerate() {
-        out.push_str(&format!("{:04x}  ", row * 16));
+        let _ = write!(out, "{:04x}  ", row * 16);
         for (i, b) in chunk.iter().enumerate() {
-            out.push_str(&format!("{b:02x} "));
+            push_hex(&mut out, *b);
+            out.push(' ');
             if i == 7 {
                 out.push(' ');
             }
@@ -804,7 +837,7 @@ mod tests {
         let seq = cap.push(Frame::rx("udp", "test").payload(&datagram)).unwrap();
         let shown = cap.snapshot(1).remove(0);
         assert_eq!((shown.bytes, shown.kept), (3000, 3000));
-        assert!(shown.hex.as_deref().unwrap().ends_with("… 1976 more bytes\n"), "the batch carries a preview");
+        assert!(shown.hex.as_deref().unwrap().ends_with(&format!("… {} more bytes\n", 3000 - HEX_LIMIT)), "the batch carries a preview");
         let json = serde_json::to_value(&shown).unwrap();
         assert!(json.get("data").is_none() && json["kept"] == 3000, "the bytes never travel with a batch");
         let payload = cap.payload(seq).unwrap();
@@ -853,5 +886,53 @@ mod tests {
         drop(guard);
         let clean = Frame::tx("udp", "test").payload(b"hunter2-token");
         assert!(clean.hex.unwrap().contains("hunter2-token"), "after the run nothing is masked");
+    }
+
+    /// The dump is what `format!` wrote, byte for byte, without its cost.
+    #[test]
+    fn hex_is_written_as_format_would() {
+        let every: Vec<u8> = (0..=255u8).collect();
+        let expected = every.iter().map(|byte| format!("{byte:02x}")).collect::<Vec<_>>().join(" ");
+        assert_eq!(plain_hex(&every), expected);
+        let row = hex_dump_all(&every[0x40..0x54]);
+        assert_eq!(
+            row,
+            "0000  40 41 42 43 44 45 46 47  48 49 4a 4b 4c 4d 4e 4f  |@ABCDEFGHIJKLMNO|
+0010  50 51 52 53                                       |PQRS|
+"
+        );
+        assert!(hex_dump_all(&vec![0u8; 0x10010]).ends_with("
+10000  00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00  |................|
+"));
+    }
+
+    /// A drain copies what it ships, not every frame the UI has not seen: with
+    /// the whole ring fresh (a firehose, the UI a tick behind) it holds the lock
+    /// every source pushes through about as long as with one batch fresh. It
+    /// used to clone all 8 192 frames to keep 250: ~19 ms under the lock.
+    #[test]
+    fn a_drain_of_a_full_ring_costs_what_one_batch_does() {
+        let fill = |cap: &Capture, n: usize| {
+            for _ in 0..n {
+                cap.push(Frame::rx("udp", "test").remote("127.0.0.1:9").summary("x".repeat(60)).payload(&[0x41; 1024]));
+            }
+        };
+        let timed = |n: usize| {
+            (0..3)
+                .map(|_| {
+                    let cap = Capture::new();
+                    cap.set_enabled(true);
+                    fill(&cap, n);
+                    let started = std::time::Instant::now();
+                    let (batch, skipped) = cap.drain();
+                    let took = started.elapsed();
+                    assert_eq!((batch.len() as u64 + skipped, batch.len()), (n as u64, n.min(MAX_BATCH)));
+                    took
+                })
+                .min()
+                .unwrap()
+        };
+        let (one_batch, whole_ring) = (timed(MAX_BATCH), timed(RING_CAPACITY));
+        assert!(whole_ring < one_batch * 8, "a full ring took {whole_ring:?}, one batch {one_batch:?}");
     }
 }

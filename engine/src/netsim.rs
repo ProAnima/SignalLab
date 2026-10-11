@@ -44,6 +44,9 @@ pub const MAX_BURST_LENGTH: f64 = 1000.0;
 const MAX_QUEUE: Duration = Duration::from_secs(1);
 /// Packets on their way (delayed) at once; more are dropped as throttled.
 const MAX_IN_FLIGHT: usize = 10_000;
+/// Bytes on their way at once, all packets together: 10 000 large datagrams
+/// held for a minute would otherwise be 650 MB. More are dropped as throttled.
+const MAX_IN_FLIGHT_BYTES: usize = 64 * 1024 * 1024;
 /// A reordered packet is held back this long at least (or by the latency, if longer).
 const REORDER_HOLD: Duration = Duration::from_millis(20);
 /// Phases kept per relay; older ones are counted, not kept.
@@ -228,6 +231,14 @@ pub struct ImpairCounts {
     pub reset: u64,
     #[serde(skip_serializing_if = "is_zero")]
     pub stalled: u64,
+    /// TCP: connections the target refused (passed on to the client as a reset).
+    #[serde(skip_serializing_if = "is_zero")]
+    pub refused: u64,
+    /// What this machine could not pass on — a send the system refused, a
+    /// connection it had no local port or socket for, a connection past the
+    /// relay's limit — never the profile's doing, nor the target's.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub failed: u64,
 }
 
 #[derive(Default)]
@@ -243,6 +254,8 @@ pub(crate) struct Stats {
     pub(crate) connections: AtomicU64,
     pub(crate) reset: AtomicU64,
     pub(crate) stalled: AtomicU64,
+    pub(crate) refused: AtomicU64,
+    pub(crate) failed: AtomicU64,
 }
 
 impl Stats {
@@ -260,6 +273,8 @@ impl Stats {
             connections: load(&self.connections),
             reset: load(&self.reset),
             stalled: load(&self.stalled),
+            refused: load(&self.refused),
+            failed: load(&self.failed),
         }
     }
 }
@@ -462,6 +477,7 @@ pub struct Relay {
     /// In all: every phase's counters add up to these.
     pub(crate) stats: Stats,
     in_flight: AtomicUsize,
+    in_flight_bytes: AtomicUsize,
     phases: Mutex<PhaseLog>,
     opened: Instant,
     /// When it opened, wall clock: the phases' times are from then.
@@ -480,6 +496,7 @@ impl Relay {
             changed: watch::channel(0).0,
             stats: Stats::default(),
             in_flight: AtomicUsize::new(0),
+            in_flight_bytes: AtomicUsize::new(0),
             phases: Mutex::new(PhaseLog { closed: Vec::new(), earlier: 0 }),
             opened: Instant::now(),
             opened_ms: now_ms(),
@@ -599,7 +616,8 @@ impl Relay {
             }
             Fate::Sent(copies) => copies,
         };
-        if self.in_flight.load(Ordering::Relaxed) + copies.len() > MAX_IN_FLIGHT {
+        let bytes: usize = copies.iter().map(|copy| copy.bytes.len()).sum();
+        if self.in_flight.load(Ordering::Relaxed) + copies.len() > MAX_IN_FLIGHT || self.in_flight_bytes.load(Ordering::Relaxed) + bytes > MAX_IN_FLIGHT_BYTES {
             count(|stats| &stats.throttled);
             if capture {
                 tap.record(payload, dest, format!("throttled ({MAX_IN_FLIGHT} on their way)"));
@@ -621,6 +639,7 @@ impl Relay {
                 count(|stats| &stats.reordered);
             }
             self.in_flight.fetch_add(1, Ordering::Relaxed);
+            self.in_flight_bytes.fetch_add(copy.bytes.len(), Ordering::Relaxed);
             // Due from the decision, not from when the task first runs: no drift under load.
             let due = tokio::time::Instant::now() + copy.delay;
             let (relay, socket, tap, phase) = (self.clone(), socket.clone(), tap.clone(), phase.clone());
@@ -633,6 +652,7 @@ impl Relay {
                     None => socket.send(&copy.bytes).await,
                 };
                 relay.in_flight.fetch_sub(1, Ordering::Relaxed);
+                relay.in_flight_bytes.fetch_sub(copy.bytes.len(), Ordering::Relaxed);
                 match sent {
                     Ok(size) => {
                         for stats in [&relay.stats, &*phase] {
@@ -653,7 +673,12 @@ impl Relay {
                             tap.record(&copy.bytes, dest, verdict);
                         }
                     }
+                    // The system would not send it (out of buffers, the client's port gone):
+                    // counted, never passed off as the profile dropping it.
                     Err(error) => {
+                        for stats in [&relay.stats, &*phase] {
+                            stats.failed.fetch_add(1, Ordering::Relaxed);
+                        }
                         if capture {
                             tap.record(&copy.bytes, dest, format!("send failed: {error}"));
                         }
@@ -937,6 +962,32 @@ mod tests {
         let phases: Vec<(&str, u64, u64)> = summary.phases.iter().map(|phase| (phase.profile.as_str(), phase.counts.received, phase.counts.forwarded)).collect();
         assert_eq!(phases, [("slow", 1, 1), ("offline", 0, 0)], "it went out during offline, and counts for slow");
         assert!(summary.opened_ms > 0 && summary.error.is_none());
+        serving.abort();
+    }
+
+    /// Large datagrams held back by a long latency: what is on its way stays
+    /// within `MAX_IN_FLIGHT_BYTES`, the rest is counted as throttled.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn what_is_held_back_stays_within_its_bytes() {
+        let target = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let (downstream, upstream) = open("127.0.0.1:0".parse().unwrap(), "127.0.0.1:0", target.local_addr().unwrap(), "target").await.unwrap();
+        let listen = downstream.local_addr().unwrap();
+        let relay = Relay::new(listen, target.local_addr().unwrap(), RelayProtocol::Udp, ImpairProfile { latency_ms: 10_000.0, ..calm() }, 1);
+        let serving = tokio::spawn(relay.clone().serve(Host::new(Recorder::new(), Capture::new()), 0, "test".into(), downstream, upstream));
+        let client = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let datagram = vec![7u8; 60_000];
+        let fits = MAX_IN_FLIGHT_BYTES / datagram.len();
+        for _ in 0..fits + 200 {
+            client.send_to(&datagram, listen).await.unwrap();
+            // Paced, so the relay's socket keeps up and the count below is exact.
+            tokio::time::sleep(Duration::from_micros(200)).await;
+        }
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let counts = relay.counts();
+        assert!(counts.received > fits as u64, "enough arrived to pass the limit: {counts:?}");
+        assert_eq!(counts.throttled, counts.received - fits as u64, "{counts:?}");
+        assert!(relay.in_flight_bytes.load(Ordering::Relaxed) <= MAX_IN_FLIGHT_BYTES);
+        assert_eq!(counts.forwarded, 0, "all of it still held back");
         serving.abort();
     }
 

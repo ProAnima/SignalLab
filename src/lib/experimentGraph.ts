@@ -10,6 +10,13 @@ export const NODE_HEIGHT = 80;
 /** Horizontal pitch between a node and the one it feeds; matches the templates. */
 export const STEP_X = NODE_WIDTH + 50;
 const STEP_Y = NODE_HEIGHT + 48;
+/** The most nodes a document holds (the engine's `MAX_NODES`): it refuses to save or run more. */
+export const MAX_NODES = 64;
+
+/** Whether `doc` has room for `adding` more nodes. */
+export function hasRoom(doc: Experiment, adding = 1): boolean {
+  return doc.nodes.length + adding <= MAX_NODES;
+}
 
 const defaultRequest: HttpRequest = {
   method: "GET", url: "http://127.0.0.1:8080/", headers: [], body: null, timeout_ms: 4000,
@@ -109,7 +116,7 @@ export function freeRelayPort(doc: Experiment, avoid: string[] = []): number {
  */
 export function routeThroughImpairment(doc: Experiment, nodeId: string): { doc: Experiment; relay: ExperimentNode } | null {
   const node = doc.nodes.find((candidate) => candidate.id === nodeId);
-  if (!node || (node.type !== "osc" && node.type !== "udp")) return null;
+  if (!node || (node.type !== "osc" && node.type !== "udp") || !hasRoom(doc)) return null;
   const listen = `127.0.0.1:${freeRelayPort(doc, [node.target])}`;
   const relay: ExperimentNode = { ...createNode("impairment", node.x, Math.max(12, node.y - STEP_Y)), type: "impairment", listen, target: node.target, profile: presetProfile("lan") };
   const incoming = doc.edges.filter((edge) => edge.to === nodeId);

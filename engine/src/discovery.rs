@@ -24,6 +24,11 @@ use super::transport::{self, Cause};
 
 const MAX_PEERS: usize = 512;
 
+/// Auto-replies on the wire at once. A flood of probes with a slow reply would
+/// otherwise spawn a task per probe without bound; past this, a probe is
+/// counted as skipped instead of answered.
+const MAX_REPLIES_IN_FLIGHT: u64 = 1024;
+
 fn default_true() -> bool {
     true
 }
@@ -74,6 +79,10 @@ struct PeerReport {
     packets: u64,
     bytes: u64,
     responses: u64,
+    /// Distinct peers past [`MAX_PEERS`] whose traffic is counted but not listed.
+    unlisted: u64,
+    /// Probes not answered because [`MAX_REPLIES_IN_FLIGHT`] already were.
+    replies_skipped: u64,
 }
 
 /// Bind a UDP socket, optionally with SO_REUSEADDR so the port can be shared.
@@ -162,6 +171,10 @@ pub async fn start_discovery(
     let packets = Arc::new(AtomicU64::new(0));
     let bytes_total = Arc::new(AtomicU64::new(0));
     let responses = Arc::new(AtomicU64::new(0));
+    let unlisted = Arc::new(AtomicU64::new(0));
+    let replies_skipped = Arc::new(AtomicU64::new(0));
+    // How many auto-replies are waiting or in flight right now.
+    let in_flight = Arc::new(AtomicU64::new(0));
     let host_cl = host.clone();
     let jobs_cl = jobs.clone();
 
@@ -170,12 +183,14 @@ pub async fn start_discovery(
         // this task's future is dropped on cancel.
         let mut guard = TaskGuard::new();
         let reporter = {
-            let (host_r, peers_r, p, b, r) = (
+            let (host_r, peers_r, p, b, r, u, s) = (
                 host_cl.clone(),
                 peers.clone(),
                 packets.clone(),
                 bytes_total.clone(),
                 responses.clone(),
+                unlisted.clone(),
+                replies_skipped.clone(),
             );
             tokio::spawn(async move {
                 loop {
@@ -192,6 +207,8 @@ pub async fn start_discovery(
                             packets: p.load(Ordering::Relaxed),
                             bytes: b.load(Ordering::Relaxed),
                             responses: r.load(Ordering::Relaxed),
+                            unlisted: u.load(Ordering::Relaxed),
+                            replies_skipped: s.load(Ordering::Relaxed),
                         },
                     );
                 }
@@ -227,10 +244,24 @@ pub async fn start_discovery(
                             _ => true,
                         };
 
+                    // Reply only if a slot is free, so a flood of probes cannot
+                    // spawn an unbounded number of reply tasks; a probe we would
+                    // have answered but cannot is counted as skipped.
+                    let will_reply = should_reply
+                        && if in_flight.load(Ordering::Relaxed) < MAX_REPLIES_IN_FLIGHT {
+                            in_flight.fetch_add(1, Ordering::Relaxed);
+                            true
+                        } else {
+                            replies_skipped.fetch_add(1, Ordering::Relaxed);
+                            false
+                        };
+
                     {
                         let mut map = peers.lock().unwrap();
                         if map.len() >= MAX_PEERS && !map.contains_key(&from) {
-                            // Table full — keep counting traffic, stop adding rows.
+                            // Table full — count this peer's packet so the totals
+                            // still add up, but add no row for it.
+                            unlisted.fetch_add(1, Ordering::Relaxed);
                         } else {
                             let now = now_ms();
                             let entry = map.entry(from).or_insert_with(|| Peer {
@@ -267,12 +298,13 @@ pub async fn start_discovery(
                         inspect::publish(&host_cl, gate.mark(frame));
                     }
 
-                    if should_reply {
+                    if will_reply {
                         if let Some(reply) = response.clone() {
-                            let (sock_r, host_r, resp_r, local_r, delay, rsum) = (
+                            let (sock_r, host_r, resp_r, flight_r, local_r, delay, rsum) = (
                                 sock.clone(),
                                 host_cl.clone(),
                                 responses.clone(),
+                                in_flight.clone(),
                                 local.clone(),
                                 cfg.respond_delay_ms,
                                 response_summary.clone(),
@@ -281,22 +313,26 @@ pub async fn start_discovery(
                                 if delay > 0 {
                                     tokio::time::sleep(Duration::from_millis(delay)).await;
                                 }
-                                if sock_r.send_to(&reply, from).await.is_ok() {
-                                    resp_r.fetch_add(1, Ordering::Relaxed);
-                                    if inspect::armed(&host_r) {
-                                        inspect::publish(
-                                            &host_r,
-                                            Frame::tx("udp", "discovery")
-                                                .job(id)
-                                                .local(&local_r)
-                                                .remote(from)
-                                                .payload(&reply)
-                                                .summary(rsum)
-                                                .verdict("auto-reply"),
-                                        );
-                                    }
+                                // Counted whether or not the send succeeds, so
+                                // responses + replies_skipped covers every probe
+                                // we meant to answer.
+                                resp_r.fetch_add(1, Ordering::Relaxed);
+                                if sock_r.send_to(&reply, from).await.is_ok() && inspect::armed(&host_r) {
+                                    inspect::publish(
+                                        &host_r,
+                                        Frame::tx("udp", "discovery")
+                                            .job(id)
+                                            .local(&local_r)
+                                            .remote(from)
+                                            .payload(&reply)
+                                            .summary(rsum)
+                                            .verdict("auto-reply"),
+                                    );
                                 }
+                                flight_r.fetch_sub(1, Ordering::Relaxed);
                             });
+                        } else {
+                            in_flight.fetch_sub(1, Ordering::Relaxed);
                         }
                     }
                 }

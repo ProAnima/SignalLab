@@ -45,7 +45,7 @@ the app; credentials are not.
 | [[ui:field.auth]] | How the request authenticates ([below](#auth)) | [[ui:http.auth.none]] |
 | [[ui:http.keepCookies]] | Send back the cookies servers set ([below](#cookies)) | on |
 | [[ui:http.body]] | Sent exactly as written; no `Content-Type` is added, so add the header that matches. An empty body is not sent. The field is not shown for GET and HEAD, and then the request carries no body at all — not in the send, not in a saved signal, not in [[ui:common.toExperiment]] — even if you typed one under another method. | empty |
-| [[ui:common.timeoutMs]] | How long the whole exchange may take, answer and body included | 10 000 |
+| [[ui:common.timeoutMs]] | How long the whole exchange may take, answer and body included: 1 ms to 120 000 (two minutes), as in the HTTP step | 10 000 |
 
 ## Authentication {#auth}
 
@@ -116,6 +116,10 @@ The cookies panel under the request and the response lists what the jar holds:
 expiry) and [[ui:http.cookieFlags]] (`Secure`, `HttpOnly`, `SameSite`).
 Expired cookies are not listed. [[ui:common.clear]] empties the jar.
 
+The jar keeps at most 3000 cookies, about what a browser keeps. A server that
+sets a new cookie with every answer fills it that far and no further: past it a
+new cookie is not kept, while one the jar holds is still updated or removed.
+
 The jar lives as long as the app: a restart starts with an empty one. On a
 [server](../server/index.md), there is one jar for every page signed in to it.
 An experiment run has a jar of its own (see [Experiments](../experiments/index.md)),
@@ -129,7 +133,13 @@ and `signallab send http` uses none.
 | [[ui:http.latency]] | From sending to the last byte of the body, in milliseconds |
 | [[ui:http.size]] | The size of the body |
 | Response headers | Click the line with their count to show or hide them |
-| Body | Formatted when it is JSON; [[ui:http.rawBody]] and [[ui:http.formatJson]] switch. Up to 256 KiB is shown, then `… (truncated)`. |
+| Body | Formatted when it is JSON; [[ui:http.rawBody]] and [[ui:http.formatJson]] switch. Up to 256 KiB is shown, then `… (truncated)`; [[ui:http.size]] is still the whole body's. |
+
+The body is read as it arrives and only its first 256 KiB is kept, so a body of
+gigabytes — or one that never ends — costs no more memory than that; it ends
+at the timeout. A body that stops halfway (the timeout, or a server that hangs
+up) is a failure, said in the same words as any other, with the status and
+what did arrive still shown: a `200` with half a body is not a success.
 
 When there is no response, the panel says why, in the same words as everywhere
 in Signal Lab: refused, no answer in time, the name does not resolve, a
@@ -139,9 +149,12 @@ under it.
 ### Redirects {#redirects}
 
 Redirects (301, 302, 303, 307, 308) are followed, up to 10; the response shown
-is the last one. After 301, 302 and 303 the request goes on as GET without a
-body (HEAD stays HEAD); after 307 and 308 as it was. `Authorization` and
-cookies typed for one host are not sent on to another.
+is the last one. After a 303 the request goes on as GET without a body (HEAD
+stays HEAD); after a 301 or 302 a POST does the same, while PUT, DELETE and the
+other methods go on as they were, body and all (RFC 9110); after 307 and 308
+every request goes on as it was. The same holds with Digest. `Authorization`
+and cookies typed for one host are not sent on to another. A method that is not
+an HTTP token (a space in it, say) is refused before anything is sent.
 
 ### Secure connections {#tls}
 
@@ -187,8 +200,9 @@ There are two ways to send:
 | Number | What |
 | --- | --- |
 | [[ui:http.sent]] | Requests that have had an answer or failed |
-| [[ui:http.ok]] | Answered with a 2xx status |
-| [[ui:http.failed]] | No answer, or any status outside 200–299 |
+| [[ui:http.ok]] | Answered with a 2xx status and the whole body |
+| [[ui:http.failed]] | No answer, a body cut short, or any status outside 200–299 |
+| [[ui:http.local]] | Requests this computer could not send: it ran out of sockets or local ports (each closed connection holds one for up to two minutes on Windows). The server never saw them, so they are in [[ui:http.sent]] but not in [[ui:http.failed]] or the latencies. Shown only when there are some. |
 | [[ui:http.missed]] | Skipped, as above (only with a rate) |
 | [[ui:http.rps]] | Requests per second over the last tenth of a second; when the burst has ended, over the whole burst. With a rate, the label names the rate asked for. |
 | [[ui:http.p50]], [[ui:http.p90]], [[ui:http.p95]], [[ui:http.p99]] | The time within which that share of the requests finished, failures included; accurate to within 0.5 % |
@@ -294,6 +308,7 @@ be answered, and 2 when an option is invalid. It keeps no cookies. See
 | `401` with Digest | Read the message under the status: see [Digest](#digest). |
 | [[ui:http.missed]] above 0 | Raise [[ui:common.concurrency]], or lower the rate: the server answers slower than the rate needs. |
 | [[ui:http.failed]] high though the server answers | Every status outside 200–299 counts as failed, 404 and 500 included. |
+| [[ui:http.local]] above 0 | This computer ran out of local ports: the server closes every connection, so each request needs a new one. Lower [[ui:common.concurrency]] or the rate, or wait a minute for the ports to come back. |
 
 On a server, requests go out from the server: `127.0.0.1` is the server itself.
 See [Server](../server/index.md).

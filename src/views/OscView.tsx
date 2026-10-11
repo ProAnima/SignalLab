@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, EV, type EngineError, type ExperimentNode, type JobInfo, type OscArg, type OscInbound, type GenTick, type Signal, type SignalBody, type Waveform } from "../lib/api";
+import { api, EV, type EngineError, type ExperimentNode, type JobInfo, type MonitorStat, type OscArg, type OscInbound, type GenTick, type Signal, type SignalBody, type Waveform } from "../lib/api";
 import { SaveSignal, saveShortcut } from "../components/SaveSignal";
 import { waitForOscMessage } from "../lib/experimentGraph";
 import { useStore } from "../lib/store";
@@ -61,7 +61,10 @@ export function OscView({ onToExperiment, onWaitFor, load, onShowSignal }: {
   // ---- monitor ----
   const [bind, setBind] = useState("0.0.0.0:9000");
   const [monJob, setMonJob] = useState<JobInfo | null>(null);
+  const [monStat, setMonStat] = useState<MonitorStat | null>(null);
   const { items: msgs, push: pushMsg, clear: clearMsgs } = useRollingList<FlatMsg>(300);
+
+  useJobStream<MonitorStat>(EV.oscMonitorStat, monJob?.id ?? null, setMonStat);
 
   useJobStream<OscInbound>(EV.oscMessage, monJob?.id ?? null, (p) => {
     if (p.error) {
@@ -80,6 +83,7 @@ export function OscView({ onToExperiment, onWaitFor, load, onShowSignal }: {
       return;
     }
     try {
+      setMonStat(null);
       const job = await api.oscMonitorStart(bind);
       setMonJob(job);
       pushLog("ok", "osc", "log.oscListening", { bind });
@@ -182,7 +186,11 @@ export function OscView({ onToExperiment, onWaitFor, load, onShowSignal }: {
 
         {/* Monitor */}
         <div className="panel" style={{ display: "flex", flexDirection: "column", minHeight: 320 }}>
-          <p className="section-label">{t("osc.monitor")}</p>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <p className="section-label" style={{ margin: 0 }}>{t("osc.monitor")}</p>
+            {monStat && monStat.packets > 0 && <span className="tag-chip">{t("osc.monReceived", { n: monStat.packets })}</span>}
+            {monStat && monStat.not_shown > 0 && <span className="tag-chip" data-tip={t("osc.monNotShownHint")}>{t("osc.monNotShown", { n: monStat.not_shown })}</span>}
+          </div>
           <div className="row" style={{ alignItems: "flex-end", marginBottom: 12 }}>
             <div className="field" style={{ margin: 0 }}>
               <label htmlFor={fid("osc-bind")} data-tip={t("common.bindHint")}>{t("common.bind")}</label>

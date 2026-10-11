@@ -1,9 +1,9 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { api, on, EV, type DownFault, type Emulator, type EmulatorActivity, type EmulatorCounts, type Exchange, type JobInfo, type StoredEmulator } from "./api";
+import { api, on, EV, type DownFault, type Emulator, type EmulatorActivity, type EmulatorCounts, type Exchange, type JobEnded, type JobInfo, type StoredEmulator } from "./api";
 import { localizeEmulatorSeed } from "./emulators";
 import { useStore, type SaveState } from "./store";
 import { useI18n } from "./i18n";
-import type { Failure } from "./errors";
+import { isEngineError, type Failure } from "./errors";
 import { en } from "./locales/en";
 import { onFlush } from "./flush";
 
@@ -25,7 +25,11 @@ export interface Live {
 interface EmulatorStore {
   emulators: StoredEmulator[];
   path: string;
-  /** The file on disk could not be read; the list is then empty and the file untouched. */
+  /**
+   * The file on disk could not be read (the list is then empty), or changed
+   * since it was read (another page, an editor). Until a reload reads it,
+   * nothing writes it: an edit is refused with this failure.
+   */
   error: Failure | null;
   saveState: SaveState;
   /** Replace the library; the file follows on its own shortly after. */
@@ -33,8 +37,6 @@ interface EmulatorStore {
   reload: () => void;
   /** The job each library entry runs as, by its id (`JobInfo.params.source`). */
   running: Map<string, JobInfo>;
-  /** What each running emulator job has said, by job id. */
-  live: Record<number, Live>;
   /** Start one; the failure, if any, is thrown for the caller to show. */
   start: (stored: StoredEmulator, params?: Record<string, string>) => Promise<JobInfo>;
   /** What the job was started with, to tell when the document has changed since. */
@@ -42,6 +44,12 @@ interface EmulatorStore {
 }
 
 const Ctx = createContext<EmulatorStore | null>(null);
+/**
+ * What each running emulator job has said, by job id: a context of its own,
+ * since it changes five times a second for every emulator with traffic, and
+ * only the Emulators screen shows it. A job's entry goes when the job ends.
+ */
+const LiveCtx = createContext<Record<number, Live> | null>(null);
 
 export function EmulatorProvider({ children }: { children: ReactNode }) {
   const { jobs, refreshJobs, pushLog, pushError } = useStore();
@@ -56,17 +64,36 @@ export function EmulatorProvider({ children }: { children: ReactNode }) {
   const pending = useRef<StoredEmulator[] | null>(null);
   const timer = useRef<number | null>(null);
   const started = useRef(new Map<number, Emulator>());
+  // What the file held when this page last read or wrote it: a save names it (as the signal library's).
+  const stamp = useRef("");
+  const writes = useRef<Promise<unknown>>(Promise.resolve());
+  const blocked = useRef<Failure | null>(null);
+  const block = useCallback((failure: Failure | null) => { blocked.current = failure; setError(failure); }, []);
 
   const write = useCallback((next: StoredEmulator[]) => {
-    return api.emulatorsSave({ version: 1, emulators: next }).then(
+    // One write at a time: each names the stamp the one before it left.
+    const written = writes.current.catch(() => {}).then(() =>
+      api.emulatorsSave({ version: 1, emulators: next }, stamp.current).then((saved) => { stamp.current = saved.stamp; }));
+    writes.current = written;
+    return written.then(
       () => setSaveState("saved"),
-      (e) => { setSaveState("error"); pushError("emulators", e); },
+      (e) => {
+        setSaveState("error");
+        // Changed by someone else, or broken, since it was read: left alone until Reload.
+        if (isEngineError(e) && (e.code === "file.changed" || e.code === "emulators.json_invalid")) block(e);
+        pushError("emulators", e);
+      },
     );
-  }, [pushError]);
+  }, [pushError, block]);
 
   const load = useCallback(() => {
+    // What the file holds wins over an edit not written yet: that is what reloading asks for.
+    if (timer.current !== null) window.clearTimeout(timer.current);
+    timer.current = null;
+    pending.current = null;
     api.emulatorsLoad().then(
       (file) => {
+        stamp.current = file.stamp;
         let list = file.library.emulators;
         if (file.seeded) {
           // The starter set, in the language of the person who opened it first.
@@ -79,14 +106,18 @@ export function EmulatorProvider({ children }: { children: ReactNode }) {
         }
         setList(list);
         setPath(file.path);
-        setError(null);
+        block(null);
       },
       // A hand-edited file with a typo must say so and stay untouched.
-      (e) => { setError(e); pushError("emulators", e); },
+      (e) => { block(e); pushError("emulators", e); },
     );
-  }, [pushLog, pushError, write]);
+  }, [pushLog, pushError, write, block]);
 
   const setEmulators = useCallback((next: StoredEmulator[]) => {
+    if (blocked.current !== null) {
+      pushError("emulators", blocked.current);
+      return;
+    }
     setList(next);
     pending.current = next;
     setSaveState("saving");
@@ -97,7 +128,7 @@ export function EmulatorProvider({ children }: { children: ReactNode }) {
       pending.current = null;
       if (list) write(list);
     }, SAVE_DEBOUNCE_MS);
-  }, [write]);
+  }, [write, pushError]);
 
   // Before an update restarts the app: the write waiting for its debounce, now.
   useEffect(() => onFlush(() => {
@@ -137,7 +168,19 @@ export function EmulatorProvider({ children }: { children: ReactNode }) {
         return { ...prior, [activity.job_id]: { counts: activity.counts, exchanges, dropped: before.dropped + activity.dropped, forced: activity.forced } };
       });
     });
-    return () => { off.then((stop) => stop()); };
+    // An emulator stopped is not shown any more: what it said goes with it, so
+    // starting and stopping all afternoon does not keep every run's exchanges.
+    const ended = on<JobEnded>(EV.jobEnded, (event) => {
+      if (event.payload.kind !== "emulator") return;
+      const id = event.payload.job_id;
+      started.current.delete(id);
+      setLive((prior) => {
+        if (!(id in prior)) return prior;
+        const { [id]: _gone, ...rest } = prior;
+        return rest;
+      });
+    });
+    return () => { off.then((stop) => stop()); ended.then((stop) => stop()); };
   }, []);
   // Asked once per job: activity keeps arriving while the answer is on its way.
   const asked = useRef(new Set<number>());
@@ -162,8 +205,16 @@ export function EmulatorProvider({ children }: { children: ReactNode }) {
 
   const startedWith = useCallback((jobId: number) => started.current.get(jobId), []);
 
-  const value: EmulatorStore = { emulators, path, error, saveState, setEmulators, reload: load, running, live, start, startedWith };
-  return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
+  const value = useMemo<EmulatorStore>(() => ({ emulators, path, error, saveState, setEmulators, reload: load, running, start, startedWith }),
+    [emulators, path, error, saveState, setEmulators, load, running, start, startedWith]);
+  return <Ctx.Provider value={value}><LiveCtx.Provider value={live}>{children}</LiveCtx.Provider></Ctx.Provider>;
+}
+
+/** What each running emulator job has said, by job id. */
+export function useEmulatorLive(): Record<number, Live> {
+  const live = useContext(LiveCtx);
+  if (!live) throw new Error("useEmulatorLive must be used within EmulatorProvider");
+  return live;
 }
 
 export function useEmulators(): EmulatorStore {

@@ -106,7 +106,7 @@ async fn a_flaky_dependency_is_retried_and_the_run_proves_what_reached_it() {
     tokio::time::sleep(Duration::from_millis(50)).await;
     assert!(reqwest::get(format!("http://127.0.0.1:{port}/orders/1")).await.is_err(), "the port closed with the run");
     let report: Value = serde_json::from_str(&std::fs::read_to_string(result.report_path.as_ref().unwrap()).unwrap()).unwrap();
-    assert_eq!((report["version"].clone(), report["emulators"][0]["counts"]["hits"].clone()), (json!(5), json!([3])));
+    assert_eq!((report["version"].clone(), report["emulators"][0]["counts"]["hits"].clone()), (json!(6), json!([3])));
 }
 
 /// The bundled template does what it says: answered on the third attempt.

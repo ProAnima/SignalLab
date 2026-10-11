@@ -15,6 +15,10 @@ pub const RESERVED: &[&str] = &[
     "random_float", "pick",
 ];
 
+/// The longest a field may become once rendered (16 MiB): far past any request
+/// or reply, and a bound on a value referenced over and over.
+pub const MAX_RENDERED: usize = 16 << 20;
+
 /// A step into a JSON value: `.key`, `["key"]` or `[3]`.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Segment {
@@ -256,13 +260,17 @@ pub fn parse(text: &str) -> EngineResult<Template> {
     let mut parts = Vec::new();
     let mut literal = String::new();
     let mut i = 0;
+    // Characters before `i`, counted as the parser goes: counting them again
+    // for each expression made a field with many of them quadratic.
+    let mut chars = 0;
     while i < text.len() {
         let rest = &text[i..];
         if rest.starts_with("\\{{") {
             literal.push_str("{{");
             i += 3;
+            chars += 3;
         } else if let Some(inside) = rest.strip_prefix("{{") {
-            let position = text[..i].chars().count() + 1;
+            let position = chars + 1;
             let close = inside
                 .find("}}")
                 .ok_or_else(|| EngineError::new("template.unclosed").with("position", position))?;
@@ -273,10 +281,12 @@ pub fn parse(text: &str) -> EngineResult<Template> {
             }
             parts.push(Part::Expr { source: source.to_string(), expr });
             i += close + 4;
+            chars += source.chars().count();
         } else {
             let c = rest.chars().next().unwrap();
             literal.push(c);
             i += c.len_utf8();
+            chars += 1;
         }
     }
     if !literal.is_empty() {
@@ -397,11 +407,26 @@ impl<'a> Renderer<'a> {
     pub fn render(&mut self, text: &str) -> EngineResult<String> {
         let template = parse(text)?;
         let mut out = String::with_capacity(text.len());
+        // A value referenced many times would otherwise grow the field without bound.
+        let fits = |out: &String, more: &str| {
+            if out.len() + more.len() > MAX_RENDERED {
+                Err(EngineError::new("template.too_large").with("max", MAX_RENDERED >> 20))
+            } else {
+                Ok(())
+            }
+        };
         for part in &template.parts {
             match part {
-                Part::Text(text) => out.push_str(text),
+                Part::Text(text) => {
+                    fits(&out, text)?;
+                    out.push_str(text)
+                }
                 Part::Expr { source, expr } => match self.eval(expr) {
-                    Ok(value) => out.push_str(&value_text(&value)),
+                    Ok(value) => {
+                        let value = value_text(&value);
+                        fits(&out, &value)?;
+                        out.push_str(&value)
+                    }
                     Err(Unresolved::Missing(name)) if self.lenient => {
                         if !self.missing.contains(&name) {
                             self.missing.push(name);

@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, EV, on, type Experiment, type ExperimentEnded, type ExperimentStep, type JobInfo } from "./api";
 import type { Failure } from "./errors";
 import { useStore } from "./store";
+import { STEP_DRAW_MS, writtenBy } from "./experimentTimeline";
 import type { RunOptions } from "../components/ExperimentRunWith";
 
 /** How the last run ended. A failure is kept as it came and described when shown. */
@@ -38,16 +39,33 @@ export function useExperimentRun({ doc, save, setProblem, revealProblem, onLaunc
   // The job followed: null for none, -1 while it starts (its id is not known yet).
   const activeId = useRef<number | null>(null);
   const busy = !!job || starting;
+  // Steps that arrived since the last draw, drawn together at most every STEP_DRAW_MS.
+  const pending = useRef<ExperimentStep[]>([]);
+  const drawTimer = useRef<number | null>(null);
+  const draw = useCallback(() => {
+    if (drawTimer.current !== null) { window.clearTimeout(drawTimer.current); drawTimer.current = null; }
+    const batch = pending.current;
+    if (!batch.length) return;
+    pending.current = [];
+    setEvents((prior) => prior.concat(batch));
+    const written = writtenBy(batch);
+    if (written) setKnownVars((prior) => ({ ...prior, ...written }));
+  }, []);
+  /** Steps not drawn yet belong to the run that is gone. */
+  const discard = () => {
+    pending.current = [];
+    if (drawTimer.current !== null) { window.clearTimeout(drawTimer.current); drawTimer.current = null; }
+  };
 
   useEffect(() => {
     const steps = on<ExperimentStep>(EV.experimentStep, (event) => {
       if (activeId.current === null || (activeId.current !== -1 && event.payload.job_id !== activeId.current)) return;
-      setEvents((prior) => [...prior, event.payload]);
-      const written = event.payload.vars;
-      if (written) setKnownVars((prior) => ({ ...prior, ...written }));
+      pending.current.push(event.payload);
+      if (drawTimer.current === null) drawTimer.current = window.setTimeout(draw, STEP_DRAW_MS);
     });
     const ended = on<ExperimentEnded>(EV.experimentEnded, (event) => {
       if (activeId.current === null || (activeId.current !== -1 && event.payload.job_id !== activeId.current)) return;
+      draw();
       setOutcome(event.payload.error ? { kind: "failed", error: event.payload.error } : { kind: "passed" });
       setLastSeed(event.payload.seed ?? null);
       setLastRun({ profile: event.payload.profile ?? null, overridden: !!event.payload.overridden });
@@ -55,8 +73,8 @@ export function useExperimentRun({ doc, save, setProblem, revealProblem, onLaunc
       if (event.payload.report_error) setProblem(event.payload.report_error);
       setJob(null); activeId.current = null; refreshJobs();
     });
-    return () => { steps.then((off) => off()); ended.then((off) => off()); };
-  }, [refreshJobs, setProblem]);
+    return () => { steps.then((off) => off()); ended.then((off) => off()); discard(); };
+  }, [refreshJobs, setProblem, draw]);
 
   /** Run the document; Run with… passes another profile, overrides or a seed for this run only. */
   const run = async (options?: RunOptions) => {
@@ -67,7 +85,7 @@ export function useExperimentRun({ doc, save, setProblem, revealProblem, onLaunc
       try { await api.experimentValidate(runDoc, options?.overrides); }
       catch (error) { revealProblem(error); activeId.current = null; return; }
       await save(doc);
-      setProblem(null); setEvents([]); setOutcome(null); setReportPath(""); onLaunch();
+      discard(); setProblem(null); setEvents([]); setOutcome(null); setReportPath(""); onLaunch();
       activeId.current = -1;
       const started = await api.experimentStart(runDoc, options?.overrides, options?.seed);
       if (activeId.current === null) { refreshJobs(); return; }
@@ -82,12 +100,12 @@ export function useExperimentRun({ doc, save, setProblem, revealProblem, onLaunc
     if (!job) return;
     try {
       await api.jobStop(job.id);
-      activeId.current = null; setJob(null); setOutcome({ kind: "stopped" }); refreshJobs();
+      draw(); activeId.current = null; setJob(null); setOutcome({ kind: "stopped" }); refreshJobs();
     } catch (error) { setProblem(error); }
   };
 
   /** Another document is open: nothing the last run saw applies to it. */
-  const reset = () => { setEvents([]); setOutcome(null); setReportPath(""); setKnownVars({}); setLastSeed(null); setLastRun(null); };
+  const reset = () => { discard(); setEvents([]); setOutcome(null); setReportPath(""); setKnownVars({}); setLastSeed(null); setLastRun(null); };
 
   return { events, job, outcome, reportPath, starting, busy, knownVars, setKnownVars, lastSeed, lastRun, run, stop, reset };
 }

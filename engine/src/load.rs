@@ -25,6 +25,7 @@ use super::http_auth::DigestMemory;
 use super::inspect::{self, Gate};
 use super::latency::LatencyHistogram;
 use super::template::Rng;
+use super::transport::Cause;
 
 /// At most this many requests in flight at once, as in the burst.
 pub const MAX_CONCURRENCY: u32 = 512;
@@ -470,11 +471,16 @@ pub struct LoadMetrics {
     pub failed: u64,
     /// Due while every worker was busy, and skipped.
     pub missed: u64,
+    /// In `sent`, but never reached the server: this machine ran out of
+    /// sockets or local ports (`transport.exhausted`). Not in `failed`, the
+    /// error rate, the rate or the latencies — they say nothing about the server.
+    #[serde(default)]
+    pub local: u64,
     /// How long the profile ran.
     pub duration_ms: u64,
-    /// Requests sent per second over `duration_ms`.
+    /// Requests that reached the server, per second over `duration_ms`.
     pub rps: f64,
-    /// `failed`, in % of `sent`.
+    /// `failed`, in % of the requests that reached the server (`sent` less `local`).
     pub error_rate: f64,
     pub min_ms: f64,
     pub mean_ms: f64,
@@ -561,6 +567,7 @@ struct Stats {
     ok: AtomicU64,
     failed: AtomicU64,
     missed: AtomicU64,
+    local: AtomicU64,
     received: AtomicU64,
     latency: LatencyHistogram,
     /// By status code; a code past 599 counts as 599.
@@ -577,6 +584,7 @@ impl Stats {
             ok: AtomicU64::new(0),
             failed: AtomicU64::new(0),
             missed: AtomicU64::new(0),
+            local: AtomicU64::new(0),
             received: AtomicU64::new(0),
             latency: LatencyHistogram::new(),
             statuses: (0..600).map(|_| AtomicU64::new(0)).collect(),
@@ -591,6 +599,12 @@ impl Stats {
     }
 
     fn record(&self, response: &HttpResponse, second: usize) {
+        // Never sent: no answer of the server's, no latency of its.
+        if response.cause == Some(Cause::Exhausted) {
+            self.local.fetch_add(1, Ordering::Relaxed);
+            self.sent.fetch_add(1, Ordering::Release);
+            return;
+        }
         let micros = (response.latency_ms * 1000.0) as u64;
         self.latency.record(micros);
         let ok = response.error.is_none() && response.ok;
@@ -622,6 +636,8 @@ impl Stats {
     fn metrics(&self, planned: u64, ran: Duration) -> LoadMetrics {
         let sent = self.sent.load(Ordering::Acquire);
         let failed = self.failed.load(Ordering::Relaxed);
+        let local = self.local.load(Ordering::Relaxed);
+        let reached = sent.saturating_sub(local);
         let percentiles = self.latency.percentiles();
         let mut statuses: BTreeMap<String, u64> = self
             .statuses
@@ -637,9 +653,10 @@ impl Stats {
             ok: self.ok.load(Ordering::Relaxed),
             failed,
             missed: self.missed.load(Ordering::Relaxed),
+            local,
             duration_ms: ran.as_millis() as u64,
-            rps: sent as f64 / ran.as_secs_f64().max(1e-6),
-            error_rate: if sent == 0 { 0.0 } else { failed as f64 * 100.0 / sent as f64 },
+            rps: reached as f64 / ran.as_secs_f64().max(1e-6),
+            error_rate: if reached == 0 { 0.0 } else { failed as f64 * 100.0 / reached as f64 },
             min_ms: self.latency.min_ms(),
             mean_ms: self.latency.mean_ms(),
             max_ms: self.latency.max_ms(),
@@ -963,5 +980,12 @@ mod tests {
         let bins: Vec<(Option<f64>, u64)> = metrics.histogram.iter().filter(|bin| bin.count > 0).map(|bin| (bin.upto_ms, bin.count)).collect();
         assert_eq!(bins, [(Some(5.0), 2), (Some(50.0), 1), (Some(5000.0), 1)]);
         assert_eq!(metrics.histogram.len(), LATENCY_BINS_MS.len() + 1);
+
+        // Out of local ports: sent, never the server's failure, rate or latency.
+        stats.record(&HttpResponse { error: Some("no buffer space".into()), cause: Some(crate::transport::Cause::Exhausted), status: 0, ..response(0, 0.5) }, 1);
+        let metrics = stats.metrics(5, Duration::from_secs(2));
+        assert_eq!((metrics.sent, metrics.local, metrics.failed, metrics.error_rate, metrics.rps), (5, 1, 2, 50.0, 2.0));
+        assert_eq!(metrics.histogram.iter().map(|bin| bin.count).sum::<u64>(), 4, "no latency recorded for it");
+        assert!(!metrics.statuses.contains_key("exhausted"));
     }
 }

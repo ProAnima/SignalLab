@@ -7,6 +7,9 @@ import { fmtBytes, fmtNum } from "../lib/format";
 import { forProtocol, fullProfile, impairNotation, IMPAIR_PRESETS, presetOf, type ImpairPreset } from "../lib/impairments";
 import { ImpairProfileFields } from "../components/ImpairProfileFields";
 
+/** The engine's `netsim_tcp::MAX_CONNECTIONS`: connections a TCP relay carries at once. */
+const MAX_RELAY_CONNECTIONS = 1024;
+
 /** How long after the last change a running relay is told the new profile. */
 const APPLY_AFTER_MS = 250;
 
@@ -59,6 +62,8 @@ export function NetsimView() {
     }
   };
 
+  // What this machine could not pass on: shown once there is any, never folded into the profile's drops.
+  const notRelayed = !!stat?.failed && <div className="metric"><div className="k" data-tip={t("ns.notRelayedHint", { max: fmtNum(MAX_RELAY_CONNECTIONS) })}>{t("ns.notRelayed")}</div><div className="v red">{fmtNum(stat.failed)}</div></div>;
   const shownProfile = stat?.profile && IMPAIR_PRESETS.includes(stat.profile as ImpairPreset) ? t(`ns.preset.${stat.profile}` as TKey) : stat?.profile;
 
   return (
@@ -103,10 +108,12 @@ export function NetsimView() {
             <div className="metric"><div className="k">{t("ns.connections")}</div><div className="v">{fmtNum(stat?.connections ?? 0)}</div></div>
             <div className="metric"><div className="k" data-tip={t("ns.chunksHint")}>{t("ns.received")}</div><div className="v">{fmtNum(stat?.received ?? 0)}</div></div>
             <div className="metric"><div className="k" data-tip={t("ns.chunksHint")}>{t("ns.forwarded")}</div><div className="v accent">{fmtNum(stat?.forwarded ?? 0)}</div></div>
+            <div className="metric"><div className="k" data-tip={t("ns.refusedHint")}>{t("ns.refused")}</div><div className="v red">{fmtNum(stat?.refused ?? 0)}</div></div>
             <div className="metric"><div className="k">{t("ns.resets")}</div><div className="v red">{fmtNum(stat?.reset ?? 0)}</div></div>
             <div className="metric"><div className="k">{t("ns.stalled")}</div><div className="v amber">{fmtNum(stat?.stalled ?? 0)}</div></div>
             <div className="metric"><div className="k" data-tip={t("ns.heldHint")}>{t("ns.held")}</div><div className="v amber">{fmtNum(stat?.throttled ?? 0)}</div></div>
             <div className="metric"><div className="k">{t("common.volume")}</div><div className="v">{fmtBytes(stat?.bytes ?? 0)}</div></div>
+            {notRelayed}
           </div> : <div className="metrics">
             <div className="metric"><div className="k">{t("ns.received")}</div><div className="v">{fmtNum(stat?.received ?? 0)}</div></div>
             <div className="metric"><div className="k">{t("ns.forwarded")}</div><div className="v accent">{fmtNum(stat?.forwarded ?? 0)}</div></div>
@@ -116,6 +123,7 @@ export function NetsimView() {
             <div className="metric"><div className="k">{t("ns.corrupted")}</div><div className="v amber">{fmtNum(stat?.corrupted ?? 0)}</div></div>
             <div className="metric"><div className="k">{t("ns.reordered")}</div><div className="v amber">{fmtNum(stat?.reordered ?? 0)}</div></div>
             <div className="metric"><div className="k">{t("common.volume")}</div><div className="v">{fmtBytes(stat?.bytes ?? 0)}</div></div>
+            {notRelayed}
           </div>}
         </div>
       </div>

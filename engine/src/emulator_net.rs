@@ -295,6 +295,7 @@ pub(crate) async fn serve_tcp(listener: TcpListener, context: Arc<Context>) -> E
         failures = 0;
         if active.load(Ordering::Relaxed) >= MAX_CONNECTIONS {
             drop(stream);
+            context.emulation.refuse();
             continue;
         }
         // Down: the connection is closed as it arrives, before the greeting.

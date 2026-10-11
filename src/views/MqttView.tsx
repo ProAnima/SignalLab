@@ -4,15 +4,20 @@ import {
   type ExperimentNode, type JobInfo, type MqttAck, type MqttConfig, type MqttGrant, type MqttStateEvent, type Signal,
 } from "../lib/api";
 import { SaveSignal, saveShortcut } from "../components/SaveSignal";
-import { useStore } from "../lib/store";
+import { useStore, useMqttTopics } from "../lib/store";
 import { useT } from "../lib/i18n";
 import { describeError } from "../lib/errors";
-import { fmtNum, fmtTime } from "../lib/format";
+import { fmtBytes, fmtNum, fmtTime } from "../lib/format";
+import { useWindowedRows } from "../lib/hooks";
 import { signalFromMqttTopic, splitBroker } from "../lib/signals";
 import { waitForMqttMessage } from "../lib/experimentGraph";
-import { flattenTopics, sortedChildren, type TopicNode } from "../lib/topics";
+import { flattenTopics, visibleRows, type TopicNode, type TopicRow } from "../lib/topics";
 
 const QOS = [0, 1, 2];
+/** `value` as a whole number within `min`–`max`: what is typed past either end stops there. */
+const within = (value: number, min: number, max: number) => Math.min(max, Math.max(min, Math.round(value) || min));
+/** One line of the tree (`.topic-row`), fixed so a tree of 50 000 topics draws only what is in view. */
+const ROW_HEIGHT = 28;
 
 function defaultClientId(): string {
   return `signal-lab-${Math.random().toString(16).slice(2, 8)}`;
@@ -24,10 +29,8 @@ export function MqttView({ onWaitFor, load, onShowSignal }: {
   load?: { signal: Signal; at: number } | null;
   onShowSignal?: (id: string) => void;
 } = {}) {
-  const {
-    pushLog, pushError, jobGone, stopJob, refreshJobs, library, setLibrary, libraryError,
-    mqttTopics, mqttVersion, mqttDropped, clearMqttTopics,
-  } = useStore();
+  const { pushLog, pushError, jobGone, stopJob, refreshJobs, library, setLibrary, libraryError } = useStore();
+  const { mqttTopics, mqttVersion, mqttDropped, clearMqttTopics } = useMqttTopics();
   const t = useT();
 
   const [cfg, setCfg] = useState({
@@ -170,6 +173,13 @@ export function MqttView({ onWaitFor, load, onShowSignal }: {
       || (n.last?.payload ?? "").toLowerCase().includes(q));
   }, [all, query]);
 
+  // The lines the tree shows now: the matches of a search, or the tree as far as it is open.
+  const lines: TopicRow[] = useMemo(
+    () => found ? found.map((node) => ({ node, depth: 0, parent: false })) : visibleRows(mqttTopics.current, expanded),
+    [found, expanded, mqttVersion, mqttTopics] // eslint-disable-line react-hooks/exhaustive-deps
+  );
+  const rows = useWindowedRows(ROW_HEIGHT, lines.length);
+
   const pickedNode = picked ? all.find((n) => n.path === picked) ?? null : null;
   const retainedCount = all.filter((n) => n.last?.retain).length;
 
@@ -196,28 +206,26 @@ export function MqttView({ onWaitFor, load, onShowSignal }: {
     pushLog("ok", "mqtt", "log.mqttSaved", { topic: node.path, name: signal.name });
   };
 
-  const row = (node: TopicNode, depth: number): React.ReactNode => {
-    const kids = sortedChildren(node);
-    const open = expanded.has(node.path);
-    return (
-      <div key={node.path}>
-        <button
-          className={"topic-row" + (picked === node.path ? " active" : "")}
-          style={{ paddingInlineStart: 8 + depth * 14 }}
-          onClick={() => { setPicked(node.last ? node.path : picked); if (kids.length) toggle(node.path); }}
-        >
-          <span className="topic-twist">{kids.length ? (open ? "▾" : "▸") : "·"}</span>
-          <span className="topic-name">{node.name}</span>
-          {node.last?.retain && <span className="sig-badge">R</span>}
-          {node.last && <span className="topic-value">{node.last.payload || "—"}</span>}
-          {node.count > 1 && <span className="topic-count">{fmtNum(node.count)}</span>}
-        </button>
-        {open && kids.map((k) => row(k, depth + 1))}
-      </div>
-    );
-  };
-
-  const roots = sortedChildren(mqttTopics.current);
+  const row = ({ node, depth, parent }: TopicRow): React.ReactNode => (
+    <button
+      key={node.path}
+      className={"topic-row" + (picked === node.path ? " active" : "")}
+      style={{ paddingInlineStart: 8 + depth * 14 }}
+      onClick={() => {
+        if (found) { setPicked(node.path); return; }
+        setPicked(node.last ? node.path : picked);
+        if (parent) toggle(node.path);
+      }}
+    >
+      <span className="topic-twist">{parent ? (expanded.has(node.path) ? "▾" : "▸") : "·"}</span>
+      <span className="topic-name">{found ? node.path : node.name}</span>
+      {node.last?.retain && <span className="sig-badge">R</span>}
+      {(node.last || found) && <span className="topic-value">{node.last?.payload || "—"}</span>}
+      {!found && node.count > 1 && <span className="topic-count">{fmtNum(node.count)}</span>}
+    </button>
+  );
+  // A payload cut short would be published or saved cut short: only a whole one is offered.
+  const cut = pickedNode?.last?.truncated ? t("mq.truncated", { size: fmtBytes(pickedNode.last.bytes) }) : null;
 
   return (
     <div>
@@ -237,8 +245,8 @@ export function MqttView({ onWaitFor, load, onShowSignal }: {
             </div>
             <div className="field" style={{ flex: "0 0 92px" }}>
               <label htmlFor="mq-port">{t("common.port")}</label>
-              <input id="mq-port" type="number" value={cfg.port} disabled={!!job}
-                onChange={(e) => setCfg({ ...cfg, port: +e.target.value })} />
+              <input id="mq-port" type="number" min={1} max={65535} value={cfg.port} disabled={!!job}
+                onChange={(e) => setCfg({ ...cfg, port: within(+e.target.value, 1, 65535) })} />
             </div>
           </div>
           <div className="field">
@@ -261,8 +269,8 @@ export function MqttView({ onWaitFor, load, onShowSignal }: {
           <div className="row">
             <div className="field" style={{ flex: "0 0 104px" }}>
               <label htmlFor="mq-keep" data-tip={t("mq.keepAliveHint")}>{t("mq.keepAlive")}</label>
-              <input id="mq-keep" type="number" value={cfg.keep_alive_s} disabled={!!job}
-                onChange={(e) => setCfg({ ...cfg, keep_alive_s: +e.target.value })} />
+              <input id="mq-keep" type="number" min={0} max={65535} value={cfg.keep_alive_s} disabled={!!job}
+                onChange={(e) => setCfg({ ...cfg, keep_alive_s: within(+e.target.value, 0, 65535) })} />
             </div>
             <div className="field check">
               <label className="checkbox" data-tip={t("mq.cleanSessionHint")}>
@@ -378,21 +386,10 @@ export function MqttView({ onWaitFor, load, onShowSignal }: {
               {job && <span className="ok">{t("mq.live", { broker: `${cfg.host}:${cfg.port}` })}</span>}
             </div>
 
-            <div className="topic-tree scroll-y">
-              {found
-                ? found.map((n) => (
-                    <button
-                      key={n.path}
-                      className={"topic-row" + (picked === n.path ? " active" : "")}
-                      onClick={() => setPicked(n.path)}
-                    >
-                      <span className="topic-twist">·</span>
-                      <span className="topic-name">{n.path}</span>
-                      {n.last?.retain && <span className="sig-badge">R</span>}
-                      <span className="topic-value">{n.last?.payload || "—"}</span>
-                    </button>
-                  ))
-                : roots.map((r) => row(r, 0))}
+            <div className="topic-tree scroll-y" ref={rows.ref}>
+              {rows.before > 0 && <div aria-hidden="true" style={{ height: rows.before }} />}
+              {lines.slice(rows.start, rows.end).map(row)}
+              {rows.after > 0 && <div aria-hidden="true" style={{ height: rows.after }} />}
               {all.length === 0 && (
                 <div className="empty-state">{job ? t("mq.waiting") : t("mq.notConnected")}</div>
               )}
@@ -413,8 +410,9 @@ export function MqttView({ onWaitFor, load, onShowSignal }: {
                 <dt>{t("mq.messages")}</dt><dd>{fmtNum(pickedNode.count)}</dd>
                 <dt>{t("mq.lastAt")}</dt><dd>{fmtTime(pickedNode.last.ts)}</dd>
               </dl>
+              {cut && <p className="experiment-empty">{cut}</p>}
               <div className="btn-row">
-                <button className="ghost sm"
+                <button className="ghost sm" disabled={!!cut} data-tip={cut ?? undefined}
                   onClick={() => setPub({
                     topic: pickedNode.path,
                     payload: pickedNode.last?.payload ?? "",
@@ -441,7 +439,7 @@ export function MqttView({ onWaitFor, load, onShowSignal }: {
                 >
                   {confirmClear === pickedNode.path ? t("mq.clearConfirm") : t("mq.clearRetained")}
                 </button>
-                <button className="ghost sm" disabled={libraryError !== null} data-tip={libraryError !== null ? describeError(libraryError, t).text : undefined}
+                <button className="ghost sm" disabled={libraryError !== null || !!cut} data-tip={libraryError !== null ? describeError(libraryError, t).text : cut ?? undefined}
                   onClick={() => saveTopicAsSignal(pickedNode)}>
                   {t("sig.fromFrame")}
                 </button>

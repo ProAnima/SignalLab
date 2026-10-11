@@ -239,7 +239,12 @@ src/components/FirewallBanner.tsx  the desktop app's firewall notice, with Allow
   startup error (exit 2). Commands take JSON only, state-changing requests and
   the WebSocket must match `Origin`, sessions are `HttpOnly` + `SameSite=Strict`.
   Keep `Referrer-Policy: same-origin` — `no-referrer` makes the sign-in form
-  send `Origin: null`. `server/tests/server.rs` pins these rules.
+  send `Origin: null`. A loopback name is parsed (`localhost`, `*.localhost`, a
+  loopback IP), never matched by prefix — `127.x.attacker.example` is DNS
+  rebinding. `/api/files` judges a path by its name before opening it (UNC,
+  pipes). `lib.rs` serves connections itself: a 30 s head deadline, at most 1024
+  at once, 5 s to drain on stop. `server/tests/server.rs` and
+  `server/tests/hostile.rs` pin these rules.
   `--generate-token` (on in the image) is the one way to start with nothing set
   up: it makes `<data dir>/token` (0600) once, prints it once, and keeps it —
   never a server without a token on a reachable address.
@@ -478,7 +483,7 @@ src/components/FirewallBanner.tsx  the desktop app's firewall notice, with Allow
   cookie jar and one Digest memory, and skips what a busy worker could not send
   within `MISS_AFTER` (counted as missed). Its `LoadMetrics`, thresholds read,
   ride on the step's last event (`RunEvent::load`, passed or failed) and so in the
-  report (version 5); progress is a `load` step at most once a second. A load
+  report (version 6); progress is a `load` step at most once a second. A load
   leaves no response, so a check after it is `graph.needs_http`. A run is named
   by its report's file name (`experiment_compare::check_name`), never a path.
 - **Repeat is a node setting; Loop is the one cycle.** `Node::repeat` applies
@@ -500,7 +505,7 @@ src/components/FirewallBanner.tsx  the desktop app's firewall notice, with Allow
   it already holds (snapshot and first batch overlap).
 - **A frame keeps its bytes; a batch never carries them.** `Frame::payload` keeps
   the masked payload up to `FRAME_LIMIT` (256 KiB, `kept` says how much) and a
-  1 KiB hex preview; `data` is `serde(skip)`, so batches stay light, and
+  256-byte hex preview; `data` is `serde(skip)`, so batches stay light, and
   `inspect_payload` hands the rest out by number (binary search: the ring is in
   number order). The ring is bounded by frames and by `RING_BYTES` (64 MiB).
   *Save as signal* takes the engine's bytes, never a parsed dump, and refuses a

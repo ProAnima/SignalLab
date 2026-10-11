@@ -23,7 +23,7 @@ use super::emulator_state::{Emulation, EmulatorSummary};
 use super::error::{EngineError, EngineResult, Field};
 use super::experiment::{Experiment, NodeKind, RUN_LIMIT};
 use super::experiment_data as data;
-use super::experiment_flow::{self as flow, arm_listeners, arm_subscriptions, Followers, Prepared};
+use super::experiment_flow::{self as flow, arm_listeners, arm_subscriptions, Followers, Prepared, StepLog};
 use super::experiment_report::{save_report, RunSettings};
 use super::experiment_steps::{self as steps, BranchContext, RunSockets, StepEnv};
 use super::experiment_validate::validate_run;
@@ -56,6 +56,10 @@ pub struct RunEvent {
     /// What a load measured, its thresholds read: on the step's last event, passed or failed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub load: Option<Box<crate::load::LoadMetrics>>,
+    /// Steps just before this one that were left out: past the first
+    /// `STEPS_KEPT`, a run reports a step a second and its last `STEPS_TAIL`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub omitted: Option<u64>,
 }
 
 #[derive(Clone, Serialize)]
@@ -165,7 +169,7 @@ pub struct RunHandle {
     ended: Option<RunResult>,
     done: bool,
     /// What a stopped run reports — it is aborted, so it hands over nothing itself.
-    events: Arc<Mutex<Vec<RunEvent>>>,
+    events: Arc<Mutex<StepLog>>,
     params: BTreeMap<String, String>,
     /// The emulators' and relays' counters, which a stopped run reports too.
     emulators: Vec<(String, Arc<Emulation>)>,
@@ -224,7 +228,7 @@ impl RunHandle {
             started_ms: started.started_ms,
             ended_ms: now_ms(),
             error: None,
-            steps: self.events.lock().map(|events| events.clone()).unwrap_or_default(),
+            steps: self.events.lock().map(|events| events.list()).unwrap_or_default(),
             emulators: summaries(&self.emulators),
             impairments: netsim_run::summaries(&self.relays),
             report_path: None,
@@ -299,7 +303,7 @@ pub async fn start_followed(host: Host, jobs: JobRegistry, doc: Experiment, opti
         started_ms,
     };
     let settings = RunSettings { seed, overrides, params };
-    let events = Arc::new(Mutex::new(Vec::new()));
+    let events = Arc::new(Mutex::new(StepLog::default()));
     let (steps_tx, steps_rx) = mpsc::unbounded_channel();
     let (end_tx, end_rx) = oneshot::channel();
     let handle_params = settings.params.clone();
@@ -324,7 +328,7 @@ pub async fn start_followed(host: Host, jobs: JobRegistry, doc: Experiment, opti
             limit,
         };
         let error = flow::run(&host_cl, followers, id, &doc, prepared).await.err();
-        let steps = events.lock().map(|list| list.clone()).unwrap_or_default();
+        let steps = events.lock().map(|log| log.list()).unwrap_or_default();
         let ended_ms = now_ms();
         let emulators = summaries(&reports);
         let impairments = netsim_run::summaries(&relay_list);
@@ -404,7 +408,8 @@ pub async fn send_node(
     };
     let params = data::effective_params(doc, doc.profile.as_deref(), &BTreeMap::new());
     let secret_values = data::load_secrets(std::iter::once(node).chain(opener), store)?;
-    let masked: Vec<String> = secret_values.values().cloned().collect();
+    // The values, and the forms a request and its echo give them (percent-encoded, JSON).
+    let masked: Vec<String> = secret_values.values().flat_map(|value| secrets::forms(value)).collect();
     let _redaction = secrets::redact(masked.clone());
     let seed = doc.seed.unwrap_or_else(|| rand::random::<u64>() & data::MAX_SEED);
     let scope = Scope { params: &params, vars, secrets: &secret_values, run_id: 0, seed, node_id, count: 1, now_ms: now_ms() };

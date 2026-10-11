@@ -35,6 +35,8 @@ export function SignalsView({ onOpen, reveal }: { onOpen?: (signal: Signal) => v
   const [folder, setFolder] = useState("");
   const [query, setQuery] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
+  // A folder just made, for the tree to show and start renaming.
+  const [renameRequest, setRenameRequest] = useState<{ path: string; at: number } | null>(null);
   // Argument rows are edited as text, so a half-typed float stays half-typed
   // instead of being rounded back at the user on every keystroke.
   const [args, setArgs] = useState<ArgRow[]>([]);
@@ -81,11 +83,8 @@ export function SignalsView({ onOpen, reveal }: { onOpen?: (signal: Signal) => v
     const path = joinFolder(folder, name);
     setLibraryState(addFolder({ signals: library, folders }, path));
     setFolder(path);
-    // Straight into renaming it, as a file manager does.
-    requestAnimationFrame(() => {
-      const row = document.querySelector<HTMLButtonElement>(`[data-folder="${CSS.escape(path)}"]`);
-      row?.dispatchEvent(new KeyboardEvent("keydown", { key: "F2", bubbles: true }));
-    });
+    // Straight into renaming it, as a file manager does — scrolled to first in a long library.
+    setRenameRequest({ path, at: Date.now() });
   };
 
   const replace = (next: Signal) => setLibrary(library.map((s) => (s.id === next.id ? next : s)));
@@ -186,7 +185,7 @@ export function SignalsView({ onOpen, reveal }: { onOpen?: (signal: Signal) => v
 
           {locked && <ErrorMessage className="sig-blocked" error={libraryError} />}
           <SignalTree signals={filtered} searching={query.trim() !== ""} selectedId={selectedId} onSelect={select} onFire={(s) => void fire(s)}
-            folder={folder} onFolder={setFolder} reveal={reveal?.id ?? null} onNewFolder={newFolder} />
+            folder={folder} onFolder={setFolder} reveal={reveal?.id ?? null} onNewFolder={newFolder} renameRequest={renameRequest} />
           {!locked && filtered.length === 0 && (library.length > 0 || !everyFolder.length) && (
             <div className="empty-state">
               {library.length === 0 ? t("sig.empty") : t("sig.emptyFiltered")}

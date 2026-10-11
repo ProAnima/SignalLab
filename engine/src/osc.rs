@@ -1,6 +1,7 @@
 //! OSC monitor (listen + decode) and generator (waveform / pattern sender).
 
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -8,8 +9,8 @@ use crate::host::Host;
 use tokio::net::UdpSocket;
 
 use super::error::{EngineError, EngineResult, Field};
-use super::inspect::{self, Frame, Gate};
-use super::jobs::{now_ms, JobInfo, JobRegistry};
+use super::inspect::{self, Budget, Frame, Gate};
+use super::jobs::{now_ms, JobInfo, JobRegistry, TaskGuard};
 use super::net;
 use super::osc_codec::{
     arg_str, decode_packet, encode_message, summarize_messages, OscArg, OscMessage,
@@ -26,6 +27,27 @@ struct OscInbound {
     messages: Vec<OscMessage>,
     /// `osc.packet_malformed`, the decoder's text as detail, if the packet was malformed.
     error: Option<EngineError>,
+}
+
+/// How many `osc://message` events the monitor emits per second. A flood on
+/// loopback can reach 100 000 packets a second; one event each would swamp the
+/// link to the UI. What the monitor received and how much it did not forward
+/// ride on `osc://monitor-stat`, so the list a person sees is a true sample and
+/// says how much it stands for.
+const MONITOR_EVENTS_PER_SECOND: u64 = 200;
+
+/// The monitor's running totals, every 250 ms and once at the end.
+#[derive(Clone, Serialize)]
+struct MonitorStat {
+    job_id: u64,
+    ts: u64,
+    /// Packets received, decoded or not.
+    packets: u64,
+    bytes: u64,
+    /// Packets received but not forwarded to the list (the rate gate held them).
+    not_shown: u64,
+    /// Packets that did not decode as OSC.
+    malformed: u64,
 }
 
 #[derive(Clone, Serialize)]
@@ -101,14 +123,51 @@ pub async fn start_monitor(
     let host_cl = host.clone();
     let local_cl = local.clone();
     let handle = tokio::spawn(async move {
+        // The events to the list are rate-limited; what the monitor received and
+        // did not forward rides on a periodic stat, so a flood is a true sample
+        // with its size shown, not a firehose into the interface.
+        let budget = Budget::new(MONITOR_EVENTS_PER_SECOND);
+        let packets = Arc::new(AtomicU64::new(0));
+        let bytes_total = Arc::new(AtomicU64::new(0));
+        let not_shown = Arc::new(AtomicU64::new(0));
+        let malformed = Arc::new(AtomicU64::new(0));
+        let mut guard = TaskGuard::new();
+
+        let reporter = {
+            let (host_r, p, b, ns, m) = (host_cl.clone(), packets.clone(), bytes_total.clone(), not_shown.clone(), malformed.clone());
+            tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                    host_r.emit(
+                        "osc://monitor-stat",
+                        MonitorStat {
+                            job_id: id,
+                            ts: now_ms(),
+                            packets: p.load(Ordering::Relaxed),
+                            bytes: b.load(Ordering::Relaxed),
+                            not_shown: ns.load(Ordering::Relaxed),
+                            malformed: m.load(Ordering::Relaxed),
+                        },
+                    );
+                }
+            })
+        };
+        guard.watch(reporter.abort_handle());
+
         let mut buf = vec![0u8; 65_536];
+        let fatal;
         loop {
             match socket.recv_from(&mut buf).await {
                 Err(e) if crate::net::udp_transient(&e) => continue,
                 Ok((n, from)) => {
+                    packets.fetch_add(1, Ordering::Relaxed);
+                    bytes_total.fetch_add(n as u64, Ordering::Relaxed);
                     let (messages, error) = match decode_packet(&buf[..n]) {
                         Ok(m) => (m, None),
-                        Err(e) => (Vec::new(), Some(e)),
+                        Err(e) => {
+                            malformed.fetch_add(1, Ordering::Relaxed);
+                            (Vec::new(), Some(e))
+                        }
                     };
 
                     if inspect::armed(&host_cl) {
@@ -128,6 +187,12 @@ pub async fn start_monitor(
                         inspect::publish(&host_cl, frame);
                     }
 
+                    // A malformed packet is always forwarded (they are rare and
+                    // worth seeing); the stream of good ones is sampled.
+                    if error.is_none() && budget.allow().is_none() {
+                        not_shown.fetch_add(1, Ordering::Relaxed);
+                        continue;
+                    }
                     host_cl.emit(
                         "osc://message",
                         OscInbound {
@@ -141,12 +206,25 @@ pub async fn start_monitor(
                     );
                 }
                 Err(e) => {
-                    let error = EngineError::new("wait.receive_failed").with("target", &local_cl).because(e);
-                    emit_ended(&host_cl, id, "osc-monitor", Some(error));
+                    fatal = Some(EngineError::new("wait.receive_failed").with("target", &local_cl).because(e));
                     break;
                 }
             }
         }
+        // A last stat so the totals on screen are final, then the end.
+        host_cl.emit(
+            "osc://monitor-stat",
+            MonitorStat {
+                job_id: id,
+                ts: now_ms(),
+                packets: packets.load(Ordering::Relaxed),
+                bytes: bytes_total.load(Ordering::Relaxed),
+                not_shown: not_shown.load(Ordering::Relaxed),
+                malformed: malformed.load(Ordering::Relaxed),
+            },
+        );
+        drop(guard);
+        emit_ended(&host_cl, id, "osc-monitor", fatal);
         jobs_cl.finish(id);
     });
 
@@ -285,9 +363,22 @@ pub async fn start_generator(
                 OscArg::Float(value as f32)
             };
             let packet = encode_message(&cfg.address, std::slice::from_ref(&arg));
-            if let Err(e) = socket.send(&packet).await {
-                emit_ended(&host_cl, id, "osc-gen", Some(transport::of_io(&e).error(&cfg.target).because(e)));
-                break;
+            let mut outcome = socket.send(&packet).await;
+            // "Port unreachable" for an earlier datagram (Linux reports it on this
+            // send as refused, and this datagram did not go; Windows as reset): the
+            // device is not listening yet. UDP does not wait for it — the report is
+            // consumed, so this value is sent again once, and the generator goes on,
+            // as every receive loop does (`net::udp_transient`).
+            if matches!(&outcome, Err(e) if crate::net::udp_transient(e)) {
+                outcome = socket.send(&packet).await;
+            }
+            match outcome {
+                Ok(_) => {}
+                Err(e) if crate::net::udp_transient(&e) => continue,
+                Err(e) => {
+                    emit_ended(&host_cl, id, "osc-gen", Some(transport::of_io(&e).error(&cfg.target).because(e)));
+                    break;
+                }
             }
             sent += 1;
 

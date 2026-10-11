@@ -42,3 +42,13 @@ test("subprotocols are a comma list, previews show the upgrade, JSON reads forma
   assert.equal(asJson("echo hi"), null);
   assert.equal(asJson("{broken"), null);
 });
+
+test("the message list keeps the newest within a count and a size", async () => {
+  const { keepNewest } = await import("../src/lib/websocket.ts");
+  const size = (item) => item.length;
+  assert.deepEqual(keepNewest(["a", "b"], ["c"], 2, 100, size), ["b", "c"], "by count");
+  assert.deepEqual(keepNewest(["aaaa", "bbbb"], ["cccc"], 10, 9, size), ["bbbb", "cccc"], "by size");
+  assert.deepEqual(keepNewest([], ["x".repeat(50)], 10, 9, size), ["x".repeat(50)], "the newest stays whatever it weighs");
+  const kept = keepNewest([], Array.from({ length: 2000 }, () => "y".repeat(65_536)), 2000, 8_000_000, size);
+  assert.ok(kept.length === 122 && kept.reduce((sum, item) => sum + item.length, 0) <= 8_000_000, `${kept.length}`);
+});

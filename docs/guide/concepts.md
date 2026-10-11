@@ -73,7 +73,7 @@ shows it in one timeline.
   off. It stays on, whichever screen you are on, until you disarm it.
 - It keeps up to 8192 frames and 64 MiB of their bytes; the oldest frames make room for
   new ones. Each frame keeps up to 256 KiB of its bytes, and the list shows its first
-  KiB.
+  256 bytes.
 - [[ui:ins.pause]] stops the list from moving so you can read it; capture goes on
   underneath.
 - Secret values used by a run are masked in every frame.

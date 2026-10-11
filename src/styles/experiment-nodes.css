@@ -71,8 +71,12 @@
 .experiment-timeline-title strong { color: var(--accent); font: 700 11px var(--mono); }
 .experiment-report { margin-inline-start: auto; margin-inline-end: 12px; color: var(--text-faint); font-size: 10px; }
 .experiment-timeline-title strong.fail { color: var(--red); }
-.experiment-events { overflow: auto; display: flex; flex-direction: column; flex: 1; }
+.experiment-events { overflow: auto; display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .experiment-events button { display: flex; gap: 12px; align-items: baseline; width: 100%; text-align: start; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; background: transparent; color: var(--text-dim); padding: 5px 14px; font-size: 11px; }
+/* One height per row (TIMELINE_ROW): only the rows in view are drawn. */
+.experiment-events > button, .experiment-omitted { box-sizing: border-box; height: 25px; flex-shrink: 0; overflow: hidden; white-space: nowrap; }
+.experiment-events > button > span { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.experiment-omitted { display: flex; align-items: center; padding: 0 14px; border-bottom: 1px solid var(--border); color: var(--amber); font-size: 11px; }
 .experiment-events button:hover { background: var(--surface-2); }
 .experiment-events button.failed { color: var(--red); }
 .experiment-events button.passed b { color: var(--accent); }

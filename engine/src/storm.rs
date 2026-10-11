@@ -9,6 +9,12 @@
 //! sleeps until the next one, so the operating system's timer granularity
 //! costs no packets. A TCP unit is a connection opened, written and closed,
 //! one at a time.
+//!
+//! What fails on this machine (out of local ports, sockets or buffers) is
+//! counted as `local`, never as the target's error. Each closed TCP connection
+//! keeps its local port in TIME_WAIT for minutes; after some 16 000 of them the
+//! system has none left, and those attempts used to be reported as the target
+//! failing (half of a 20-second storm at a healthy sink).
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -22,6 +28,7 @@ use tokio::net::{TcpStream, UdpSocket};
 use super::error::EngineResult;
 use super::inspect::{self, Frame, Gate};
 use super::jobs::{now_ms, JobInfo, JobRegistry, TaskGuard};
+use super::net;
 use super::transport;
 
 /// Units one wake sends at most; a schedule further behind skips what is older
@@ -29,6 +36,69 @@ use super::transport;
 const MAX_BATCH: u64 = 256;
 
 const NANOS: u128 = 1_000_000_000;
+
+/// The highest rate kept as asked (units per second); more is held to it.
+/// Above it the schedule's arithmetic would overflow over a long run, and no
+/// machine sends that many anyway: 0 asks for as fast as it can.
+pub const MAX_RATE: u64 = 10_000_000;
+
+/// The payload's bounds: one byte, and the most a UDP datagram carries over IPv4.
+pub const MAX_SIZE: usize = 65_507;
+
+/// A TCP connection that has not opened within this long counts as failed.
+const CONNECT_TIMEOUT: Duration = Duration::from_millis(500);
+
+/// A pause after a local failure, so sockets and buffers come back as the
+/// system frees them instead of being asked for again at full speed.
+const LOCAL_PAUSE: Duration = Duration::from_millis(5);
+
+/// How long the storm runs: `None` until stopped (0, a negative number, or one
+/// past what a clock can hold).
+fn run_for(duration_s: f64) -> Option<Duration> {
+    (duration_s > 0.0).then(|| Duration::try_from_secs_f64(duration_s).ok()).flatten()
+}
+
+/// What one unit came to.
+enum Unit {
+    /// Sent, this many bytes.
+    Sent(u64),
+    /// The target refused, reset or did not answer: the target's error.
+    Failed,
+    /// This machine could not make the attempt (no local port, socket or
+    /// buffer): it says nothing about the target.
+    Local,
+}
+
+
+/// One TCP unit: connect, write the payload, say goodbye.
+async fn tcp_unit(target: std::net::SocketAddr, payload: &[u8]) -> Unit {
+    let mut stream = match tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(target)).await {
+        Ok(Ok(stream)) => stream,
+        Ok(Err(error)) if transport::local_connect_failure(&error) => return Unit::Local,
+        _ => return Unit::Failed,
+    };
+    let written = stream.write_all(payload).await;
+    // An ordinary close: the target gets the payload and the end of the
+    // stream. This side closes first, so its port waits out TIME_WAIT (two
+    // minutes on Windows); past ~16 000 connections in that time the system
+    // has none left, and those attempts count as `local`, not as the target's.
+    let _ = stream.shutdown().await;
+    match written {
+        Ok(()) => Unit::Sent(payload.len() as u64),
+        Err(error) if transport::local_connect_failure(&error) => Unit::Local,
+        Err(_) => Unit::Failed,
+    }
+}
+
+/// One UDP unit. An ICMP "port unreachable" for an earlier datagram comes back
+/// on a later send (refused, or reset on Windows): the target's answer.
+async fn udp_unit(socket: &UdpSocket, payload: &[u8]) -> Unit {
+    match socket.send(payload).await {
+        Ok(n) => Unit::Sent(n as u64),
+        Err(error) if transport::local_connect_failure(&error) => Unit::Local,
+        Err(_) => Unit::Failed,
+    }
+}
 
 /// The units due at `elapsed` into a run at `rate` per second: the first is due at once.
 fn due_by(elapsed: Duration, rate: u64) -> u64 {
@@ -68,6 +138,8 @@ struct StormStat {
     packets: u64,
     bytes: u64,
     errors: u64,
+    /// Units this machine could not send (out of ports, sockets or buffers).
+    local: u64,
     pps: f64,
     mbps: f64,
 }
@@ -78,17 +150,30 @@ pub async fn start_storm(
     cfg: StormConfig,
 ) -> EngineResult<JobInfo> {
     let target = transport::resolve(&cfg.target).await?;
-    let size = cfg.size.clamp(1, 65_507);
+    let size = cfg.size.clamp(1, MAX_SIZE);
+    let rate = cfg.rate.min(MAX_RATE);
+    let run_for = run_for(cfg.duration_s);
+    // The UDP socket is made before the job: a storm that cannot send at all
+    // says why when it starts, instead of counting nothing until it is stopped.
+    let udp = match cfg.protocol {
+        Protocol::Udp => {
+            let local = transport::unspecified_for(&target);
+            let socket = UdpSocket::bind(local).await.map_err(|e| net::bind_error(local, e))?;
+            socket.connect(target).await.map_err(|e| transport::of_io(&e).error(&cfg.target).because(e))?;
+            Some(socket)
+        }
+        Protocol::Tcp => None,
+    };
 
     let id = jobs.next_id();
     let protocol = match cfg.protocol {
         Protocol::Udp => "UDP",
         Protocol::Tcp => "TCP",
     };
-    let info = JobInfo::new(id, "storm", format!("Storm {protocol} → {} @{}pps", cfg.target, cfg.rate))
+    let info = JobInfo::new(id, "storm", format!("Storm {protocol} → {} @{}pps", cfg.target, rate))
         .with("protocol", protocol)
         .with("target", &cfg.target)
-        .with("rate", cfg.rate);
+        .with("rate", rate);
 
     let host_cl = host.clone();
     let jobs_cl = jobs.clone();
@@ -96,6 +181,7 @@ pub async fn start_storm(
         let packets = Arc::new(AtomicU64::new(0));
         let bytes = Arc::new(AtomicU64::new(0));
         let errors = Arc::new(AtomicU64::new(0));
+        let local = Arc::new(AtomicU64::new(0));
         let payload = vec![0x55u8; size];
         let start = Instant::now();
         let gate = Gate::new(1_000);
@@ -105,8 +191,8 @@ pub async fn start_storm(
 
         // reporter
         let reporter = {
-            let (host_r, packets_r, bytes_r, errors_r) =
-                (host_cl.clone(), packets.clone(), bytes.clone(), errors.clone());
+            let (host_r, packets_r, bytes_r, errors_r, local_r) =
+                (host_cl.clone(), packets.clone(), bytes.clone(), errors.clone(), local.clone());
             tokio::spawn(async move {
                 let mut prev_p = 0u64;
                 let mut prev_b = 0u64;
@@ -130,6 +216,7 @@ pub async fn start_storm(
                             packets: p,
                             bytes: b,
                             errors: errors_r.load(Ordering::Relaxed),
+                            local: local_r.load(Ordering::Relaxed),
                             pps,
                             mbps,
                         },
@@ -139,99 +226,60 @@ pub async fn start_storm(
         };
         guard.watch(reporter.abort_handle());
 
-        let udp = if cfg.protocol == Protocol::Udp {
-            match UdpSocket::bind(transport::unspecified_for(&target)).await {
-                Ok(s) => {
-                    if s.connect(target).await.is_err() {
-                        errors.fetch_add(1, Ordering::Relaxed);
-                    }
-                    Some(Arc::new(s))
-                }
-                Err(_) => {
-                    errors.fetch_add(1, Ordering::Relaxed);
-                    None
-                }
-            }
-        } else {
-            None
-        };
-
+        let over = |start: Instant| run_for.is_some_and(|run_for| start.elapsed() >= run_for);
         // The next unit of the schedule (with a rate).
         let mut next: u64 = 0;
         'outer: loop {
-            if cfg.duration_s > 0.0 && start.elapsed().as_secs_f64() >= cfg.duration_s {
+            if over(start) {
                 break;
             }
-            let batch = if cfg.rate == 0 {
+            let batch = if rate == 0 {
                 MAX_BATCH
             } else {
-                let due = due_by(start.elapsed(), cfg.rate);
+                let due = due_by(start.elapsed(), rate);
                 next = next.max(due.saturating_sub(MAX_BATCH));
-                due - next
+                due.saturating_sub(next)
             };
             for _ in 0..batch {
-                match cfg.protocol {
-                    Protocol::Udp => {
-                        if let Some(sock) = &udp {
-                            match sock.send(&payload).await {
-                                Ok(n) => {
-                                    packets.fetch_add(1, Ordering::Relaxed);
-                                    bytes.fetch_add(n as u64, Ordering::Relaxed);
-                                    // Every packet is identical, so one sample a
-                                    // second is all the timeline needs.
-                                    if inspect::armed(&host_cl) && gate.allow() {
-                                        inspect::publish(
-                                            &host_cl,
-                                            gate.mark(
-                                                Frame::tx("udp", "storm")
-                                                    .job(id)
-                                                    .remote(target)
-                                                    .payload(&payload)
-                                                    .summary(format!("UDP flood packet ({n} B)"))
-                                                    .verdict("sampled 1/s"),
-                                            ),
-                                        );
-                                    }
-                                }
-                                Err(_) => {
-                                    errors.fetch_add(1, Ordering::Relaxed);
-                                }
-                            }
+                let unit = match &udp {
+                    Some(socket) => udp_unit(socket, &payload).await,
+                    None => tcp_unit(target, &payload).await,
+                };
+                match unit {
+                    Unit::Sent(n) => {
+                        packets.fetch_add(1, Ordering::Relaxed);
+                        bytes.fetch_add(n, Ordering::Relaxed);
+                        // Every unit is identical, so one sample a second is
+                        // all the timeline needs.
+                        if inspect::armed(&host_cl) && gate.allow() {
+                            let frame = match cfg.protocol {
+                                Protocol::Udp => Frame::tx("udp", "storm").summary(format!("UDP flood packet ({n} B)")),
+                                Protocol::Tcp => Frame::tx("tcp", "storm").summary(format!("TCP flood connection ({n} B)")),
+                            };
+                            inspect::publish(&host_cl, gate.mark(frame.job(id).remote(target).payload(&payload).verdict("sampled 1/s")));
                         }
                     }
-                    Protocol::Tcp => {
-                        match tokio::time::timeout(
-                            Duration::from_millis(500),
-                            TcpStream::connect(target),
-                        )
-                        .await
-                        {
-                            Ok(Ok(mut s)) => {
-                                if s.write_all(&payload).await.is_ok() {
-                                    packets.fetch_add(1, Ordering::Relaxed);
-                                    bytes.fetch_add(payload.len() as u64, Ordering::Relaxed);
-                                }
-                                let _ = s.shutdown().await;
-                            }
-                            _ => {
-                                errors.fetch_add(1, Ordering::Relaxed);
-                            }
-                        }
+                    Unit::Failed => {
+                        errors.fetch_add(1, Ordering::Relaxed);
+                    }
+                    Unit::Local => {
+                        local.fetch_add(1, Ordering::Relaxed);
+                        tokio::time::sleep(LOCAL_PAUSE).await;
                     }
                 }
                 next += 1;
-                if cfg.duration_s > 0.0 && start.elapsed().as_secs_f64() >= cfg.duration_s {
+                if over(start) {
                     break 'outer;
                 }
             }
-            if cfg.rate == 0 {
+            if rate == 0 {
                 tokio::task::yield_now().await;
                 continue;
             }
             // Until the next unit is due, or the end of the run if that comes first.
-            let mut wake = start + due_at(next, cfg.rate);
-            if cfg.duration_s > 0.0 {
-                wake = wake.min(start + Duration::from_secs_f64(cfg.duration_s));
+            let mut wake = start + due_at(next, rate);
+            if let Some(run_for) = run_for {
+                wake = wake.min(start + run_for);
             }
             if wake <= Instant::now() {
                 tokio::task::yield_now().await;
@@ -253,6 +301,7 @@ pub async fn start_storm(
                 packets: packets.load(Ordering::Relaxed),
                 bytes: bytes.load(Ordering::Relaxed),
                 errors: errors.load(Ordering::Relaxed),
+                local: local.load(Ordering::Relaxed),
                 pps: 0.0,
                 mbps: 0.0,
             },

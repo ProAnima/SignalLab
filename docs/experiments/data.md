@@ -144,6 +144,10 @@ A field name after `.` may hold letters, digits, `_` and `-`. Steps chain:
 | `null` | `null` |
 | object, array | compact JSON: `["x","y"]` |
 
+A field, once its values are written in, is at most 16 MiB; past that the step
+fails with `template.too_large` — a large value used over and over cannot make
+one without bound.
+
 ### Built-in values {#built-ins}
 
 | Expression | Value |
@@ -457,8 +461,10 @@ values is replaced by `••••` in everything that leaves the engine:
   dump each byte of a value becomes `*`, so offsets stay true.
 
 Basic authentication sends `name:password` in base64; when either part holds a
-secret, that base64 text is masked too. The traffic itself carries the real
-value. The preview shows a stored secret as `••••`. An
+secret, that base64 text is masked too. So are the forms a request and a server
+that echoes it give a value: percent-encoded as in a URL or a form, with a
+query's `+` read back as a space, and escaped inside JSON. The traffic itself
+carries the real value. The preview shows a stored secret as `••••`. An
 [[ui:exp.node.emulator]]'s replies cannot use secrets.
 
 ## Commands {#commands}

@@ -14,6 +14,23 @@ use tokio::sync::{broadcast, watch};
 /// Events buffered per page before it counts as behind.
 pub const BACKLOG: usize = 4096;
 const PING_EVERY: Duration = Duration::from_secs(20);
+/// How long one message may wait for a page to take it. A page that reads
+/// takes a message at once (or falls behind and is told so); one that has
+/// stopped reading — a frozen tab, a script that only connected — would hold
+/// its socket and this task forever. Past this it is let go; a live page
+/// reconnects and asks again for what it shows.
+pub const SEND_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Send one message, unless the page has not taken it within `SEND_TIMEOUT`.
+async fn send(socket: &mut WebSocket, message: Message) -> bool {
+    match tokio::time::timeout(SEND_TIMEOUT, socket.send(message)).await {
+        Ok(sent) => sent.is_ok(),
+        Err(_) => {
+            tracing::warn!(after = ?SEND_TIMEOUT, "a page took nothing for too long; disconnected");
+            false
+        }
+    }
+}
 
 /// The engine's event sink in the server.
 pub struct Broadcaster {
@@ -49,7 +66,7 @@ pub async fn stream(mut socket: WebSocket, mut events: broadcast::Receiver<Arc<s
                     }
                     Err(broadcast::error::RecvError::Closed) => break,
                 };
-                if socket.send(Message::Text(text.into())).await.is_err() {
+                if !send(&mut socket, Message::Text(text.into())).await {
                     break;
                 }
             }
@@ -59,12 +76,12 @@ pub async fn stream(mut socket: WebSocket, mut events: broadcast::Receiver<Arc<s
                 Some(Ok(_)) => {}
             },
             _ = ping.tick() => {
-                if socket.send(Message::Ping(Vec::new().into())).await.is_err() {
+                if !send(&mut socket, Message::Ping(Vec::new().into())).await {
                     break;
                 }
             }
             _ = stopping.changed() => {
-                let _ = socket.send(Message::Close(None)).await;
+                send(&mut socket, Message::Close(None)).await;
                 break;
             }
         }

@@ -1,6 +1,6 @@
 /* ---------- signal library ---------- */
 
-.sig-list { flex: 1; min-height: 0; margin: 0 -6px; padding: 0 6px; }
+.sig-list { flex: 1; min-height: 240px; max-height: calc(100vh - 230px); margin: 0 -6px; padding: 0 6px; }
 .sig-group + .sig-group { margin-top: 13px; }
 .sig-group-head {
   display: flex;
@@ -103,6 +103,11 @@
 .sig-folder-row:hover .sig-folder-tools, .sig-folder-row:focus-within .sig-folder-tools, .sig-folder-row.current .sig-folder-tools { opacity: 1; }
 .sig-folder-rename { flex: 1; min-width: 0; padding: 3px 6px; font-size: 12px; }
 .sig-item[draggable="true"] { cursor: grab; }
+/* The library's tree draws only the lines in view, so each line has one height,
+   margin included: 28 + 2 a folder, 54 + 3 a signal (ROW_HEIGHT in SignalTree). */
+.sig-rows .sig-folder-row { height: 28px; margin-bottom: 2px; }
+.sig-rows .sig-item { height: 54px; margin-bottom: 3px; overflow: hidden; }
+.sig-rows .sig-item-name { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Save to the library, next to a sender's Send. */
 /* Its own line under a sender's buttons: Save / Saved, Save as…, and where it lives. */

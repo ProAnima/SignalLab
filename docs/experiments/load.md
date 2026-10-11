@@ -125,12 +125,13 @@ timeline event and in the [run report](runs.md#report):
 | Measurement | What |
 | --- | --- |
 | planned | the requests the profile adds up to ([[ui:exp.loadShape.poisson]]: on average) |
-| sent | requests that were answered or failed |
+| sent | requests that were answered or failed, and those counted in local |
 | ok | answered with a 2xx status |
 | failed | any other status, or no answer at all |
 | missed | due while every slot was busy, and skipped |
-| rps | requests sent per second: sent ÷ the profile's duration — or ÷ the time until the last request went out, when that was later |
-| error_rate | failed, in % of sent |
+| local | requests this computer could not send — it ran out of sockets or local ports — so the server never saw them; not in failed, rps, error_rate or the latencies |
+| rps | requests that reached the server per second: sent less local ÷ the profile's duration — or ÷ the time until the last request went out, when that was later |
+| error_rate | failed, in % of the requests that reached the server |
 | min, mean, max | the fastest, the average and the slowest request, ms |
 | p50, p90, p95, p99 | the latency that 50, 90, 95 and 99 % of requests were at or under, ms |
 | received_bytes | body bytes received in all |
@@ -184,7 +185,8 @@ and the share that failed. Select the node: its properties show
 - each threshold, ✓ [[ui:exp.thresholdHeld]] or ✕ [[ui:exp.thresholdBroken]],
   with the value measured;
 - [[ui:http.sent]], [[ui:exp.loadRps]], [[ui:exp.loadErrors]] with their share,
-  [[ui:http.missed]];
+  [[ui:http.missed]], and [[ui:http.local]] when this computer ran out of
+  ports;
 - [[ui:http.p50]], [[ui:http.p90]], [[ui:http.p95]], [[ui:http.p99]],
   [[ui:http.avg]], [[ui:http.max]];
 - [[ui:exp.loadPerSecond]]: the requests of each second, the failed ones in

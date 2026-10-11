@@ -20,7 +20,15 @@ export type OscArg =
   | { type: "double"; value: number }
   | { type: "bool"; value: boolean }
   | { type: "blob"; value: number[] }
-  | { type: "nil" };
+  | { type: "nil" }
+  // Received only (engine/src/osc_codec.rs reads every OSC 1.0 type): a time tag
+  // as decimal text (64 bits), a char, RGBA, a MIDI message, Infinitum, an array.
+  | { type: "time"; value: string }
+  | { type: "char"; value: string }
+  | { type: "color"; value: [number, number, number, number] }
+  | { type: "midi"; value: [number, number, number, number] }
+  | { type: "impulse" }
+  | { type: "array"; value: OscArg[] };
 
 export interface OscMessage {
   address: string;
@@ -73,7 +81,7 @@ export interface HttpResponse {
 
 /** Why a network operation failed (`engine/transport.rs`). */
 export type TransportCause = "refused" | "timeout" | "dns" | "unreachable" | "reset" | "address_in_use"
-  | "address_unavailable" | "denied" | "tls" | "target_invalid" | "failed";
+  | "address_unavailable" | "denied" | "tls" | "target_invalid" | "exhausted" | "failed";
 
 /**
  * The engine's one error shape (`engine/error.rs`): a code the interface
@@ -142,9 +150,12 @@ export interface LoadMetrics {
   sent: number; ok: number; failed: number;
   /** Due while every worker was busy, and skipped. */
   missed: number;
+  /** In `sent`, but never reached the server: this machine ran out of sockets or local ports. Not in `failed`, `error_rate`, `rps` or the latencies. Absent in reports before it was counted. */
+  local?: number;
   duration_ms: number;
+  /** Requests that reached the server, per second. */
   rps: number;
-  /** Failed, in % of sent. */
+  /** Failed, in % of the requests that reached the server. */
   error_rate: number;
   min_ms: number; mean_ms: number; max_ms: number;
   p50_ms: number; p90_ms: number; p95_ms: number; p99_ms: number;
@@ -253,10 +264,14 @@ export type Emulator = { name: string; bind: string; outage?: Outage | null } & 
 );
 export interface StoredEmulator { id: string; note: string; emulator: Emulator }
 export interface EmulatorLibrary { version: number; emulators: StoredEmulator[] }
-export interface EmulatorLibraryFile { path: string; library: EmulatorLibrary; seeded: boolean }
+export interface EmulatorLibraryFile { path: string; library: EmulatorLibrary; seeded: boolean;
+  /** What the file held when read: the `base` the next save names. */
+  stamp: string }
 export interface EmulatorCounts { total: number; unmatched: number; failed: number; down: number; hits: number[];
   /** Messages a broker could not hand to a client too far behind; absent while none were. */
-  missed?: number }
+  missed?: number;
+  /** Connections closed as they arrived, past its limit (HTTP, TCP, MQTT); absent while none were. */
+  refused?: number }
 /** One request (message, line) an emulator received, and what became of it. */
 export interface Exchange {
   seq: number;
@@ -330,6 +345,8 @@ export interface ExperimentStep {
   error?: EngineError;
   /** What a load measured: on its last event, passed or failed. */
   load?: LoadMetrics;
+  /** Steps just before this one that were left out: past the first 5 000 a run reports one a second and its last 500. */
+  omitted?: number;
 }
 
 export interface ExperimentEnded {
@@ -493,13 +510,19 @@ export interface WsMessage {
   ts: number;
   dir: "rx" | "tx";
   kind: "text" | "binary";
-  /** UTF-8 (lossy for binary, which has `hex` too), cut at 64 KB: then `truncated`. */
+  /** UTF-8 (lossy for binary, which has `hex` too), cut at 64 KB (a binary one's at 4 KB): then `truncated`. */
   text: string;
   hex: string | null;
   bytes: number;
   truncated: boolean;
 }
-export interface WsBatch { job_id: number; ts: number; messages: WsMessage[]; dropped: number }
+export interface WsBatch {
+  job_id: number; ts: number; messages: WsMessage[];
+  /** Messages since the last batch left out of it (past 2000, or 1 MB of text). */
+  dropped: number;
+  /** Messages received and sent on the connection so far, shown or not. */
+  received: number; sent: number;
+}
 export interface WsStateEvent { job_id: number; ts: number; state: "connected" | "closed"; handshake: WsHandshake; closed: WsClosed | null }
 
 // ---- mqtt ----
@@ -532,11 +555,15 @@ export interface MqttConfig {
 export interface MqttMessage {
   ts: number;
   topic: string;
+  /** The first 4 KB of it: then `truncated`; `bytes` is the whole. */
   payload: string;
   bytes: number;
+  truncated?: boolean;
   qos: number;
   retain: boolean;
   dup: boolean;
+  /** Messages on the topic since the last batch, this the latest of them. */
+  count?: number;
 }
 
 export interface MqttGrant {
@@ -584,7 +611,16 @@ export interface LibraryFile {
   library: Library;
   /** The file did not exist and the starter set was written. */
   seeded: boolean;
+  /** What the file held when read: the `base` the next save names. */
+  stamp: string;
 }
+
+/**
+ * A library written over the `base` it was read with: where, and the stamp of
+ * what the file holds now. A file changed since (another page, an editor) is
+ * refused with `file.changed` instead.
+ */
+export interface Saved { path: string; stamp: string }
 
 // ---- inspector ----
 
@@ -659,6 +695,8 @@ export interface BurstProgress {
   job_id: number; ts: number; sent: number; ok: number; failed: number;
   /** Due while every worker was busy, and skipped (a paced burst). */
   missed: number;
+  /** Never reached the server: this machine ran out of sockets or ports. In `sent`, not in `failed`. */
+  local?: number;
   /** Over the last report's window; in the last report (`done`), over the whole burst. */
   rps: number; last_latency_ms: number; min_latency_ms: number;
   max_latency_ms: number; avg_latency_ms: number;
@@ -671,15 +709,22 @@ export interface ProxyStat {
   duplicated: number; corrupted: number; reordered: number; bytes: number;
   /** TCP: connections taken, reset, left half-open (absent while 0). */
   connections?: number; reset?: number; stalled?: number;
+  /** TCP: connections the target refused, passed on as a reset (absent while 0). */
+  refused?: number;
+  /** What this machine could not pass on — a send the system refused, no local port for a connection, past the relay's connection limit (absent while 0). */
+  failed?: number;
   /** The profile it impairs with now, as the timeline names it. */
   profile: string;
 }
 export interface StormStat {
   job_id: number; ts: number; packets: number; bytes: number;
-  errors: number; pps: number; mbps: number;
+  errors: number;
+  /** Units this machine could not send (out of ports, sockets or buffers): not the target's answer. */
+  local: number;
+  pps: number; mbps: number;
 }
 export interface OpenPort { job_id: number; ts: number; port: number; banner: string | null; }
-export interface ScanProgress { job_id: number; ts: number; done: number; total: number; open: number; }
+export interface ScanProgress { job_id: number; ts: number; done: number; total: number; open: number; /** Ports this machine could not try (out of sockets): neither open nor closed. */ unchecked: number; }
 /** Experiments end with an `EngineError`; the other jobs with text. */
 export interface JobEnded { job_id: number; kind: string; error: EngineError | null; }
 export interface EmitStat {
@@ -688,16 +733,30 @@ export interface EmitStat {
   targets: number;
   rounds: number; packets: number;
   bytes: number; errors: number; pps: number;
+  /** Sends this machine could not make (out of buffers): not among `errors`. Absent while 0. */
+  local?: number;
 }
 export interface PeerReport {
   job_id: number; ts: number; peers: Peer[];
   packets: number; bytes: number; responses: number;
+  /** Distinct peers past the table's cap: counted, not listed. */
+  unlisted: number;
+  /** Probes not answered because too many auto-replies were already in flight. */
+  replies_skipped: number;
+}
+/** An OSC monitor's running totals (`osc://monitor-stat`): a flood is sampled into the list. */
+export interface MonitorStat {
+  job_id: number; ts: number; packets: number; bytes: number;
+  /** Packets received but not forwarded to the list (the rate gate held them). */
+  not_shown: number;
+  /** Packets that did not decode as OSC. */
+  malformed: number;
 }
 export interface MqttBatch {
   job_id: number;
   ts: number;
   messages: MqttMessage[];
-  /** Messages the accumulator had to shed while the UI was behind. */
+  /** Always 0 now: a full batch holds the reading back instead (kept for API clients). */
   dropped: number;
 }
 export interface MqttStateEvent {
@@ -846,10 +905,10 @@ export const api = {
   ) => invoke<string>("mqtt_publish_once", { config, topic, payload, qos, retain }),
 
   signalsLoad: () => invoke<LibraryFile>("signals_load"),
-  signalsSave: (library: Library) => invoke<string>("signals_save", { library }),
+  signalsSave: (library: Library, base: string) => invoke<Saved>("signals_save", { library, base }),
 
   emulatorsLoad: () => invoke<EmulatorLibraryFile>("emulators_load"),
-  emulatorsSave: (library: EmulatorLibrary) => invoke<string>("emulators_save", { library }),
+  emulatorsSave: (library: EmulatorLibrary, base: string) => invoke<Saved>("emulators_save", { library, base }),
   /** Throws what Start would be refused for; `params` are the values its templates may read. */
   emulatorCheck: (emulator: Emulator, params?: Record<string, string>) => invoke<void>("emulator_check", { emulator, params: params ?? null }),
   /** `source`: the library entry it comes from, kept on the job (`params.source`). */
@@ -869,6 +928,7 @@ export const EV = {
   experimentStep: "experiment://step",
   experimentEnded: "experiment://ended",
   oscMessage: "osc://message",
+  oscMonitorStat: "osc://monitor-stat",
   oscGenTick: "osc://gen-tick",
   burstProgress: "http://burst-progress",
   netsimStat: "netsim://stat",

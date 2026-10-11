@@ -35,7 +35,7 @@ pub const MAX_BODY: usize = 1024 * 1024;
 /// Bytes of a body templates and waits read (`request.body`); `json` only when it fit.
 const READ_BODY: usize = 64 * 1024;
 /// Connections served at once; more are closed as they arrive.
-const MAX_CONNECTIONS: usize = 512;
+pub const MAX_CONNECTIONS: usize = 512;
 /// A client must send its request's head within this.
 const HEAD_TIMEOUT: Duration = Duration::from_secs(30);
 /// Body shown in an Inspector frame.
@@ -81,6 +81,7 @@ pub(crate) async fn serve(listener: TcpListener, context: Arc<Context>) -> Engin
         failures = 0;
         if active.load(Ordering::Relaxed) >= MAX_CONNECTIONS {
             drop(stream);
+            context.emulation.refuse();
             continue;
         }
         active.fetch_add(1, Ordering::Relaxed);

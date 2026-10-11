@@ -11,6 +11,7 @@ use tokio::task::JoinSet;
 use crate::host::Host;
 
 use super::cookies::CookieJar;
+use super::experiment_fields::MAX_TIMEOUT_MS;
 use super::error::{EngineError, EngineResult, Field};
 use super::http_auth::{self, Answering, Auth, DigestMemory};
 use super::latency::{LatencyHistogram, Percentiles};
@@ -103,7 +104,7 @@ struct Outgoing<'a> {
 
 impl<'a> Outgoing<'a> {
     fn of(req: &'a HttpRequest) -> Self {
-        Outgoing { method: req.method.to_uppercase(), url: &req.url, headers: &req.headers, body: req.body.as_deref() }
+        Outgoing { method: req.method.trim().to_uppercase(), url: &req.url, headers: &req.headers, body: req.body.as_deref() }
     }
 }
 
@@ -139,22 +140,20 @@ async fn exchange(client: &reqwest::Client, out: &Outgoing<'_>, authorization: O
                 .iter()
                 .map(|(k, v)| (k.to_string(), String::from_utf8_lossy(v.as_bytes()).into_owned()))
                 .collect();
-            let full = resp.bytes().await.unwrap_or_default();
+            let (kept, body_bytes, failed) = read_body(resp).await;
             let latency_ms = start.elapsed().as_secs_f64() * 1000.0;
-            let body_bytes = full.len();
-            let truncated = body_bytes > MAX_BODY_PREVIEW;
-            let slice = &full[..body_bytes.min(MAX_BODY_PREVIEW)];
             HttpResponse {
-                ok: status.is_success(),
+                // A body that stalled or was cut off is no success, whatever the status said.
+                ok: status.is_success() && failed.is_none(),
                 status: status.as_u16(),
                 status_text: status.canonical_reason().unwrap_or("").to_string(),
                 latency_ms,
                 headers,
-                body: String::from_utf8_lossy(slice).into_owned(),
+                body: String::from_utf8_lossy(&kept).into_owned(),
                 body_bytes,
-                truncated,
-                error: None,
-                cause: None,
+                truncated: body_bytes > kept.len(),
+                error: failed.as_ref().map(|e| transport::chain(e)),
+                cause: failed.as_ref().map(transport::of_reqwest),
                 digest: None,
             }
         }
@@ -171,6 +170,26 @@ async fn exchange(client: &reqwest::Client, out: &Outgoing<'_>, authorization: O
             cause: Some(transport::of_reqwest(&e)),
             digest: None,
         },
+    }
+}
+
+/// A response's body read to its end, as it arrives: the first `MAX_BODY_PREVIEW`
+/// bytes kept, every byte counted, and the failure that ended it early, if one
+/// did (the timeout, a cut connection). Never the whole body in memory — a
+/// server can send gigabytes within a timeout, or inflate a small gzip into them.
+async fn read_body(mut resp: reqwest::Response) -> (Vec<u8>, usize, Option<reqwest::Error>) {
+    let mut kept = Vec::new();
+    let mut counted = 0usize;
+    loop {
+        match resp.chunk().await {
+            Ok(Some(chunk)) => {
+                counted = counted.saturating_add(chunk.len());
+                let room = MAX_BODY_PREVIEW.saturating_sub(kept.len());
+                kept.extend_from_slice(&chunk[..chunk.len().min(room)]);
+            }
+            Ok(None) => return (kept, counted, None),
+            Err(error) => return (kept, counted, Some(error)),
+        }
     }
 }
 
@@ -210,7 +229,7 @@ async fn digest(client: &reqwest::Client, req: &HttpRequest, username: &str, pas
         return exchange(client, &Outgoing::of(req), None).await;
     };
     let mut url = origin.clone();
-    let mut method = req.method.to_uppercase();
+    let mut method = req.method.trim().to_uppercase();
     let mut headers = req.headers.clone();
     let mut body = req.body.clone();
     let mut latency_ms = 0.0;
@@ -267,8 +286,7 @@ async fn digest(client: &reqwest::Client, req: &HttpRequest, username: &str, pas
         let Some(next) = redirect(&response, &url) else {
             return HttpResponse { latency_ms, digest: outcome, ..response };
         };
-        // 301, 302 and 303 go on as GET without a body (HEAD stays HEAD); 307 and 308 as they were.
-        if matches!(response.status, 301..=303) {
+        if drops_body(response.status, &method) {
             if method != "HEAD" {
                 method = "GET".into();
             }
@@ -312,6 +330,18 @@ async fn digest(client: &reqwest::Client, req: &HttpRequest, username: &str, pas
 fn answerable(requested: &reqwest::Url, here: &reqwest::Url) -> bool {
     requested.origin() == here.origin()
         || (requested.scheme() == "http" && here.scheme() == "https" && requested.host_str() == here.host_str() && requested.port().is_none() && here.port().is_none())
+}
+
+/// Whether a redirect goes on without the request's body, as a GET (a HEAD
+/// stays one), as reqwest's own redirects and browsers do it — RFC 9110,
+/// section 15.4: a 303 for every method, a 301 or 302 only for a POST; a PUT or
+/// a DELETE moved by a 302 is still a PUT or a DELETE, and 307 and 308 never change it.
+fn drops_body(status: u16, method: &str) -> bool {
+    match status {
+        303 => true,
+        301 | 302 => method == "POST",
+        _ => false,
+    }
 }
 
 /// Where a redirect response sends the request next, if it is one with a `Location`.
@@ -365,10 +395,32 @@ pub(crate) fn exchange_frame(req: &HttpRequest, resp: &HttpResponse, job_id: Opt
     frame
 }
 
+/// A request waits for its answer 1 ms to `MAX_TIMEOUT_MS` (two minutes), as
+/// the HTTP node's does: 0 would fail every request unsent, and a longer one
+/// would leave the screen's Send waiting with nothing to stop it.
+fn check_timeout(req: &HttpRequest) -> EngineResult<()> {
+    if (1..=MAX_TIMEOUT_MS).contains(&req.timeout_ms) {
+        Ok(())
+    } else {
+        Err(EngineError::new("node.range").with("min", 1).with("max", MAX_TIMEOUT_MS).in_field(Field::new("timeout_ms")))
+    }
+}
+
+/// A method HTTP can carry (a token: no spaces, no separators), as the HTTP
+/// node's is checked — one that is not was sent as a GET.
+fn check_method(req: &HttpRequest) -> EngineResult<()> {
+    match reqwest::Method::from_bytes(req.method.trim().as_bytes()) {
+        Ok(_) => Ok(()),
+        Err(_) => Err(EngineError::new("node.method_invalid").with("value", &req.method).in_field(Field::new("method"))),
+    }
+}
+
 /// Fire a single request and return the full response for the inspector.
 /// A failure to connect or to get an answer is in the response (`error`,
 /// `cause`); the error is only for a client that could not be built.
 pub async fn request_once(host: Host, req: HttpRequest, jar: Option<Arc<CookieJar>>) -> EngineResult<HttpResponse> {
+    check_method(&req)?;
+    check_timeout(&req)?;
     let client = build_client(&req, jar)?;
     let resp = execute(&client, &req, &DigestMemory::default()).await;
     if inspect::armed(&host) {
@@ -424,6 +476,10 @@ struct BurstProgress {
     failed: u64,
     /// Due while every worker was busy, and skipped (a paced burst only).
     missed: u64,
+    /// Never reached the server: this machine ran out of sockets or local
+    /// ports (`transport.exhausted`). In `sent`, never in `failed` — they say
+    /// nothing about the server.
+    local: u64,
     /// Requests per second over the last report's window; in the last report,
     /// over the whole burst.
     rps: f64,
@@ -445,12 +501,19 @@ struct BurstStats {
     ok: AtomicU64,
     failed: AtomicU64,
     missed: AtomicU64,
+    local: AtomicU64,
     last_us: AtomicU64,
     latency: LatencyHistogram,
 }
 
 impl BurstStats {
     fn record(&self, resp: &HttpResponse) {
+        // Not sent at all: no latency of the server's, no answer of its.
+        if resp.cause == Some(Cause::Exhausted) {
+            self.local.fetch_add(1, Ordering::Relaxed);
+            self.sent.fetch_add(1, Ordering::Relaxed);
+            return;
+        }
         let micros = (resp.latency_ms * 1000.0) as u64;
         self.latency.record(micros);
         self.last_us.store(micros, Ordering::Relaxed);
@@ -470,6 +533,7 @@ impl BurstStats {
             ok: self.ok.load(Ordering::Relaxed),
             failed: self.failed.load(Ordering::Relaxed),
             missed: self.missed.load(Ordering::Relaxed),
+            local: self.local.load(Ordering::Relaxed),
             rps,
             last_latency_ms: self.last_us.load(Ordering::Relaxed) as f64 / 1000.0,
             min_latency_ms: self.latency.min_ms(),
@@ -503,13 +567,16 @@ pub async fn start_burst(
     jar: Option<Arc<CookieJar>>,
 ) -> EngineResult<JobInfo> {
     check_burst(&cfg)?;
+    check_method(&cfg.request)?;
+    check_timeout(&cfg.request)?;
     let client = build_client(&cfg.request, jar.filter(|_| cfg.cookies))?;
     let concurrency = cfg.concurrency.clamp(1, MAX_CONCURRENCY);
 
     let id = jobs.next_id();
     let mut info = JobInfo::new(id, "http-burst", format!("HTTP burst {} {}", cfg.request.method, cfg.request.url))
         .with("method", &cfg.request.method)
-        .with("url", &cfg.request.url);
+        .with("url", &cfg.request.url)
+        .with("workers", concurrency);
     if cfg.rate > 0.0 {
         info = info.with("rate", cfg.rate);
     }
@@ -689,6 +756,46 @@ mod tests {
             assert_eq!((refused.code.as_str(), refused.params["max"].as_str()), ("http.rate_invalid", "100000"), "{rate}");
         }
         assert!(check_burst(&burst(0.0, -1.0)).unwrap_err().is("http.duration_invalid"));
+    }
+
+    #[test]
+    fn a_request_this_machine_could_not_send_is_not_the_server_s_failure() {
+        let answer = |status: u16, cause: Option<Cause>| HttpResponse {
+            ok: status == 200,
+            status,
+            status_text: String::new(),
+            latency_ms: 2.0,
+            headers: Vec::new(),
+            body: String::new(),
+            body_bytes: 0,
+            truncated: false,
+            error: cause.map(|_| "x".into()),
+            cause,
+            digest: None,
+        };
+        let stats = BurstStats::default();
+        stats.record(&answer(200, None));
+        stats.record(&answer(500, None));
+        stats.record(&answer(0, Some(Cause::Refused)));
+        stats.record(&answer(0, Some(Cause::Exhausted)));
+        stats.record(&answer(0, Some(Cause::Exhausted)));
+        let report = stats.report(1, 0.0, true);
+        assert_eq!((report.sent, report.ok, report.failed, report.local), (5, 1, 2, 2));
+        assert!(stats.latency.max_ms() > 0.0, "the server's answers are timed");
+    }
+
+    #[test]
+    fn a_timeout_is_one_millisecond_to_two_minutes() {
+        let mut config = burst(0.0, 0.0);
+        for timeout_ms in [1, 10_000, MAX_TIMEOUT_MS] {
+            config.request.timeout_ms = timeout_ms;
+            assert!(check_timeout(&config.request).is_ok(), "{timeout_ms}");
+        }
+        for timeout_ms in [0, MAX_TIMEOUT_MS + 1, u64::MAX] {
+            config.request.timeout_ms = timeout_ms;
+            let refused = check_timeout(&config.request).unwrap_err();
+            assert_eq!((refused.code.as_str(), refused.field.as_ref().unwrap().key.as_str()), ("node.range", "timeout_ms"), "{timeout_ms}");
+        }
     }
 
     #[test]

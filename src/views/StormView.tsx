@@ -97,6 +97,7 @@ export function StormView() {
             <div className="metric"><div className="k">{t("st.rateLabel")}</div><div className="v amber">{fmtNum(stat?.mbps ?? 0, 2)}<small>{t("unit.mbps")}</small></div></div>
             <div className="metric"><div className="k">{t("common.volume")}</div><div className="v">{fmtBytes(stat?.bytes ?? 0)}</div></div>
             <div className="metric"><div className="k">{t("common.errors")}</div><div className="v red">{fmtNum(stat?.errors ?? 0)}</div></div>
+            {!!stat?.local && <div className="metric" data-tip={t("st.localHint")}><div className="k">{t("st.local")}</div><div className="v amber">{fmtNum(stat.local)}</div></div>}
           </div>
           <div data-tip={t("st.ppsCaption")}>
             <Scope data={ppsSeries} height={220} color="#ffc069" min={0} />

@@ -475,7 +475,8 @@ One OSC message. Arguments are typed with a prefix, or inferred:
 | `T`, `F` | true, false |
 | `N` | nil |
 | `3`, `-3` | a plain integer is int32 |
-| `2.5` | a plain decimal is float32 |
+| `3000000000` | an integer past 32 bits is int64 |
+| `2.5`, `1e3` | a plain decimal, or a number with an exponent, is float32 (float64 past float32's range) |
 | anything else | string |
 
 ```bash

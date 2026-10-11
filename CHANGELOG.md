@@ -27,6 +27,178 @@ release notes — so what is written here is what users read. See
 
 ### Fixed
 
+- **The OSC generator keeps going when nothing listens yet.** On Linux, the "port unreachable"
+  answer to one value stopped the generator with *connection refused*; it now carries on (and
+  sends that value again), so it can run before the device starts.
+
+- **A host name nobody answers for fails within 5 seconds.** A send, scan, storm or WebSocket
+  connection to a name the network cannot resolve used to wait as long as the system's resolver
+  did — over 10 seconds without working DNS — before it said so.
+
+- **A server without a token answers to loopback names only, really.** A host name that
+  merely started with `127.` — `127.0.0.1.attacker.example`, which anyone can point at
+  this machine — passed as a loopback name, so a web page under such a name could use a
+  server on this machine through DNS rebinding. Only `localhost`, its subdomains and
+  loopback addresses pass now; a malformed `Host` or two of them are refused.
+- **A server's downloads never open what is outside the data folder.** `/api/files`
+  resolved the path it was given before checking it, which opened it: on Windows a share
+  on another machine (`\\host\share`, which sends this machine's credentials there) or a
+  named pipe was reached before being refused. The path is now judged by its name first.
+- **A server lets go of slow clients and stops when asked.** A client that sent half a
+  request and then nothing held its connection for good, and kept the server from
+  stopping (`docker stop` waited for the kill). A request's head now has 30 seconds, at
+  most 1024 connections are served at once, and stopping waits at most 5 seconds for
+  requests under way.
+- **A field with many `{{…}}` no longer takes minutes, and none grows without bound.**
+  An imported experiment with a long field of expressions took time growing with the
+  square of its length to read (3 s for 1 MB, minutes for 4 MB); and a large value used
+  many times over in one field took memory without limit (a 64 KiB parameter in a 4 MiB
+  field: 39 GB). Fields are read in linear time, and a filled-in field is at most 16 MiB
+  (`template.too_large`).
+- **A secret echoed back in another form stays masked.** A server that echoed a request
+  could show a secret percent-encoded (from a URL) or with a query's `+` read as a space —
+  a token like `ab+cd/ef==` came back as `ab cd/ef==` in steps, reports and the
+  Inspector. Those forms, and the value escaped inside JSON, are masked too.
+- **A library file from a newer Signal Lab is no longer emptied.** `signals.json` and
+  `emulators.json` of a newer version were read anyway, dropping what that version added —
+  an `emulators.json` with another layout read as an empty library — and the next save
+  wrote the loss back. They are refused (`doc.version_unsupported`) and left as they are,
+  as an experiment file already was.
+- **Commands that take no arguments refuse ones they do not know**, like every other
+  command, instead of ignoring them.
+- **Stop gives the port back before it answers.** Stopping a monitor, a relay, an emulator,
+  a discovery listener or a run only asked the job to end, and its sockets closed a moment
+  later — so Start right after (or a script's stop-then-start) failed with "address in
+  use", on the first try for an OSC monitor. Stop and Stop all now answer once the job and
+  every task it started have let go; a run started while Stop all was under way is stopped
+  too instead of running on.
+- **A server page that stops reading is let go.** A frozen tab or a script that only
+  connected to `/api/events` held its socket and a task on the server for good once its
+  buffers filled; now a page that takes nothing for 10 seconds is disconnected (a live page
+  reconnects), and the other pages are not affected.
+- **Two pages, or a page and an editor, no longer overwrite each other's library.** The
+  signal and emulator libraries were written whole from what each page held, so on a server
+  the page that read first and saved last silently removed the other page's signals, and a
+  hand edit made while the app ran vanished at its next save. A save now names what it read
+  and is refused when the file changed since (`file.changed`): the file keeps the other
+  change, the screen says so and stops writing until Reload. The emulator library is also
+  never written over while it does not read, as the signal library already was.
+- **`signallab mcp`** no longer keeps a finished call registered when it answered before it
+  was registered.
+- **Inspector exports in the same moment are two files.** Two exports in one millisecond (two
+  pages, a script) wrote the same `capture-<ms>` file over each other; the second now gets
+  `capture-<ms>-2`.
+
+- **Experiments: a long run no longer freezes the editor or writes a giant report.** A
+  Loop of a thousand iterations over a full body made 124 000 steps: each one an event to
+  the window that copied the whole timeline and drew every row, and a 24 MB report. Now a
+  run reports its first 5 000 steps, then one a second and every failure, and its last 500
+  — a row says how many were left out between two others — so the report of that run is
+  about 1 MB; the timeline draws at most seven times a second and only the rows in view.
+  Run history reads a report about four times faster.
+- **Experiments: steps wired to each other layer after layer no longer start billions of
+  branches.** A step reached by several parallel wires runs once for each, so a few layers
+  each wired to the next doubled the branches with every layer — 64 nodes could take the
+  app down. A run now starts at most 1 000 parallel branches and fails with a message
+  that says to use *Join branches*.
+- **Experiments: the editor keeps to 64 nodes.** Adding, pasting or duplicating past
+  them was accepted and the document then could no longer be saved; now it is refused
+  with the reason, and a pasted clip of thousands of nodes no longer hangs the editor.
+- **Load: requests this computer could not send are no longer the server's errors.**
+  When the machine runs out of local ports, those requests are counted as *Out of
+  ports*, not in the failures, the error rate, the rate or the latencies; a Steps
+  profile typed far past its 100 levels no longer stalls the chart.
+- **Impairment: what the relay could not pass on is counted.** A TCP connection the
+  relay had no local port for (hundreds of short connections a second use them up for
+  minutes) was handed to the client as a reset, as if the target had refused, and
+  counted nowhere; now it is tried again for about two seconds and, failing, counted as
+  *Not relayed* — and a target that really refuses as *Refused*. A UDP send the system
+  refused is counted too. A TCP relay holds at most 1 024 connections and 64 MB on their
+  way, and a UDP relay at most 64 MB of delayed datagrams (it held up to 650 MB).
+- **Inspector: capture no longer slows the traffic it watches.** Every captured frame's
+  hex preview cost about 50 µs to write, on the sending or receiving task itself, and each
+  delivery to the screen copied every frame not yet shown — up to the whole ring, about
+  19 ms, while every source waited for it. Now a frame costs about 5 µs and a delivery
+  under half a millisecond; a frame's whole payload opens ~15× faster, and exporting a
+  full ring as text takes a third of a second instead of three and a half, off the
+  threads that answer everything else. Frames that arrived while the list was paused are
+  now marked *not shown* where they would be, not left out unsaid.
+- **The interface stays quick while capture, the console or MQTT are busy.** The whole
+  window — every screen opened so far — was drawn again for each Inspector batch (eight a
+  second while capture was on), each console line, and each MQTT batch (ten a second).
+  Now only the Inspector's tab, the console or the MQTT screen are; console lines are
+  drawn together, at most ten times a second, and a hundred jobs ending at once ask for
+  the job list once. With hundreds of jobs running the strip scrolls in two rows instead
+  of pushing the console off the window.
+- **Signals: a library of thousands opens and scrolls smoothly.** The tree drew every
+  signal at once (and again on every keystroke in a field); it now draws what is in view.
+- **Emulators: connections past the limit are counted.** An HTTP emulator serving 512
+  connections (TCP or MQTT: 256) closed the next ones without a word; they are now
+  counted as *Refused* on its screen and in its counters. A stopped emulator's live
+  exchanges are let go, and the live counters no longer redraw the other screens.
+
+- **Storm: a healthy target is never reported as failing.** Each closed TCP connection
+  held one of this computer's own ports for minutes; past about 16 000 of them in a fast
+  storm the system ran out, and every later connection was counted against the target —
+  half of a twenty-second run at a sink that was up. Attempts this computer cannot make
+  (out of ports, sockets or buffers) are now counted and shown separately as *dropped
+  locally*, never as the target's errors. A UDP storm that cannot open its socket at all
+  now says why when it starts; the rate is held to a sane ceiling, and a negative duration
+  runs until stopped instead of ending at once.
+
+- **OSC monitor: a flood no longer swamps the interface.** The monitor sent one event per
+  packet; on loopback that could be a hundred thousand a second. Decoded packets are now
+  sampled into the list, with a running count of what was received and how much is not
+  shown, while the Inspector keeps its own sample; a malformed packet is always shown. A
+  truncated, over-long or deeply nested OSC packet is refused with a reason rather than
+  ending the monitor or overflowing the stack.
+
+- **Discovery: a probe flood stays bounded.** A crowd past the peer table is counted as
+  *more peers* instead of silently dropped, and auto-replies are capped so a storm of
+  probes to an answering listener cannot be amplified without limit — what goes unanswered
+  is counted as *replies skipped*. A beacon rate too small to time is refused instead of
+  running wild.
+
+- **HTTP: a body that stops halfway is no longer a success, and a huge one no longer
+  fills the memory.** A response whose body stalled until the timeout, or was cut off
+  by the server, came back as `200` with an empty body — and a burst counted it as OK.
+  It is now a failure with the reason (the status and what arrived still shown). The
+  body is read as it comes and only its first 256 KiB kept: a server streaming without
+  end used to grow the app by about 1.5 GB a second until the timeout, and now costs
+  nothing. A burst counts requests this computer could not send — out of sockets or
+  local ports — as *Out of ports*, never as the server's failures; the timeout is
+  1 ms to two minutes, as in the HTTP step; the cookie jar keeps at most 3000 cookies,
+  and its table draws only what is in view.
+
+- **WebSocket: Disconnect and Stop work while a service floods.** A service sending
+  faster than the screen reads kept the connection busy for ever: Disconnect, Stop and
+  Send never got their turn. They now do within a few dozen messages. The received and
+  sent counts are the connection's own, not the list's; 16 MiB messages back to back
+  no longer send the screen over a hundred megabytes ten times a second (a batch carries
+  at most 1 MB of text, the rest counted as not shown); the list keeps at most 8 million
+  characters and draws only the rows in view.
+
+- **MQTT: subscribing to `#` on a busy broker shows every topic, with true counts.** A
+  broker's retained values arrive all at once on subscribing; of 50 000, 42 000 were
+  left out of the tree and never came again, and a firehose on a few topics lost 85 %
+  of its messages from the counts. A batch now carries the latest message per topic
+  with how many it stands for, and a full batch makes the broker wait instead of losing
+  any. A payload over 4 KB reaches the screen as its start and its size (a 64 MB one
+  went whole, several times over) and is not offered for publishing or saving cut. The
+  tree holds up to 100 000 topics and draws only the rows in view; it drew every one.
+  A broker that answers the connect with anything but its acknowledgement is refused on
+  the first bytes; one answering with an 8 MB message put 25 MB into the error shown.
+
+- **Scanner: no open port is missed on a busy host.** Each port found held one of this
+  computer's own ports for minutes after the scan let it go; a host with thousands open
+  used them all up, and every later port failed here and passed for closed. Found ports
+  are now closed with a reset, an attempt this computer cannot make is tried again, and
+  one it still cannot make is shown as *not checked*, never as closed. The list keeps
+  every open port (it stopped at 2000) and draws only what is in view, so a scan with tens
+  of thousands open stays smooth. A host name is looked up once, and one that does not
+  resolve stops the scan with the reason instead of finding nothing; ports past 65 535
+  are no longer accepted.
+
 - **A broken signal library is no longer overwritten.** While `signals.json` could not be
   read, any change on the Signals screen wrote the screen's empty list over the file you
   were fixing. Now nothing writes the library until it reads again: the screens' edits,
@@ -146,6 +318,50 @@ release notes — so what is written here is what users read. See
   (OPTIONS, and any other token the engine can send), marks the fields that take templates
   (a header check's name and text, a WebSocket wait's pattern and more), and says what a
   *Wait for WebSocket* counts from.
+
+- **OSC messages with a time tag, a char, a colour, a MIDI message or an array are read.**
+  The OSC monitor, waits, emulators and the Inspector refused every message carrying one
+  of OSC 1.0's tags `t c r m` or an array `[ ]` as a decode error, so a wait for such a
+  message never matched. They are read now (`I` as `impulse`), and a message from an
+  older sender without a type tag string reads as one without arguments, as the
+  specification asks; a packet whose address does not start with `/` is no OSC message.
+
+- **An OSC address pattern with several `*` no longer stalls a wait or an emulator.**
+  Matching backtracked: `/*a*a*a*a*a*a*a*b` against a 50-character address took 14 s in
+  the receive loop, and every added character multiplied it. Matching now takes time in
+  proportion to the pattern and the address.
+
+- **`signallab send osc 3000000000` sends an int64 and `1e3` a float**, not the text
+  "3000000000" or "1e3" that a device expecting a number ignores; `b:` sends an empty blob.
+
+- **A PUT or DELETE with Digest that meets a 301 or 302 stays a PUT or DELETE.** It went on
+  as a GET without its body, unlike the same request without Digest; only a POST changes
+  (RFC 9110). A Digest challenge with `-sess` and no qop, which cannot be answered so that
+  a server could check it, is said to be unsupported instead of being answered wrongly.
+
+- **An HTTP method that is no HTTP token is refused** on the HTTP screen, its burst and in
+  the API, as the HTTP node refuses it. `BAD METHOD` was sent as a GET.
+
+- **A refused WebSocket upgrade shows the server's answer, and a `Host` header is the one
+  sent.** The body of a 401/403 was shown only when it arrived together with the head —
+  most servers send it right after; it is read for up to 0.3 s now. A `Host` (or another
+  header the upgrade writes) given in the headers was dropped; it replaces the default now.
+
+- **MQTT: what a broker sends right behind CONNACK is no longer lost.** A broker keeping a
+  session (*Clean session* off) sends what it kept straight after CONNACK, often in the same
+  segment; those bytes were dropped — the messages lost and never acknowledged, and a packet
+  cut there read from its middle.
+
+- **MQTT: a broker that stops answering ends the connection.** With pings unanswered for
+  1.5 keep-alives the MQTT screen now ends the connection ("No answer from … in time")
+  instead of showing it connected for ever. A packet id still waiting for its PUBACK or
+  PUBCOMP is no longer given to a new packet when the count comes round after 65 535.
+
+- **MQTT: a malformed filter, or a topic too long for MQTT, is refused before it is sent.**
+  A filter such as `a/#/b` made brokers close the whole connection; a topic over 65 535
+  bytes went out with its length wrapped, so the broker read a shorter topic and published
+  the message there. A NUL in a topic, an over-long user name, password or will, and a
+  will on a wildcard topic are refused as well.
 
 ## [1.0.0] - 2026-10-04
 

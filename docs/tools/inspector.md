@@ -150,8 +150,8 @@ an OSC bundle with its arguments, an HTTP response's headers and the start of
 its body, an emulator's request and its reply.
 
 Under [[ui:ins.rawBytes]] is a hex dump: offset, 16 bytes in hex, and the same
-bytes as text. The list carries the first KiB of each frame; when a frame is
-longer, a button under the dump loads all of it.
+bytes as text. The list carries the first 256 bytes of each frame; when a frame
+is longer, a button under the dump loads all of it.
 
 ### What a frame keeps {#limits}
 
@@ -239,7 +239,7 @@ An empty capture is not written; the console says there is nothing to save.
 - **`.jsonl`** — one JSON object per line, one line per frame: `seq`, `ts`
   (milliseconds since 1970), `proto`, `dir`, `source`, `job_id`, `local`,
   `remote`, `bytes`, `kept`, `summary`, `detail`, `hex` (the dump of the first
-  KiB), `verdict`, and `data`, the bytes it kept as base64.
+  256 bytes), `verdict`, and `data`, the bytes it kept as base64.
 - **`.txt`** — for reading: a line per frame with its number, time, direction,
   protocol, peer, size and verdict, then its summary, its decoded text and a
   hex dump of every byte it kept.

@@ -89,15 +89,20 @@ Every packet becomes a row, newest at the top:
 | [[ui:common.time]] | When it arrived, to the millisecond |
 | [[ui:osc.from]] | The sender's `IP:port` |
 | [[ui:osc.address]] | The OSC address, or [[ui:osc.decodeError]] when the packet is not valid OSC |
-| [[ui:osc.args]] | The argument values; a blob shows as `blob[n]`, `nil` as `nil`. For a packet that could not be decoded, why. |
+| [[ui:osc.args]] | The argument values; a blob shows as `blob[n]`, `nil` as `nil`, a time tag as `t:` and its seconds since 1900 (`t:immediate` for OSC's "now"), a char as `'A'`, a colour as `#rrggbbaa`, a MIDI message as `midi[01 90 3c 7f]`, an array in `[ ]`. For a packet that could not be decoded, why. |
 
 A bundle gives one row per message. The list keeps the latest 300 rows;
 [[ui:common.clear]] empties it. Press [[ui:common.stop]] to close the port. The
 monitor is also a job in the console strip, so it can be stopped from there.
 
-The monitor reads packets of up to 64 KiB. It decodes the tags `i f s S b h d T F N I`
-(`S` reads as text, `I` as nil); a packet with any other tag, or cut short, is
-shown as a decode error rather than dropped.
+The monitor reads packets of up to 64 KiB. It decodes every type tag of OSC 1.0 —
+`i f s S b h d T F N I t c r m` and arrays `[ ]` (`S` reads as text, `I` as
+`impulse`). A message from an older implementation without a type tag string
+reads as a message without arguments, as the specification asks. A packet with
+any other tag, one cut short, or one whose address does not start with `/`, is
+shown as a decode error rather than dropped. Waits and emulators read the same
+types: in a reply value a time tag is its 64-bit number as text, a colour
+`#rrggbbaa`, a MIDI message its four bytes, an array a list.
 
 ### Turning a message into a wait {#wait-for-this}
 

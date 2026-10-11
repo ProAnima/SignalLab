@@ -1,15 +1,21 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, EV, type JobInfo, type WsBatch, type WsClosed, type WsHandshake, type WsMessage, type WsStateEvent } from "../lib/api";
 import { useStore } from "../lib/store";
 import { useT } from "../lib/i18n";
-import { useFieldIds, useJobStream, usePersistentState } from "../lib/hooks";
+import { useFieldIds, useJobStream, usePersistentState, useWindowedRows } from "../lib/hooks";
 import { fmtBytes, fmtNum, fmtTime } from "../lib/format";
-import { asJson, protocolsOf, protocolsText } from "../lib/websocket";
+import { asJson, keepNewest, protocolsOf, protocolsText } from "../lib/websocket";
 
 /** Messages the screen keeps; older ones go (the Inspector has them while capture is armed). */
 const KEPT = 2000;
+/** Characters of text and hex the kept messages hold at most: 2000 of 64 KB would be hundreds of MB. */
+const KEPT_CHARS = 8_000_000;
 /** Characters a row of the list shows; the whole message is in its detail. */
 const ROW_TEXT = 300;
+/** One row of the list (`.ws-row`), fixed so the list draws only what is in view. */
+const ROW_HEIGHT = 26;
+
+const weight = (message: WsMessage) => message.text.length + (message.hex?.length ?? 0);
 
 type Shown = WsMessage & { n: number };
 
@@ -36,6 +42,8 @@ export function WsView() {
   const [draft, setDraft] = usePersistentState("signal-lab.ws.draft", '{"type":"ping"}');
   const [messages, setMessages] = useState<Shown[]>([]);
   const [dropped, setDropped] = useState(0);
+  // The connection's own totals, shown or not; from the batches, since the list keeps only the newest.
+  const [totals, setTotals] = useState({ received: 0, sent: 0 });
   const [picked, setPicked] = useState<number | null>(null);
   const counter = useRef(0);
   const list = useRef<HTMLDivElement>(null);
@@ -55,11 +63,9 @@ export function WsView() {
 
   useJobStream<WsBatch>(EV.wsMessages, job?.id ?? null, (batch) => {
     const added = batch.messages.map((message) => ({ ...message, n: ++counter.current }));
-    setMessages((prior) => {
-      const next = prior.concat(added);
-      return next.length > KEPT ? next.slice(next.length - KEPT) : next;
-    });
+    setMessages((prior) => keepNewest(prior, added, KEPT, KEPT_CHARS, weight));
     if (batch.dropped) setDropped((prior) => prior + batch.dropped);
+    if (batch.received !== undefined) setTotals({ received: batch.received, sent: batch.sent });
   });
 
   // Newest last, followed while the list was scrolled to its end before they came.
@@ -81,6 +87,7 @@ export function WsView() {
     }
     setConnecting(true);
     setClosed(null);
+    setTotals({ received: 0, sent: 0 });
     try {
       const started = await api.wsConnect({ url: url.trim(), headers: headers.filter(([name]) => name.trim()), protocols: protocolsOf(protocols), timeout_ms: 10_000 });
       setJob(started);
@@ -102,10 +109,7 @@ export function WsView() {
     }
   };
 
-  const counts = useMemo(() => ({
-    rx: messages.filter((message) => message.dir === "rx").length,
-    tx: messages.filter((message) => message.dir === "tx").length,
-  }), [messages]);
+  const rows = useWindowedRows(ROW_HEIGHT, messages.length);
   const chosen = messages.find((message) => message.n === picked) ?? null;
   const chosenJson = chosen && chosen.kind === "text" ? asJson(chosen.text) : null;
 
@@ -181,16 +185,17 @@ export function WsView() {
               <p className="section-label" style={{ margin: 0 }}>{t("ws.messages")}</p>
               <span className="spacer" style={{ flex: 1 }} />
               <button className="ghost sm" style={{ flex: "0 0 auto" }} disabled={!messages.length}
-                onClick={() => { setMessages([]); setDropped(0); setPicked(null); }}>{t("common.clear")}</button>
+                onClick={() => { setMessages([]); setDropped(0); setPicked(null); if (!job) setTotals({ received: 0, sent: 0 }); }}>{t("common.clear")}</button>
             </div>
             <div className="mq-stats">
-              <span>{t("ws.received", { n: counts.rx })}</span>
-              <span>{t("ws.sent", { n: counts.tx })}</span>
+              <span>{t("ws.received", { n: totals.received })}</span>
+              <span>{t("ws.sent", { n: totals.sent })}</span>
               {dropped > 0 && <span className="warn">{t("ws.dropped", { n: dropped })}</span>}
             </div>
-            <div className="ws-list scroll-y" ref={list}
+            <div className="ws-list scroll-y" ref={(element) => { list.current = element; rows.ref.current = element; }}
               onScroll={(e) => { const element = e.currentTarget; pinned.current = element.scrollHeight - element.scrollTop - element.clientHeight < 24; }}>
-              {messages.map((message) => (
+              {rows.before > 0 && <div aria-hidden="true" style={{ height: rows.before }} />}
+              {messages.slice(rows.start, rows.end).map((message) => (
                 <button key={message.n} className={"ws-row " + message.dir + (picked === message.n ? " active" : "")} onClick={() => setPicked(message.n)}>
                   <span className="ws-time">{fmtTime(message.ts)}</span>
                   <span className="ws-dir" aria-label={t(message.dir === "rx" ? "ws.in" : "ws.out")}>{message.dir === "rx" ? "↓" : "↑"}</span>
@@ -198,6 +203,7 @@ export function WsView() {
                   <span className="ws-size">{message.kind === "binary" ? `${t("ws.binary")} · ` : ""}{fmtBytes(message.bytes)}</span>
                 </button>
               ))}
+              {rows.after > 0 && <div aria-hidden="true" style={{ height: rows.after }} />}
               {messages.length === 0 && <div className="empty-state">{job ? t("ws.waiting") : t("ws.notConnected")}</div>}
             </div>
           </div>

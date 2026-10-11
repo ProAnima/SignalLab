@@ -15,7 +15,8 @@ authenticate and what the statuses mean is in [the API overview](index.md).
 - **Argument names** are camelCase (`jobId`, `nodeId`). An argument a command
   does not know, or a required one left out, is refused with
   `command.args_invalid`; every command that takes arguments can fail with it.
-  A command without arguments does not read the body.
+  A command without arguments takes no body, `null` or `{}`; anything else is
+  refused with `command.args_invalid` too.
 - **Objects passed as an argument** — `config`, `request`, `document`,
   `library`, `emulator`, `profile` — use the engine's own field names, mostly
   snake_case (`timeout_ms`). Inside them a field the engine does not know is
@@ -153,7 +154,8 @@ The running jobs, oldest first. No arguments.
 ### job_stop {#job_stop}
 
 Stops one job at once: its sockets close, its relay, server or connection goes.
-A stopped job sends no [`job://ended`](events.md#event-job-ended); a stopped
+The answer comes once they have — a start right after binds the same port. A
+stopped job sends no [`job://ended`](events.md#event-job-ended); a stopped
 run saves no report.
 
 | Argument | Type | Required | Meaning |
@@ -164,7 +166,9 @@ run saves no report.
 
 ### jobs_stop_all {#jobs_stop_all}
 
-Stops every running job, whoever started it. No arguments.
+Stops every running job, whoever started it, and answers once they have let
+go of their ports, as [`job_stop`](#job_stop) does. A job still starting (a run
+opening its ports) is stopped as it starts. No arguments.
 
 **Result**: null.
 
@@ -536,7 +540,8 @@ so in `error` and `cause`.
 
 **Result**: [`HttpResponse`](#type-httpresponse).
 
-**Errors**: `http.client_failed` (the request could not even be prepared).
+**Errors**: `node.method_invalid` (field `method`: not an HTTP token, such as
+`BAD METHOD`), `http.client_failed` (the request could not even be prepared).
 
 ### http_burst_start {#http_burst_start}
 
@@ -565,7 +570,7 @@ With neither `total` nor `duration_s`, the burst runs until stopped.
 
 **Result**: [`JobInfo`](#type-jobinfo).
 
-**Errors**: `http.rate_invalid`, `http.duration_invalid`, `http.client_failed`.
+**Errors**: `http.rate_invalid`, `http.duration_invalid`, `node.method_invalid`, `http.client_failed`.
 
 ### http_cookies {#http_cookies}
 
@@ -697,7 +702,12 @@ publishes and unsubscribes as [`mqtt://ack`](events.md#event-mqtt-ack).
 `dns`, `timeout` after 6 s), `mqtt.no_answer` (no CONNACK within 6 s),
 `mqtt.protocol`, `mqtt.refused_protocol`, `mqtt.refused_client_id`,
 `mqtt.refused_unavailable`, `mqtt.refused_credentials`,
-`mqtt.refused_not_authorized`, `mqtt.refused`.
+`mqtt.refused_not_authorized`, `mqtt.refused`; before dialling,
+`node.topic_filter` (a `subscribe` filter 3.1.1 forbids), `node.too_long`
+(a user name, password, client ID or will past MQTT's 65 535 bytes) and
+`node.topic_wildcard` / `mqtt.topic_invalid` (a will on a topic it could not be
+published to). A connection whose broker says nothing, not even to its pings,
+for 1.5 × `keep_alive_s` ends with `transport.timeout` in `job://ended`.
 
 ### mqtt_publish {#mqtt_publish}
 
@@ -714,9 +724,10 @@ Publishes on an open connection.
 **Result**: null. A QoS 1 or 2 publish is confirmed later by
 [`mqtt://ack`](events.md#event-mqtt-ack).
 
-**Errors**: `node.topic_wildcard` (field `topic`) and `mqtt.topic_required`
-(field `topic`), as for [`mqtt_publish_once`](#mqtt_publish_once) — the command
-refuses them before it looks for the connection; `mqtt.not_connected`.
+**Errors**: `node.topic_wildcard`, `mqtt.topic_required`, `mqtt.topic_invalid`
+(a NUL in it) and `node.too_long` (past 65 535 bytes), all with field `topic`,
+as for [`mqtt_publish_once`](#mqtt_publish_once) — the command refuses them
+before it looks for the connection; `mqtt.not_connected`.
 
 ### mqtt_subscribe {#mqtt_subscribe}
 
@@ -730,7 +741,9 @@ Subscribes an open connection to filters. What the broker grants arrives as
 
 **Result**: null.
 
-**Errors**: `mqtt.filter_required`, `mqtt.not_connected`.
+**Errors**: `mqtt.filter_required`, `node.topic_filter` (field `topic`: a filter
+3.1.1 forbids, such as `a/#/b` or `a+` — brokers close the connection over one),
+`mqtt.not_connected`.
 
 ### mqtt_unsubscribe {#mqtt_unsubscribe}
 
@@ -744,7 +757,7 @@ Unsubscribes an open connection from filters.
 **Result**: null. The broker's answer arrives as
 [`mqtt://ack`](events.md#event-mqtt-ack) with `kind: "unsubscribed"`.
 
-**Errors**: `mqtt.filter_required`, `mqtt.not_connected`.
+**Errors**: `mqtt.filter_required`, `node.topic_filter` (field `topic`), `mqtt.not_connected`.
 
 ### mqtt_publish_once {#mqtt_publish_once}
 
@@ -960,13 +973,16 @@ counters arrive as [`storm://stat`](events.md#event-storm-stat) every 250 ms.
 | `target` | string | — | `IP:port` or `host:port`; a name is looked up once, when the job starts |
 | `protocol` | string | — | `udp`: datagrams; `tcp`: a connection per unit that writes the payload and closes (each connect may take 500 ms) |
 | `size` | number | — | Payload bytes, held between 1 and 65 507 |
-| `rate` | number | — | Units per second, on a schedule: unit *n* is due *n* / `rate` seconds after the start, and each wake sends what is due (at most 256; a schedule further behind skips the older units); 0 sends as fast as it can |
-| `duration_s` | number | `0` | Stop after this many seconds; 0: until stopped |
+| `rate` | number | — | Units per second, held to 10 000 000, on a schedule: unit *n* is due *n* / `rate` seconds after the start, and each wake sends what is due (at most 256; a schedule further behind skips the older units); 0 sends as fast as it can |
+| `duration_s` | number | `0` | Stop after this many seconds; 0 (or a negative number) until stopped |
 
 **Result**: [`JobInfo`](#type-jobinfo).
 
-**Errors**: `transport.target_invalid`, `transport.dns`. Failed sends are
-counted in the events, not reported as errors.
+**Errors**: `transport.target_invalid`, `transport.dns`, and for UDP a bind or
+connect failure (`transport.*`) when the socket cannot be opened at all. Sends
+the target refuses are counted as `errors` in the events; what this machine
+could not send (out of ports, sockets or buffers) is counted as `local`, never
+as the target's error.
 
 ### scan_start {#scan_start}
 
@@ -1051,7 +1067,7 @@ data folder. In `jsonl`, each line is a frame with the bytes it keeps in
 
 ### inspect_payload {#inspect_payload}
 
-The bytes a frame keeps, past the 1 KiB preview its batch carried.
+The bytes a frame keeps, past the 256-byte preview its batch carried.
 
 | Argument | Type | Required | Meaning |
 | --- | --- | --- | --- |
@@ -1081,8 +1097,9 @@ is sent with the command of its transport (`osc_send`, `broadcast_send`,
 Reads the library. When the file does not exist, the starter set is written
 first. No arguments.
 
-**Result**: `{ "path": string, "library": library, "seeded": boolean }` —
-`seeded` is true when the starter set was just written. The library is
+**Result**: `{ "path": string, "library": library, "seeded": boolean, "stamp": string }` —
+`seeded` is true when the starter set was just written; `stamp` names what the
+file held, for the `base` of the next save. The library is
 `{ "version", "signals": [...], "folders": [...] }`: `version` 2 (a version 1
 file comes back as it is), `folders` left out when there are none. Each signal
 has `id`, `name`, `group` (its folder, `"A/B"`; empty for none), `note` and
@@ -1094,16 +1111,23 @@ never replaced), `file.io`.
 ### signals_save {#signals_save}
 
 Replaces the whole library file, through a temporary file in the same folder.
-A file that exists and does not read as a library is left as it is.
+A file that exists and does not read as a library is left as it is. With
+`base`, a file changed since it was read — by another page of a server, or a
+person in an editor — is left as it is too, and the save is refused, so their
+change is not lost under a list that never saw it.
 
 | Argument | Type | Required | Meaning |
 | --- | --- | --- | --- |
 | `library` | object | yes | `{ version, signals, folders }` as `signals_load` returns it |
+| `base` | string | no | The `stamp` the library was read with (or the last save returned); `""` when there was no file |
 
-**Result**: string, the path written.
+**Result**: string, the path written; with `base`, `{ "path", "stamp" }` — the
+stamp of what the file holds now, the `base` of the next save.
 
 **Errors**: `signals.json_invalid` (the file now on disk does not read, with
-`path`, `line`, `column`; nothing is written), `signals.encode`, `file.io`.
+`path`, `line`, `column`; nothing is written), `file.changed` (with `path`: the
+file no longer holds `base`; nothing is written — read it again),
+`signals.encode`, `file.io`.
 
 A signal's `body` by its `transport`:
 
@@ -1131,22 +1155,28 @@ data folder.
 Reads the emulator library. When the file does not exist, the starter set is
 written first. No arguments.
 
-**Result**: `{ "path", "library": { "version": 1, "emulators": [{ "id", "note", "emulator" }] }, "seeded" }`.
+**Result**: `{ "path", "library": { "version": 1, "emulators": [{ "id", "note", "emulator" }] }, "seeded", "stamp" }` —
+`stamp` names what the file held, for the `base` of the next save.
 
 **Errors**: `emulators.json_invalid` (with `path`, `line`, `column`; never
 replaced), `file.io`.
 
 ### emulators_save {#emulators_save}
 
-Replaces the whole emulator library, through a temporary file.
+Replaces the whole emulator library, through a temporary file. A file that
+exists and does not read as a library is left as it is; with `base`, so is a
+file changed since it was read, as with [`signals_save`](#signals_save).
 
 | Argument | Type | Required | Meaning |
 | --- | --- | --- | --- |
 | `library` | object | yes | `{ version, emulators }` as `emulators_load` returns it |
+| `base` | string | no | The `stamp` the library was read with (or the last save returned); `""` when there was no file |
 
-**Result**: string, the path written.
+**Result**: string, the path written; with `base`, `{ "path", "stamp" }`.
 
-**Errors**: `emulators.encode`, `file.io`.
+**Errors**: `emulators.json_invalid` (the file now on disk does not read;
+nothing is written), `file.changed` (the file no longer holds `base`; nothing
+is written), `emulators.encode`, `file.io`.
 
 ### emulator_check {#emulator_check}
 
@@ -1205,7 +1235,7 @@ exchanges.
 | --- | --- | --- |
 | `job_id` | number | The job |
 | `name`, `protocol`, `local` | string | The emulator, its protocol and the address it listens on |
-| `counts` | object | `total`, `unmatched` (no rule took it), `failed`, `down` (arrived while it was down: its outage or [`emulator_down`](#emulator_down)), `hits` (per rule), and `missed` (MQTT: messages a client too far behind did not get; left out while 0) |
+| `counts` | object | `total`, `unmatched` (no rule took it), `failed`, `down` (arrived while it was down: its outage or [`emulator_down`](#emulator_down)), `hits` (per rule), `missed` (MQTT: messages a client too far behind did not get; left out while 0), and `refused` (HTTP, TCP, MQTT: connections closed as they arrived, past the limit; left out while 0) |
 | `forced` | string | `unavailable`, `reset` or `timeout` while it is taken down; left out otherwise |
 | `exchanges` | object[] | Each: `seq`, `ts`, `from`, `request`, `rule` (1-based; left out when none took it), `reply`, `status`, `fault`, `ms`, `error`, `frame`, `down`, and `data` (the request as templates read it) |
 
@@ -1255,6 +1285,15 @@ One OSC argument, its type and its value:
 | `bool` | `true` or `false` | `T` or `F` |
 | `blob` | array of bytes, `[222, 173]` | `b` |
 | `nil` | none: `{ "type": "nil" }` | `N` |
+| `time` | a time tag, its 64 bits as decimal text: `"1"` is "immediately" | `t` |
+| `char` | one character, `"A"` | `c` |
+| `color` | `[red, green, blue, alpha]` | `r` |
+| `midi` | `[port, status, data1, data2]` | `m` |
+| `impulse` | none | `I` |
+| `array` | an array of OscArg | `[` … `]` |
+
+The last six are what received messages carry (the OSC monitor's
+`osc://message`); a command may send them too.
 
 ### HttpRequest {#type-httprequest}
 
@@ -1264,7 +1303,7 @@ One OSC argument, its type and its value:
 | `url` | string | — | `http://` or `https://` |
 | `headers` | `[name, value][]` | `[]` | Request headers |
 | `body` | string or null | null | The body |
-| `timeout_ms` | number | `10000` | For the whole exchange |
+| `timeout_ms` | number | `10000` | For the whole exchange, body included: 1 to 120 000; outside it the command fails with `node.range` (field `timeout_ms`) |
 | `auth` | object | none | `{ "scheme": "basic", "username", "password" }`, `{ "scheme": "digest", "username", "password" }` or `{ "scheme": "bearer", "token" }` |
 
 Up to 10 redirects are followed. Credentials and cookies typed for one host
@@ -1275,15 +1314,15 @@ and sends again.
 
 | Field | Type | Meaning |
 | --- | --- | --- |
-| `ok` | boolean | A 2xx status |
+| `ok` | boolean | A 2xx status, and the whole body arrived |
 | `status`, `status_text` | number, string | The status; 0 and empty without a response |
 | `latency_ms` | number | Until the whole body arrived |
 | `headers` | `[name, value][]` | Response headers |
 | `body` | string | The body as text, at most 256 KiB |
 | `body_bytes` | number | The body's full size |
 | `truncated` | boolean | `body` was cut at 256 KiB |
-| `error` | string or null | Why there was no response, every layer of the cause |
-| `cause` | string or null | What kind of failure: `refused`, `timeout`, `dns`, `unreachable`, `reset`, `address_in_use`, `address_unavailable`, `denied`, `tls`, `target_invalid`, `failed` — the same as the `transport.*` codes |
+| `error` | string or null | Why there was no response, or why its body stopped short (then `status`, `headers` and the body so far are there too), every layer of the cause |
+| `cause` | string or null | What kind of failure: `refused`, `timeout`, `dns`, `unreachable`, `reset`, `address_in_use`, `address_unavailable`, `denied`, `tls`, `target_invalid`, `exhausted` (this machine ran out of sockets or local ports), `failed` — the same as the `transport.*` codes |
 | `digest` | object | A Digest request that met a 401 only; left out otherwise. `challenged`: the challenge was answered and the request sent again. `error`: why it could not be, an `EngineError` (`http.digest_not_offered`, `http.digest_unsupported`, `http.digest_invalid`, `http.digest_other_origin`) or null |
 
 ### Payload {#type-payload}
@@ -1354,7 +1393,7 @@ A `Frame` is one captured packet, request or message:
 | `bytes` | Its size |
 | `summary` | One line |
 | `detail` | A decode over several lines, or null |
-| `hex` | A hex dump of the first 1 KiB, or null |
+| `hex` | A hex dump of the first 256 bytes, or null |
 | `verdict` | What became of it — `dropped`, `sampled`, a status — or null |
 | `kept` | Of `bytes`, how many are kept (up to 256 KiB); 0 when only the size was recorded |
 | `publish` | An MQTT publish only: `{ broker, topic, qos, retain, text }` — the broker as `host:port`, and whether the kept bytes, which are the message's payload, are UTF-8 text. Absent for every other frame |

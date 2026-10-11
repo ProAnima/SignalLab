@@ -55,6 +55,10 @@ const FRAMES_PER_SECOND: u64 = 200;
 const BATCH_CAP: usize = 2_000;
 /// Text a screen message carries; the rest is in the Inspector.
 const SHOWN_TEXT: usize = 64 * 1024;
+/// What one screen batch carries of messages' text and hex at most: 16 MiB
+/// messages back to back would otherwise send the interface over a hundred
+/// megabytes ten times a second. Past it the oldest are shed and counted.
+const BATCH_BYTES: usize = 1 << 20;
 
 fn default_timeout() -> u64 {
     10_000
@@ -188,7 +192,99 @@ pub struct Handshake {
     pub ms: u64,
 }
 
-type Stream = WebSocketStream<MaybeTlsStream<TcpStream>>;
+type Stream = WebSocketStream<MaybeTlsStream<Returned>>;
+
+/// The TCP stream as the WebSocket library holds it, handed back when the
+/// library lets go of it — after an upgrade the server refused, so the rest of
+/// the refusal's body can still be read (the library keeps only what came with
+/// the head).
+pub struct Returned {
+    stream: Option<TcpStream>,
+    back: Option<oneshot::Sender<TcpStream>>,
+}
+
+impl Returned {
+    fn inner(self: std::pin::Pin<&mut Self>) -> std::pin::Pin<&mut TcpStream> {
+        std::pin::Pin::new(self.get_mut().stream.as_mut().expect("held until dropped"))
+    }
+}
+
+impl Drop for Returned {
+    fn drop(&mut self) {
+        if let (Some(stream), Some(back)) = (self.stream.take(), self.back.take()) {
+            let _ = back.send(stream);
+        }
+    }
+}
+
+impl tokio::io::AsyncRead for Returned {
+    fn poll_read(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>, buf: &mut tokio::io::ReadBuf<'_>) -> std::task::Poll<std::io::Result<()>> {
+        self.inner().poll_read(cx, buf)
+    }
+}
+
+impl tokio::io::AsyncWrite for Returned {
+    fn poll_write(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>, buf: &[u8]) -> std::task::Poll<std::io::Result<usize>> {
+        self.inner().poll_write(cx, buf)
+    }
+    fn poll_flush(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<std::io::Result<()>> {
+        self.inner().poll_flush(cx)
+    }
+    fn poll_shutdown(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<std::io::Result<()>> {
+        self.inner().poll_shutdown(cx)
+    }
+}
+
+/// What a refused upgrade's body is shown of.
+const REFUSAL_SHOWN: usize = 200;
+/// How long the rest of a refusal's body is waited for.
+const REFUSAL_WAIT: Duration = Duration::from_millis(300);
+
+/// The body of a refused upgrade: what came with its head, and — over plain
+/// TCP — the rest the server sends within `REFUSAL_WAIT`, up to its
+/// `Content-Length` or what is shown of it.
+async fn refusal_body(response: &tokio_tungstenite::tungstenite::http::Response<Option<Vec<u8>>>, stream: Option<TcpStream>) -> Vec<u8> {
+    use tokio::io::AsyncReadExt;
+    let mut body = response.body().clone().unwrap_or_default();
+    let length = response.headers().get("content-length").and_then(|value| value.to_str().ok()).and_then(|value| value.trim().parse::<usize>().ok());
+    let chunked = response.headers().get("transfer-encoding").and_then(|value| value.to_str().ok()).is_some_and(|value| value.to_ascii_lowercase().contains("chunked"));
+    let wanted = length.unwrap_or(usize::MAX).min(REFUSAL_SHOWN * 4 + 64);
+    if let Some(mut stream) = stream {
+        let deadline = tokio::time::Instant::now() + REFUSAL_WAIT;
+        let mut chunk = [0u8; 1024];
+        while body.len() < wanted && length != Some(0) {
+            match tokio::time::timeout_at(deadline, stream.read(&mut chunk)).await {
+                Ok(Ok(read)) if read > 0 => body.extend_from_slice(&chunk[..read]),
+                _ => break,
+            }
+        }
+    }
+    if chunked {
+        body = dechunk(&body);
+    }
+    body.truncate(length.unwrap_or(usize::MAX).min(body.len()));
+    body
+}
+
+/// A chunked body's data, as far as it is whole.
+fn dechunk(raw: &[u8]) -> Vec<u8> {
+    let mut data = Vec::new();
+    let mut rest = raw;
+    while let Some(end) = rest.windows(2).position(|pair| pair == b"\r\n") {
+        let size = std::str::from_utf8(&rest[..end]).ok().and_then(|line| usize::from_str_radix(line.split(';').next().unwrap_or_default().trim(), 16).ok());
+        let Some(size) = size.filter(|size| *size > 0) else { break };
+        let start = end + 2;
+        let stop = (start + size).min(rest.len());
+        data.extend_from_slice(&rest[start..stop]);
+        rest = rest.get(stop + 2..).unwrap_or_default();
+    }
+    data
+}
+
+/// The headers the upgrade itself writes. One a person gives replaces the
+/// library's (a `Host` for a virtual host, another `Sec-WebSocket-Version` to
+/// see a server refuse it) instead of going out second, where the library drops it.
+const HANDSHAKE_HEADERS: [&str; 5] = ["host", "connection", "upgrade", "sec-websocket-version", "sec-websocket-key"];
 
 fn invalid_url(url: &str) -> EngineError {
     EngineError::new("ws.url_invalid").with("url", url).in_field(Field::new("url"))
@@ -234,7 +330,7 @@ fn ws_failure(error: WsError, url: &str) -> EngineError {
         WsError::Url(error) => invalid_url(url).because(error),
         WsError::Http(response) => {
             let status = response.status();
-            let body = response.body().as_deref().map(|body| String::from_utf8_lossy(body).chars().take(200).collect::<String>());
+            let body = response.body().as_deref().map(|body| String::from_utf8_lossy(body).chars().take(REFUSAL_SHOWN).collect::<String>());
             let error = EngineError::new("ws.handshake_status").with("status", status.as_u16()).with("url", url);
             match body.filter(|body| !body.trim().is_empty()) {
                 Some(body) => error.because(body),
@@ -280,7 +376,11 @@ pub async fn dial(cfg: &WsConfig) -> EngineResult<(Stream, Handshake)> {
         }
         let header = HeaderName::from_bytes(name.trim().as_bytes()).map_err(|_| EngineError::new("ws.header_invalid").with("name", name.trim()))?;
         let value = HeaderValue::from_str(value).map_err(|_| EngineError::new("ws.header_invalid").with("name", name.trim()))?;
-        request.headers_mut().append(header, value);
+        if HANDSHAKE_HEADERS.contains(&header.as_str()) {
+            request.headers_mut().insert(header, value);
+        } else {
+            request.headers_mut().append(header, value);
+        }
     }
     let protocols: Vec<&str> = cfg.protocols.iter().map(|protocol| protocol.trim()).filter(|protocol| !protocol.is_empty()).collect();
     if let Some(protocol) = protocols.iter().find(|protocol| !protocol_valid(protocol)) {
@@ -293,7 +393,11 @@ pub async fn dial(cfg: &WsConfig) -> EngineResult<(Stream, Handshake)> {
     let timeout = Duration::from_millis(cfg.timeout_ms.max(1));
     let started = Instant::now();
     let connecting = async {
-        let addresses: Vec<SocketAddr> = tokio::net::lookup_host(&target).await.map_err(|error| Cause::Dns.error(url).because(error))?.collect();
+        let addresses: Vec<SocketAddr> = tokio::time::timeout(crate::transport::DNS_TIMEOUT, tokio::net::lookup_host(&target))
+            .await
+            .map_err(|_| Cause::Dns.error(url))?
+            .map_err(|error| Cause::Dns.error(url).because(error))?
+            .collect();
         let mut last = None;
         for address in &addresses {
             match TcpStream::connect(address).await {
@@ -301,7 +405,19 @@ pub async fn dial(cfg: &WsConfig) -> EngineResult<(Stream, Handshake)> {
                     let _ = stream.set_nodelay(true);
                     let (peer, local) = (stream.peer_addr().unwrap_or(*address), stream.local_addr().ok());
                     let config = WebSocketConfig::default().max_message_size(Some(MAX_MESSAGE)).max_frame_size(Some(MAX_MESSAGE));
-                    let (socket, response) = tokio_tungstenite::client_async_tls_with_config(request, stream, Some(config), None).await.map_err(|error| ws_failure(error, url))?;
+                    let (back, returned) = oneshot::channel();
+                    let held = Returned { stream: Some(stream), back: Some(back) };
+                    let (socket, response) = match tokio_tungstenite::client_async_tls_with_config(request, held, Some(config), None).await {
+                        Ok(upgraded) => upgraded,
+                        Err(WsError::Http(mut response)) => {
+                            // Over TLS what follows is encrypted: only what came with the head is read.
+                            let stream = if url.starts_with("ws://") { tokio::time::timeout(REFUSAL_WAIT, returned).await.ok().and_then(Result::ok) } else { None };
+                            let body = refusal_body(&response, stream).await;
+                            *response.body_mut() = Some(body);
+                            return Err(ws_failure(WsError::Http(response), url));
+                        }
+                        Err(error) => return Err(ws_failure(error, url)),
+                    };
                     let protocol = response.headers().get("sec-websocket-protocol").and_then(|value| value.to_str().ok()).map(str::to_string);
                     return Ok((socket, peer, local, protocol));
                 }
@@ -328,6 +444,18 @@ enum Command {
     Send(Outgoing, oneshot::Sender<EngineResult<Sent>>),
     Close(u16, String, oneshot::Sender<Closed>),
 }
+
+/// What the owning task does next.
+enum Event {
+    Incoming(Option<Result<Message, WsError>>),
+    /// None: every handle is gone.
+    Command(Option<Command>),
+    /// The server did not answer our close in time.
+    Deadline,
+}
+
+/// Messages read in a row before a waiting command gets its turn.
+const FAIR_TURN: usize = 64;
 
 /// A message on the wire: its size, and when it was written — what a wait for
 /// its answer counts from, so nothing read before it is taken for the answer.
@@ -478,13 +606,42 @@ impl Connection {
 async fn own(mut socket: Stream, mut commands: mpsc::UnboundedReceiver<Command>, sink: Arc<dyn Sink>, state: Arc<State>, reporter: Reporter, url: String) {
     // Our close frame is out: how it will read, who waits for it, and until when the server may answer.
     let mut closing: Option<(Closed, Option<oneshot::Sender<Closed>>, tokio::time::Instant)> = None;
+    // Messages taken in a row; past `FAIR_TURN`, a command and the close's
+    // deadline get their turn before the next one.
+    let mut streak = 0usize;
     let (ended, ack) = loop {
         let deadline = closing.as_ref().map(|(_, _, deadline)| *deadline);
-        tokio::select! {
-            // What has arrived is taken before a command: a greeting already
-            // there is stamped before the send it might be mistaken to answer.
-            biased;
-            incoming = socket.next() => match incoming {
+        // A server that floods faster than this task reads would otherwise keep
+        // the socket ready for ever, and a send, a close, a stop would wait behind it.
+        let mut turn = None;
+        if streak >= FAIR_TURN {
+            streak = 0;
+            if closing.is_none() {
+                turn = match commands.try_recv() {
+                    Ok(command) => Some(Event::Command(Some(command))),
+                    Err(mpsc::error::TryRecvError::Disconnected) => Some(Event::Command(None)),
+                    Err(mpsc::error::TryRecvError::Empty) => None,
+                };
+            }
+            if turn.is_none() && deadline.is_some_and(|deadline| deadline <= tokio::time::Instant::now()) {
+                turn = Some(Event::Deadline);
+            }
+        }
+        let event = match turn {
+            Some(event) => event,
+            None => tokio::select! {
+                // What has arrived is taken before a command: a greeting already
+                // there is stamped before the send it might be mistaken to answer.
+                biased;
+                incoming = socket.next() => Event::Incoming(incoming),
+                command = commands.recv(), if closing.is_none() => Event::Command(command),
+                // The server never answered our close: hang up anyway.
+                _ = tokio::time::sleep_until(deadline.unwrap_or_else(tokio::time::Instant::now)), if deadline.is_some() => Event::Deadline,
+            },
+        };
+        streak = if matches!(event, Event::Incoming(_)) { streak + 1 } else { 0 };
+        match event {
+            Event::Incoming(incoming) => match incoming {
                 Some(Ok(Message::Text(text))) => {
                     let bytes = text.as_bytes().to_vec();
                     state.received.fetch_add(1, Ordering::Relaxed);
@@ -519,7 +676,7 @@ async fn own(mut socket: Stream, mut commands: mpsc::UnboundedReceiver<Command>,
                     None => (Closed { code: 1006, reason: String::new(), by: By::Lost, error: Some(stream_failure(error, &url)) }, None),
                 },
             },
-            command = commands.recv(), if closing.is_none() => match command {
+            Event::Command(command) => match command {
                 Some(Command::Send(message, ack)) => {
                     let (kind, bytes, frame) = match message {
                         Outgoing::Text(text) => (Kind::Text, text.as_bytes().to_vec(), Message::Text(text.into())),
@@ -560,8 +717,7 @@ async fn own(mut socket: Stream, mut commands: mpsc::UnboundedReceiver<Command>,
                     closing = Some((Closed { code: 1000, reason: String::new(), by: By::Client, error: None }, None, tokio::time::Instant::now() + CLOSE_GRACE));
                 }
             },
-            // The server never answered our close: hang up anyway.
-            _ = tokio::time::sleep_until(deadline.unwrap_or_else(tokio::time::Instant::now)), if deadline.is_some() => {
+            Event::Deadline => {
                 let (closed, ack, _) = closing.take().expect("a deadline means closing");
                 break (closed, ack);
             }
@@ -638,7 +794,7 @@ impl Matcher for WsMatcher {
 // the screen's connection: a job, its messages batched to the interface
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 struct ScreenMessage {
     ts: u64,
     /// `rx` or `tx`.
@@ -654,15 +810,25 @@ struct ScreenMessage {
 #[derive(Default)]
 struct Batch {
     messages: std::collections::VecDeque<ScreenMessage>,
+    /// The `weight` of `messages`.
+    held: usize,
     dropped: u64,
+}
+
+impl ScreenMessage {
+    /// What it adds to a batch: its text and hex.
+    fn weight(&self) -> usize {
+        self.text.len() + self.hex.as_ref().map_or(0, String::len)
+    }
 }
 
 struct BatchSink(Mutex<Batch>);
 
 impl BatchSink {
     fn push(&self, dir: &'static str, kind: Kind, bytes: &[u8]) {
-        let truncated = bytes.len() > if kind == Kind::Binary { SHOWN_HEX } else { SHOWN_TEXT };
-        let shown = &bytes[..bytes.len().min(SHOWN_TEXT)];
+        // A binary message is read as its hex; its text goes no further.
+        let limit = if kind == Kind::Binary { SHOWN_HEX } else { SHOWN_TEXT };
+        let shown = &bytes[..bytes.len().min(limit)];
         let message = ScreenMessage {
             ts: now_ms(),
             dir,
@@ -670,13 +836,17 @@ impl BatchSink {
             text: String::from_utf8_lossy(shown).into_owned(),
             hex: (kind == Kind::Binary).then(|| matching::hex(bytes, SHOWN_HEX)),
             bytes: bytes.len(),
-            truncated,
+            truncated: bytes.len() > limit,
         };
+        let size = message.weight();
         let mut batch = self.0.lock().unwrap();
-        if batch.messages.len() == BATCH_CAP {
-            batch.messages.pop_front();
+        while !batch.messages.is_empty() && (batch.messages.len() >= BATCH_CAP || batch.held + size > BATCH_BYTES) {
+            if let Some(old) = batch.messages.pop_front() {
+                batch.held -= old.weight();
+            }
             batch.dropped += 1;
         }
+        batch.held += size;
         batch.messages.push_back(message);
     }
 
@@ -702,7 +872,11 @@ struct MessageBatch {
     job_id: u64,
     ts: u64,
     messages: Vec<ScreenMessage>,
+    /// Messages since the last batch that are not in it (shed past its bounds).
     dropped: u64,
+    /// Messages received and sent on the connection so far, shown or not.
+    received: u64,
+    sent: u64,
 }
 
 #[derive(Clone, Serialize)]
@@ -781,7 +955,8 @@ pub async fn start_client(host: Host, jobs: JobRegistry, hub: WsHub, cfg: WsConf
         let flush = |host: &Host| {
             let batch = sink.take();
             if !batch.messages.is_empty() || batch.dropped > 0 {
-                host.emit("ws://messages", MessageBatch { job_id: id, ts: now_ms(), messages: batch.messages.into(), dropped: batch.dropped });
+                let (sent, received) = connection.counts();
+                host.emit("ws://messages", MessageBatch { job_id: id, ts: now_ms(), messages: batch.messages.into(), dropped: batch.dropped, received, sent });
             }
         };
         let mut ticker = tokio::time::interval(FLUSH_EVERY);
@@ -919,5 +1094,29 @@ mod tests {
         for code in [999, 1001, 1006, 2999, 5000] {
             assert!(check_close_code(code).unwrap_err().is("ws.close_code"), "{code}");
         }
+    }
+
+    #[test]
+    fn a_screen_batch_keeps_the_newest_within_its_count_and_bytes_and_counts_the_rest() {
+        let sink = BatchSink(Mutex::new(Batch::default()));
+        for _ in 0..BATCH_CAP + 10 {
+            sink.push("rx", Kind::Text, b"tick");
+        }
+        let batch = sink.take();
+        assert_eq!((batch.messages.len(), batch.dropped), (BATCH_CAP, 10));
+
+        let huge = vec![b'x'; 16 << 20];
+        for _ in 0..40 {
+            sink.push("rx", Kind::Text, &huge);
+        }
+        let batch = sink.take();
+        let held: usize = batch.messages.iter().map(ScreenMessage::weight).sum();
+        assert!(held <= BATCH_BYTES && batch.messages.len() == BATCH_BYTES / SHOWN_TEXT, "{held} in {}", batch.messages.len());
+        assert_eq!(batch.messages.len() as u64 + batch.dropped, 40);
+        assert!(batch.messages.iter().all(|message| message.truncated && message.bytes == 16 << 20));
+
+        sink.push("rx", Kind::Binary, &huge);
+        let binary = sink.take().messages.pop_front().unwrap();
+        assert_eq!((binary.text.len(), binary.truncated), (SHOWN_HEX, true), "a binary message's text is cut where its hex is");
     }
 }

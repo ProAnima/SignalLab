@@ -204,6 +204,44 @@ pub fn load(store: &dyn SecretStore, names: &[String]) -> EngineResult<BTreeMap<
         .collect()
 }
 
+/// What masking a value must cover: the value, and the forms it takes on its
+/// way through a request and back — percent-encoded in a URL or a form (as
+/// strictly as `encodeURIComponent`, or as loosely as a URL's path and query
+/// are), with a query's `+` read back as a space, and escaped inside JSON. A
+/// server that echoes what it got would otherwise show it in one of those.
+pub fn forms(value: &str) -> Vec<String> {
+    fn encoded(value: &str, keep: impl Fn(u8) -> bool, space: &str) -> String {
+        let mut out = String::with_capacity(value.len() * 3);
+        for byte in value.bytes() {
+            match byte {
+                b' ' if !space.is_empty() => out.push_str(space),
+                byte if keep(byte) => out.push(byte as char),
+                byte => out.push_str(&format!("%{byte:02X}")),
+            }
+        }
+        out
+    }
+    let unreserved = |b: u8| b.is_ascii_alphanumeric() || b"-._~".contains(&b);
+    // What the URL standard leaves as written in a path and in a query.
+    let in_path = |b: u8| b.is_ascii_graphic() && !b"\"#<>?`{}".contains(&b);
+    let in_query = |b: u8| b.is_ascii_graphic() && !b"\"#<>'".contains(&b);
+    let mut forms = vec![
+        value.to_string(),
+        encoded(value, unreserved, ""),
+        encoded(value, |b| unreserved(b) || b"!'()*".contains(&b), ""),
+        encoded(value, |b| unreserved(b) || b == b'*', "+"),
+        encoded(value, in_path, ""),
+        encoded(value, in_query, ""),
+        value.replace('+', " "),
+    ];
+    if let Ok(json) = serde_json::to_string(value) {
+        forms.push(json[1..json.len() - 1].to_string());
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    forms.retain(|form| !form.is_empty() && seen.insert(form.clone()));
+    forms
+}
+
 /// Every occurrence of a value replaced by the mask. Longest values first, so
 /// a value that contains another is masked whole.
 pub fn mask(text: &str, values: &[String]) -> String {
@@ -349,6 +387,16 @@ mod tests {
         );
         assert_eq!(&*mask_bytes(b"key=s3cret;", &values), b"key=******;");
         assert!(matches!(mask_bytes(b"clean", &values), Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn a_value_is_masked_in_the_forms_a_request_gives_it() {
+        let forms = forms("a+b/c=\"d é");
+        for form in ["a+b/c=\"d é", "a%2Bb%2Fc%3D%22d%20%C3%A9", "a%2Bb%2Fc%3D%22d+%C3%A9", "a+b/c=%22d%20%C3%A9", "a b/c=\"d é", "a+b/c=\\\"d é"] {
+            assert!(forms.contains(&form.to_string()), "{form} in {forms:?}");
+        }
+        assert_eq!(forms.len(), forms.iter().collect::<std::collections::BTreeSet<_>>().len(), "each once");
+        assert_eq!(super::forms("plain-token_1"), ["plain-token_1"], "a value no encoding changes is one form");
     }
 
     #[test]

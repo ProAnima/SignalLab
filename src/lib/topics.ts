@@ -21,26 +21,48 @@ export interface TopicNode {
   last: MqttMessage | null;
   count: number;
   firstTs: number;
+  /** `children` in order, kept until a child is added (`sortedChildren`). */
+  sorted?: TopicNode[] | null;
+  /** On the root: topics that carry a message, at most `MAX_TOPICS`. */
+  topics?: number;
 }
+
+/**
+ * Topics the tree holds at most. Each keeps its latest message (4 KB of it at
+ * most), so this bounds the screen's memory however many topics a broker has;
+ * messages on topics past it are counted as not shown.
+ */
+export const MAX_TOPICS = 100_000;
 
 export function makeTopicRoot(): TopicNode {
-  return { name: "", path: "", children: new Map(), last: null, count: 0, firstTs: 0 };
+  return { name: "", path: "", children: new Map(), last: null, count: 0, firstTs: 0, sorted: null, topics: 0 };
 }
 
-export function ingestTopic(root: TopicNode, m: MqttMessage): void {
+/** Files `m` under its topic; false when the tree is full and it is a topic it does not hold. */
+export function ingestTopic(root: TopicNode, m: MqttMessage): boolean {
+  const parts = m.topic.split("/");
+  if ((root.topics ?? 0) >= MAX_TOPICS) {
+    // Full: only a topic already held takes the message.
+    let node: TopicNode | undefined = root;
+    for (const part of parts) node = node?.children.get(part);
+    if (!node?.last) return false;
+  }
   let node = root;
-  for (const part of m.topic.split("/")) {
-    const path = node.path ? `${node.path}/${part}` : part;
+  for (const part of parts) {
     let child = node.children.get(part);
     if (!child) {
-      child = { name: part, path, children: new Map(), last: null, count: 0, firstTs: 0 };
+      const path = node.path ? `${node.path}/${part}` : part;
+      child = { name: part, path, children: new Map(), last: null, count: 0, firstTs: 0, sorted: null };
       node.children.set(part, child);
+      node.sorted = null;
     }
     node = child;
   }
+  if (!node.last) root.topics = (root.topics ?? 0) + 1;
   node.last = m;
-  node.count += 1;
+  node.count += m.count ?? 1;
   if (node.firstTs === 0) node.firstTs = m.ts;
+  return true;
 }
 
 /** Every node that has ever carried a message — for search, and for counting. */
@@ -50,6 +72,27 @@ export function flattenTopics(node: TopicNode, into: TopicNode[] = []): TopicNod
   return into;
 }
 
+const collator = new Intl.Collator();
+
+/** A node's children by name; sorted once, again only after a child is added. */
 export function sortedChildren(node: TopicNode): TopicNode[] {
-  return [...node.children.values()].sort((a, b) => a.name.localeCompare(b.name));
+  node.sorted ??= [...node.children.values()].sort((a, b) => collator.compare(a.name, b.name));
+  return node.sorted;
+}
+
+/** One line of the tree as drawn: a node, how deep, whether it has children. */
+export interface TopicRow { node: TopicNode; depth: number; parent: boolean }
+
+/** The lines the tree shows: the roots, and the children of every node in `expanded`, depth first. */
+export function visibleRows(root: TopicNode, expanded: ReadonlySet<string>): TopicRow[] {
+  const rows: TopicRow[] = [];
+  const walk = (node: TopicNode, depth: number) => {
+    for (const child of sortedChildren(node)) {
+      const parent = child.children.size > 0;
+      rows.push({ node: child, depth, parent });
+      if (parent && expanded.has(child.path)) walk(child, depth + 1);
+    }
+  };
+  walk(root, 0);
+  return rows;
 }

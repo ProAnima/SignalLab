@@ -230,7 +230,7 @@ async fn server() -> (String, Arc<Counts>) {
                         "/me" => ("401 Unauthorized", String::new(), "who?".into()),
                         _ => ("404 Not Found", String::new(), String::new()),
                     };
-                    let answer = format!("HTTP/1.1 {status}\r\n{extra}Content-Length: {}\r\n\r\n{body}", body.len());
+                    let answer = format!("HTTP/1.1 {status}\r\n{extra}X-Method: {method}\r\nX-Length: {length}\r\nContent-Length: {}\r\n\r\n{body}", body.len());
                     if stream.write_all(answer.as_bytes()).await.is_err() {
                         return;
                     }
@@ -395,6 +395,18 @@ async fn digest_behind_a_redirect_answers_the_url_that_asks_and_never_another_or
     let posted = service.invoke("http_request", json!({ "request": { "method": "POST", "url": format!("{base}/post-old"), "headers": [["Content-Type", "application/json"]],
         "body": "{\"a\":1}", "timeout_ms": 3000, "auth": lab }, "cookies": false })).await.unwrap();
     assert_eq!((posted["status"].as_u64(), posted["digest"]["challenged"].as_bool()), (Some(200), Some(true)), "{posted}");
+    assert_eq!((header(&posted, "x-method"), header(&posted, "x-length")), ("GET", "0"), "{posted}");
+    // A 302 changes only a POST (RFC 9110, 15.4.3, as reqwest follows it without Digest):
+    // a PUT or a DELETE goes on as itself, with its body.
+    for (method, url) in [("PUT", "/old"), ("DELETE", "/old"), ("POST", "/old")] {
+        let moved = service.invoke("http_request", json!({ "request": { "method": method, "url": format!("{base}{url}"), "headers": [],
+            "body": "{\"a\":1}", "timeout_ms": 3000, "auth": lab }, "cookies": false })).await.unwrap();
+        let expected = if method == "POST" { ("GET", "0") } else { (method, "7") };
+        assert_eq!((moved["status"].as_u64(), header(&moved, "x-method"), header(&moved, "x-length")), (Some(200), expected.0, expected.1), "{method}: {moved}");
+        let plain = service.invoke("http_request", json!({ "request": { "method": method, "url": format!("{base}/away?to=/echo"), "headers": [],
+            "body": "{\"a\":1}", "timeout_ms": 3000 }, "cookies": false })).await.unwrap();
+        assert_eq!((header(&plain, "x-method"), header(&plain, "x-length")), expected, "and so without Digest: {plain}");
+    }
 
     // Sent on to another origin that asks: not answered, and it never gets an Authorization.
     let (other, elsewhere) = server().await;
@@ -439,4 +451,26 @@ async fn basic_credentials_are_masked_as_base64_too() {
 fn base64_of(text: &str) -> String {
     use base64::Engine as _;
     base64::engine::general_purpose::STANDARD.encode(text)
+}
+
+/// A response header's value, by lower-case name.
+fn header<'a>(response: &'a Value, name: &str) -> &'a str {
+    response["headers"].as_array().and_then(|headers| headers.iter().find(|pair| pair[0] == name)).and_then(|pair| pair[1].as_str()).unwrap_or_default()
+}
+
+/// A method that is no HTTP token was sent as a GET; it is refused, as the HTTP node's is.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_method_that_is_not_one_is_refused_not_sent_as_get() {
+    let (service, _) = service();
+    let (base, _) = server().await;
+    for method in ["BAD METHOD", "", "GET\r\nX: y"] {
+        let refused = service.invoke("http_request", json!({ "request": { "method": method, "url": format!("{base}/echo"), "headers": [], "timeout_ms": 3000 }, "cookies": false })).await.unwrap_err();
+        let signal_lab_engine::Failure::Engine(error) = refused;
+        assert_eq!((error.code.as_str(), error.field.as_ref().map(|field| field.key.as_str())), ("node.method_invalid", Some("method")), "{method:?}");
+        let burst = service.invoke("http_burst_start", json!({ "config": { "method": method, "url": format!("{base}/echo"), "concurrency": 1, "total": 1 } })).await.unwrap_err();
+        let signal_lab_engine::Failure::Engine(error) = burst;
+        assert!(error.is("node.method_invalid"), "{method:?}: {error}");
+    }
+    let custom = service.invoke("http_request", json!({ "request": { "method": " propfind ", "url": format!("{base}/echo"), "headers": [], "timeout_ms": 3000 }, "cookies": false })).await.unwrap();
+    assert_eq!(header(&custom, "x-method"), "PROPFIND", "{custom}");
 }

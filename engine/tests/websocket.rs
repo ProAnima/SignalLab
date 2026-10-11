@@ -315,6 +315,59 @@ async fn upgrades_that_fail_say_why() {
     assert_eq!((unknown["code"].as_str(), unknown["node"].as_str()), (Some("ws.connection_unknown"), Some("say")), "{unknown}");
 }
 
+/// A refusal's head and body in separate writes, as aiohttp and most servers
+/// send them: the body is read after the head (it was only what came with the
+/// head); chunked too. A `Host` a person gives is the one the server reads —
+/// it was sent second and dropped by the library.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_refusal_written_in_parts_is_read_whole_and_a_given_host_is_the_one_sent() {
+    let (service, _) = service();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let heads = Arc::new(Mutex::new(Vec::<String>::new()));
+    let seen = heads.clone();
+    tokio::spawn(async move {
+        while let Ok((mut stream, _)) = listener.accept().await {
+            let seen = seen.clone();
+            tokio::spawn(async move {
+                let mut head = Vec::new();
+                let mut buffer = [0u8; 2048];
+                while !head.windows(4).any(|window| window == b"\r\n\r\n") {
+                    match stream.read(&mut buffer).await {
+                        Ok(0) | Err(_) => return,
+                        Ok(read) => head.extend_from_slice(&buffer[..read]),
+                    }
+                }
+                let head = String::from_utf8_lossy(&head).to_string();
+                let chunked = head.contains("GET /chunked");
+                seen.lock().unwrap().push(head);
+                if chunked {
+                    let _ = stream.write_all(b"HTTP/1.1 401 Unauthorized\r\nTransfer-Encoding: chunked\r\n\r\n").await;
+                    tokio::time::sleep(Duration::from_millis(40)).await;
+                    let _ = stream.write_all(b"6\r\ntoken \r\n").await;
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                    let _ = stream.write_all(b"7\r\nmissing\r\n0\r\n\r\n").await;
+                } else {
+                    let _ = stream.write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 26\r\n\r\n").await;
+                    tokio::time::sleep(Duration::from_millis(40)).await;
+                    let _ = stream.write_all(b"forbidden: token missing\r\n").await;
+                }
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            });
+        }
+    });
+    let code_of = |result: Result<Value, signal_lab_engine::Failure>| serde_json::to_value(result.unwrap_err()).unwrap();
+    let config = json!({ "url": format!("ws://{address}/x"), "headers": [["Host", "lab.example"], ["X-Extra", "1"]] });
+    let forbidden = code_of(service.invoke("ws_connect", json!({ "config": config })).await);
+    assert_eq!((forbidden["params"]["status"].as_str(), forbidden["detail"].as_str()), (Some("403"), Some("forbidden: token missing\r\n")), "{forbidden}");
+    let chunked = code_of(service.invoke("ws_connect", json!({ "config": { "url": format!("ws://{address}/chunked") } })).await);
+    assert_eq!((chunked["params"]["status"].as_str(), chunked["detail"].as_str()), (Some("401"), Some("token missing")), "{chunked}");
+    let head = heads.lock().unwrap()[0].to_ascii_lowercase();
+    let hosts: Vec<&str> = head.lines().filter(|line| line.starts_with("host:")).collect();
+    assert_eq!(hosts, ["host: lab.example"], "{head}");
+    assert!(head.contains("x-extra: 1") && head.contains("sec-websocket-key:"), "{head}");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn one_exchange_sends_waits_and_closes() {
     let (service, _) = service();

@@ -109,6 +109,29 @@ export function libraryTree(signals: Signal[], folders: string[]): FolderNode {
   return root;
 }
 
+/** One line of the tree as it is drawn: a folder's row or a signal's, and how deep it sits. */
+export type LibraryRow =
+  | { kind: "folder"; node: FolderNode; depth: number }
+  | { kind: "signal"; signal: Signal; depth: number };
+
+/**
+ * The tree as the lines it shows, top to bottom: a folder, then (when open)
+ * its folders and its signals; the top level's signals last. What a list of
+ * ten thousand draws a screenful of (SignalTree), so it is a flat list.
+ */
+export function libraryRows(tree: FolderNode, isOpen: (path: string) => boolean): LibraryRow[] {
+  const rows: LibraryRow[] = [];
+  const walk = (node: FolderNode, depth: number) => {
+    for (const folder of node.folders) {
+      rows.push({ kind: "folder", node: folder, depth });
+      if (isOpen(folder.path)) walk(folder, depth + 1);
+    }
+    for (const signal of node.signals) rows.push({ kind: "signal", signal, depth });
+  };
+  walk(tree, 0);
+  return rows;
+}
+
 /** A name not yet taken among `parent`'s folders: "New folder", "New folder 2", … */
 export function freeFolderName(signals: Signal[], folders: string[], parent: string, base: string): string {
   const taken = new Set(allFolders(signals, folders));

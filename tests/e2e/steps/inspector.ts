@@ -11,7 +11,7 @@ export async function inspectArm(expect: Expect) {
   expect("capture is armed", !!shown.querySelector(".rec-dot.live"));
 }
 
-/** A storm's 3000-byte datagram: the list shows its first KiB, Show all every row, and it can become a signal. */
+/** A storm's 3000-byte datagram: the list shows its first 256 bytes, Show all every row, and it can become a signal. */
 export async function inspectWhole(expect: Expect) {
   const shown = await openInspector();
   const filter = shown.querySelector<HTMLInputElement>(`input[placeholder="${T("ins.filterPlaceholder")}"]`)!;
@@ -23,7 +23,7 @@ export async function inspectWhole(expect: Expect) {
   const detail = panel(shown, T("ins.detail"));
   const dump = () => { const dumps = detail.querySelectorAll("pre.hex"); return dumps[dumps.length - 1]?.textContent ?? ""; };
   await until("its preview", () => dump().includes("more bytes"));
-  expect("the list carries the first KiB and says how much more there is", dump().includes("1976 more bytes") && !dump().includes("\n0bb0  "), dump().slice(-60));
+  expect("the list carries the first 256 bytes and says how much more there is", dump().includes("2744 more bytes") && !dump().includes("\n0bb0  "), dump().slice(-60));
   expect("…and that the capture keeps all of it", !detail.querySelector(".inspect-kept"));
   expect("a frame kept whole can become a signal", !button(detail, T("sig.fromFrame")).disabled);
   await click(button(detail, T("ins.showAll", { size: "" }).trim(), { prefix: true }));

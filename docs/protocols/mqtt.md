@@ -34,7 +34,7 @@ connection is a job in the console strip and can be stopped there too.
 | [[ui:common.port]] | The broker's port | `1883` |
 | [[ui:mq.clientId]] | Your client's name at the broker. It must not be empty, and must be unique there: a second client with the same id knocks the first one off. | `signal-lab-` and six random hex digits, new at every start of the app |
 | [[ui:mq.username]], [[ui:mq.password]] | Sent only if the broker needs them — in plain text, since there is no TLS. A password without a user name is not sent at all: MQTT 3.1.1 cannot carry one. | empty |
-| [[ui:mq.keepAlive]] | Seconds the connection may stay silent. Signal Lab pings the broker every half of it; a broker drops a client that is silent for 1.5 times this. 0 turns pinging off. | `60` |
+| [[ui:mq.keepAlive]] | Seconds the connection may stay silent. Signal Lab pings the broker every half of it; a broker drops a client that is silent for 1.5 times this, and Signal Lab ends the connection ("No answer from … in time") when the broker has said nothing — not even to its pings — for 1.5 times this. 0 turns pinging off. | `60` |
 | [[ui:mq.cleanSession]] | On: every connection starts with no stored subscriptions and no queued messages. Off asks the broker to keep them for this client id between connections. | on |
 | [[ui:mq.scanFilter]] and its [[ui:mq.qos]] | A filter subscribed to as soon as the connection is up; `#` is every topic. Empty: none. | `#`, QoS 0 |
 | [[ui:mq.willEnable]] | Give the broker a last will ([below](#will)) | off |
@@ -90,13 +90,20 @@ close it.
 - Above the tree are the number of topics, how many hold a retained value and,
   while connected, the broker you are listening on.
 - Payloads are shown as text; bytes that are not UTF-8 show as replacement
-  characters.
+  characters. Of a payload over 4 KB the start is shown, with its whole size;
+  it cannot be copied into [[ui:mq.publish]] or saved as a signal, since it
+  would be sent cut.
 - [[ui:common.clear]] empties the tree. Nothing else does: it stays as it is
   when you switch screens or disconnect, until the app closes.
 
-Messages reach the screen in batches, ten times a second. When a broker sends
-more than 4000 messages in a tenth of a second, the oldest of that batch are
-left out of the tree and counted as "not shown" above it.
+Messages reach the screen in batches, ten times a second, each with the
+latest message of every topic that had one and how many it had: a firehose on
+a few topics loses nothing, and every count is right. When a batch is full —
+4000 topics, or 2 MB of payloads, as a broker's retained values on subscribing
+to `#` make it — the connection reads on only once it has gone out, so the
+broker waits rather than a topic sent once being missed. The tree holds up to
+100 000 topics; messages on topics past that are counted as "not shown" above
+it.
 
 ### A topic's panel {#topic}
 
@@ -228,7 +235,7 @@ The second line clears a retained value. Without a port, the broker is on
 | `… is unavailable right now — try again later` | The broker is up but not taking clients. |
 | `Enter a client ID — brokers refuse an empty one` | [[ui:mq.clientId]] is empty. |
 | `A publish topic cannot contain the wildcards + or #` | The topic to publish to has a `+` or `#`. Those are for subscribing; publish to one topic at a time. |
-| A filter shows [[ui:mq.refused]] | The broker's access rules forbid it, or the filter is malformed (`#` not last, `+` sharing a level with other characters). |
+| A filter shows [[ui:mq.refused]] | The broker's access rules forbid it. A malformed filter (`#` not last, `+` sharing a level with other characters) is refused before it is sent — brokers close the whole connection over one. |
 | The connection drops a moment after connecting | Another client connected with the same [[ui:mq.clientId]]. |
 | Nothing appears in the tree | The scan filter is empty, or the broker lets this client see nothing. |
 

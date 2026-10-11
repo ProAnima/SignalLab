@@ -37,8 +37,12 @@ Started without a token, the server listens on `127.0.0.1:1430` and needs no
 sign-in: it is a tool for the person at this machine. To keep a web page in
 any browser on this machine from reaching it through a name that resolves to
 `127.0.0.1` (DNS rebinding), it answers only requests whose `Host` is a
-loopback name — `localhost`, a name ending in `.localhost`, `127.x.x.x` or
-`[::1]` — or a name you allow with `--allowed-host`.
+loopback name — `localhost`, a name ending in `.localhost`, a loopback address
+written as one (`127.x.x.x`, `[::1]`) — or a name you allow with
+`--allowed-host`. A DNS name that only starts like an address
+(`127.0.0.1.example.com`) is not one: anyone can point it at `127.0.0.1`. A
+request with two `Host` headers, or one that is not a `host[:port]`, is refused
+too.
 
 Asked to listen on any other address without a token, it does not start: it
 says why and exits with code `2`.
@@ -131,8 +135,20 @@ the server, and cannot be framed by another page.
 ## Files and sizes {#files}
 
 - A download (`GET /api/files?path=…`) is served only from inside the data
-  folder, at most 256 MiB; anything else is `404`.
+  folder, at most 256 MiB; anything else is `404`. The path is judged by its
+  name before anything is opened: a path with `..`, another drive, a share on
+  another machine (`\\host\share`), a device or a named pipe is refused
+  without being touched.
 - A request body is at most 24 MiB.
+
+## Slow and idle clients {#connections}
+
+- A client must send a request's head within 30 seconds; one that sends half of
+  it and stops is disconnected, and so is a connection idle that long.
+- At most 1024 connections are served at once; more are closed as they arrive.
+- When the server stops, requests under way get 5 seconds to finish (a waited
+  run answers that it was stopped); a client that would hold it longer is cut
+  off.
 
 ## Secrets {#secrets}
 

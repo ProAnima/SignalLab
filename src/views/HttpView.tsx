@@ -7,13 +7,22 @@ import { useStore } from "../lib/store";
 import { describeError, responseFailure } from "../lib/errors";
 import { ErrorMessage } from "../components/ErrorMessage";
 import { useT } from "../lib/i18n";
-import { useFieldIds, useJobStream, usePersistentState, useSeries } from "../lib/hooks";
+import { useFieldIds, useJobStream, usePersistentState, useSeries, useWindowedRows } from "../lib/hooks";
 import { fmtBytes, fmtNum, fmtRate, fmtTime, latencyParts, prettyJson, statusClass } from "../lib/format";
 import { Scope } from "../components/Scope";
 import { MockThis } from "../components/MockThis";
 import { HTTP_COOKIES_KEY } from "../lib/signals";
 
 const METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
+
+/** `value` as a whole number within `min`–`max` (what is typed past either end stops there; empty is `min`). */
+const within = (value: number, min: number, max: number) => Math.min(max, Math.max(min, Math.round(value) || min));
+/** What the engine takes: a timeout of 1 ms to two minutes, as the HTTP node's; up to 512 workers; up to 100 000 requests/s. */
+const MAX_TIMEOUT_MS = 120_000;
+const MAX_WORKERS = 512;
+const MAX_RATE = 100_000;
+/** One row of the cookie table, fixed so a jar of thousands draws only what is in view. */
+const COOKIE_ROW = 26;
 
 const isHeaders = (value: unknown) => Array.isArray(value)
   && value.every((pair) => Array.isArray(pair) && pair.length === 2 && pair.every((part) => typeof part === "string"));
@@ -45,12 +54,13 @@ export function HttpView({ onToExperiment, load, onShowSignal, onShowEmulator }:
   const [url, setUrl] = usePersistentState("signal-lab.http.url", "http://127.0.0.1:8080/");
   const [headers, setHeaders] = usePersistentState<[string, string][]>("signal-lab.http.headers", [["Accept", "application/json"]], isHeaders);
   const [body, setBody] = usePersistentState("signal-lab.http.body", "");
-  const [timeout, setTimeoutMs] = usePersistentState("signal-lab.http.timeout", 10000);
+  const [timeout, setTimeoutMs] = usePersistentState("signal-lab.http.timeout", 10000, (value) => typeof value === "number" && value >= 1 && value <= MAX_TIMEOUT_MS);
   // Credentials stay in memory only: a password is never written to the browser's storage.
   const [auth, setAuth] = useState<HttpAuth>({ scheme: "none" });
   const [keepCookies, setKeepCookies] = usePersistentState(HTTP_COOKIES_KEY, true);
   const [cookies, setCookies] = useState<CookieInfo[]>([]);
   const refreshCookies = () => { api.httpCookies().then(setCookies).catch(() => {}); };
+  const cookieRows = useWindowedRows(COOKIE_ROW, cookies.length);
   useEffect(refreshCookies, []);
   // The library signal this request is saved as, if any.
   const [signalId, setSignalId] = usePersistentState<string | null>("signal-lab.http.signal", null, (value) => value === null || typeof value === "string");
@@ -230,7 +240,7 @@ export function HttpView({ onToExperiment, load, onShowSignal, onShowEmulator }:
           )}
           <div className="field">
             <label htmlFor={fid("timeout")} data-tip={t("common.timeoutHint")}>{t("common.timeoutMs")}</label>
-            <input id={fid("timeout")} type="number" value={timeout} onChange={(e) => setTimeoutMs(+e.target.value)} onKeyDown={onEnterSend} />
+            <input id={fid("timeout")} type="number" min={1} max={MAX_TIMEOUT_MS} value={timeout} onChange={(e) => setTimeoutMs(within(+e.target.value, 1, MAX_TIMEOUT_MS))} onKeyDown={onEnterSend} />
           </div>
           <div className="btn-row">
             <button className="primary" onClick={send} disabled={busy} data-tip={`${t("common.send")} · Enter / Ctrl+Enter`}>
@@ -314,13 +324,15 @@ export function HttpView({ onToExperiment, load, onShowSignal, onShowEmulator }:
           <button className="ghost sm" style={{ flex: "0 0 auto" }} disabled={!cookies.length}
             onClick={() => { api.httpCookiesClear().then(refreshCookies).catch((e) => pushError("http", e)); }}>{t("common.clear")}</button>
         </div>
-        {cookies.length === 0 ? <div className="empty-state" style={{ padding: 14 }}>{t("http.noCookies")}</div> : (
-          <div className="scroll-y" style={{ maxHeight: 180 }}>
-            <table className="grid http-cookies"><thead><tr>
+        {/* The box stays while the jar is empty: the rows in view are measured on it. */}
+        <div className="scroll-y" style={{ maxHeight: 180 }} ref={cookieRows.ref}>
+          {cookies.length === 0 ? <div className="empty-state" style={{ padding: 14 }}>{t("http.noCookies")}</div> : (
+            <table className="grid http-cookies fixed-rows"><thead><tr>
               <th>{t("http.cookieName")}</th><th>{t("http.cookieValue")}</th><th>{t("http.cookieWhere")}</th><th>{t("http.cookieExpires")}</th><th>{t("http.cookieFlags")}</th>
             </tr></thead><tbody>
-              {cookies.map((cookie) => (
-                <tr key={`${cookie.domain}${cookie.path}${cookie.name}`}>
+              {cookieRows.before > 0 && <tr aria-hidden="true" style={{ height: cookieRows.before }}><td colSpan={5} /></tr>}
+              {cookies.slice(cookieRows.start, cookieRows.end).map((cookie) => (
+                <tr key={`${cookie.domain}${cookie.path}${cookie.name}`} style={{ height: COOKIE_ROW }}>
                   <td>{cookie.name}</td>
                   <td className="http-cookie-value">{cookie.value}</td>
                   <td>{cookie.host_only ? cookie.domain : `.${cookie.domain}`}{cookie.path}</td>
@@ -328,9 +340,10 @@ export function HttpView({ onToExperiment, load, onShowSignal, onShowEmulator }:
                   <td>{[cookie.secure && "Secure", cookie.http_only && "HttpOnly", cookie.same_site && `SameSite=${cookie.same_site}`].filter(Boolean).join(" · ") || "—"}</td>
                 </tr>
               ))}
+              {cookieRows.after > 0 && <tr aria-hidden="true" style={{ height: cookieRows.after }}><td colSpan={5} /></tr>}
             </tbody></table>
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
       <div className="panel" style={{ marginTop: 16 }}>
@@ -340,25 +353,31 @@ export function HttpView({ onToExperiment, load, onShowSignal, onShowEmulator }:
             <div className="row">
               <div className="field">
                 <label htmlFor={fid("burst-concurrency")} data-tip={t("common.concurrencyHint")}>{t("common.concurrency")}</label>
-                <input id={fid("burst-concurrency")} type="number" value={concurrency} onChange={(e) => setConcurrency(+e.target.value)} />
+                <input id={fid("burst-concurrency")} type="number" min={1} max={MAX_WORKERS} value={concurrency} onChange={(e) => setConcurrency(within(+e.target.value, 1, MAX_WORKERS))} />
               </div>
               <div className="field">
                 <label htmlFor={fid("burst-total")} data-tip={t("http.totalHint")}>{t("http.total")}</label>
-                <input id={fid("burst-total")} type="number" value={total} onChange={(e) => setTotal(+e.target.value)} />
+                <input id={fid("burst-total")} type="number" min={0} value={total} onChange={(e) => setTotal(within(+e.target.value, 0, Number.MAX_SAFE_INTEGER))} />
               </div>
               <div className="field">
                 <label htmlFor={fid("burst-duration")} data-tip={t("http.durationHint")}>{t("http.duration")}</label>
-                <input id={fid("burst-duration")} type="number" value={duration} onChange={(e) => setDuration(+e.target.value)} />
+                <input id={fid("burst-duration")} type="number" min={0} step="any" value={duration} onChange={(e) => setDuration(Math.max(0, +e.target.value || 0))} />
               </div>
               <div className="field">
                 <label htmlFor={fid("burst-rate")} data-tip={t("http.rateHint")}>{t("http.rate")}</label>
-                <input id={fid("burst-rate")} type="number" min={0} step="any" value={rate} onChange={(e) => setRate(+e.target.value)} />
+                <input id={fid("burst-rate")} type="number" min={0} max={MAX_RATE} step="any" value={rate} onChange={(e) => setRate(Math.min(MAX_RATE, Math.max(0, +e.target.value || 0)))} />
               </div>
             </div>
             <div className="metrics">
               <div className="metric"><div className="k">{t("http.sent")}</div><div className="v">{fmtNum(prog?.sent ?? 0)}</div></div>
               <div className="metric"><div className="k">{t("http.ok")}</div><div className="v accent">{fmtNum(prog?.ok ?? 0)}</div></div>
               <div className="metric"><div className="k">{t("http.failed")}</div><div className="v red">{fmtNum(prog?.failed ?? 0)}</div></div>
+              {(prog?.local ?? 0) > 0 && (
+                <div className="metric" data-tip={t("http.localHint")}>
+                  <div className="k">{t("http.local")}</div>
+                  <div className="v amber">{fmtNum(prog?.local ?? 0)}</div>
+                </div>
+              )}
               {burstRate > 0 && (
                 <div className="metric" data-tip={t("http.missedHint")}>
                   <div className="k">{t("http.missed")}</div>

@@ -86,7 +86,10 @@ alternative paths together, wire them straight into the next node.
 :::
 
 A node that is not a Join, reached by two parallel branches, runs once for
-each of them.
+each of them. Wired layer after layer, that doubles with every layer, so a run
+starts at most 1 000 parallel branches in all; one more fails it with
+`run.too_many_branches` at the node that would have started it. Bring such
+branches together with a [[ui:exp.node.join]].
 
 ### When a step fails {#failure}
 

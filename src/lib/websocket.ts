@@ -10,3 +10,20 @@ export function asJson(text: string): string | null {
   if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return null;
   try { return JSON.stringify(JSON.parse(trimmed), null, 2); } catch { return null; }
 }
+
+/**
+ * The newest of `prior` and `added` (newest last) that fit both `maxCount`
+ * items and `maxWeight` of `weight` — messages of 64 KB each would otherwise
+ * hold hundreds of megabytes in a list of a few thousand. The newest is kept
+ * whatever it weighs.
+ */
+export function keepNewest<T>(prior: T[], added: T[], maxCount: number, maxWeight: number, weight: (item: T) => number): T[] {
+  const all = added.length ? prior.concat(added) : prior;
+  let from = Math.max(0, all.length - maxCount);
+  let held = 0;
+  for (let i = all.length - 1; i >= from; i--) {
+    held += weight(all[i]);
+    if (held > maxWeight && i < all.length - 1) { from = i + 1; break; }
+  }
+  return from > 0 ? all.slice(from) : all;
+}

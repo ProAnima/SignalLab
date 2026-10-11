@@ -37,6 +37,8 @@ pub struct LibraryFile {
     pub library: EmulatorLibrary,
     /// The file did not exist and the starter set was written.
     pub seeded: bool,
+    /// What the file held when it was read: the `base` a save names (`paths::stamp`).
+    pub stamp: String,
 }
 
 pub fn library_path() -> PathBuf {
@@ -127,7 +129,12 @@ fn invalid(path: &Path, error: serde_json::Error) -> EngineError {
 }
 
 fn parse(text: &str, path: &Path) -> EngineResult<EmulatorLibrary> {
-    serde_json::from_str(text.trim_start_matches('\u{feff}')).map_err(|error| invalid(path, error))
+    let library: EmulatorLibrary = serde_json::from_str(text.trim_start_matches('\u{feff}')).map_err(|error| invalid(path, error))?;
+    // A newer app's file: read here, what it added would be dropped by the next save.
+    if library.version > VERSION {
+        return Err(EngineError::new("doc.version_unsupported").with("version", library.version).with("supported", VERSION).with("path", path.display()));
+    }
+    Ok(library)
 }
 
 /// Read the library, writing the starter set the first time.
@@ -135,11 +142,15 @@ pub fn load() -> EngineResult<LibraryFile> {
     let path = library_path();
     let shown = path.display().to_string();
     match std::fs::read_to_string(&path) {
-        Ok(text) => Ok(LibraryFile { path: shown, library: parse(&text, &path)?, seeded: false }),
+        Ok(text) => Ok(LibraryFile { path: shown, library: parse(&text, &path)?, seeded: false, stamp: super::paths::stamp(text.as_bytes()) }),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             let library = seed();
-            save(&library)?;
-            Ok(LibraryFile { path: shown, library, seeded: true })
+            // Not over a library another page wrote in the meantime: that one is read instead.
+            let saved = match save_based(&library, Some("")) {
+                Err(error) if error.is("file.changed") => return load(),
+                saved => saved?,
+            };
+            Ok(LibraryFile { path: shown, library, seeded: true, stamp: saved.stamp })
         }
         Err(error) => Err(io_error(&path, error)),
     }
@@ -148,17 +159,35 @@ pub fn load() -> EngineResult<LibraryFile> {
 /// Replace the file with this library, through a temporary file, so a
 /// failed write leaves the previous one.
 pub fn save(library: &EmulatorLibrary) -> EngineResult<String> {
+    save_based(library, None).map(|saved| saved.path)
+}
+
+/// `save`, refused with `file.changed` when the file no longer holds `base`
+/// (the stamp it was read with): another page or a person changed it since.
+/// A file there that does not read as a library is someone's document being
+/// fixed: refused as `load` refuses it, and left as it is.
+pub fn save_based(library: &EmulatorLibrary, base: Option<&str>) -> EngineResult<super::paths::Saved> {
     let dir = super::paths::data_dir();
     std::fs::create_dir_all(&dir).map_err(|error| io_error(&dir, error))?;
     let path = library_path();
+    let _turn = super::paths::document_lock();
+    let existing = match std::fs::read_to_string(&path) {
+        Ok(existing) => {
+            parse(&existing, &path)?;
+            Some(existing)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(io_error(&path, error)),
+    };
+    super::paths::check_base(&path, existing.as_ref().map(String::as_bytes), base)?;
     let text = serde_json::to_string_pretty(library).map_err(|error| EngineError::new("emulators.encode").because(error))?;
     let temporary = dir.join(format!(".emulators-{:016x}.tmp", rand::random::<u64>()));
-    std::fs::write(&temporary, text).map_err(|error| io_error(&temporary, error))?;
+    std::fs::write(&temporary, &text).map_err(|error| io_error(&temporary, error))?;
     if let Err(error) = std::fs::rename(&temporary, &path) {
         let _ = std::fs::remove_file(&temporary);
         return Err(io_error(&path, error));
     }
-    Ok(path.display().to_string())
+    Ok(super::paths::Saved { path: path.display().to_string(), stamp: super::paths::stamp(text.as_bytes()) })
 }
 
 /// The emulators in a file of the command line's: one emulator, a list of

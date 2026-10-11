@@ -7,16 +7,17 @@ import { fmtBytes, fmtNum, fmtTime } from "../lib/format";
 import { signalFromFrame } from "../lib/signals";
 import { frameSignalBlock } from "../lib/library";
 import { describeError } from "../lib/errors";
+import { appendFrames, type CaptureRow } from "../lib/capture";
 
 /** Frames kept in the view. The engine's ring holds more for export. */
 const VIEW_CAPACITY = 4000;
 /** Bytes a frame's hex preview shows; the engine keeps the rest. */
-const PREVIEW_BYTES = 1024;
+const PREVIEW_BYTES = 256;
 /** Rows actually rendered — filtering happens over the whole buffer first. */
 const RENDER_LIMIT = 300;
 
 /** A captured frame, plus a marker for frames that never made it to the UI. */
-type Row = Frame & { gap?: number };
+type Row = CaptureRow;
 
 const PROTOS = ["osc", "udp", "tcp", "http", "mqtt", "ws"];
 
@@ -71,16 +72,7 @@ export function InspectView({ reveal }: { reveal?: { seq: number; at: number } |
       const b = e.payload;
       setStats(b.stats);
       if (pausedRef.current || b.frames.length === 0) return;
-      setRows((prev) => {
-        const last = prev.length ? prev[prev.length - 1].seq : 0;
-        const fresh = b.frames.filter((f) => f.seq > last);
-        if (fresh.length === 0) return prev;
-        const incoming: Row[] = b.skipped_now > 0
-          ? fresh.map((f, i) => (i === 0 ? { ...f, gap: b.skipped_now } : f))
-          : fresh;
-        const next = prev.concat(incoming);
-        return next.length > VIEW_CAPACITY ? next.slice(next.length - VIEW_CAPACITY) : next;
-      });
+      setRows((prev) => appendFrames(prev, b.frames, b.skipped_now, VIEW_CAPACITY));
     });
     return () => { un.then((f) => f()); };
   }, []);

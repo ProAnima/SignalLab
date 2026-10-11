@@ -141,7 +141,7 @@ async fn a_ramp_fails_its_p95_threshold_for_the_right_reason() {
     assert!(began.elapsed() < Duration::from_secs(5), "{:?}", began.elapsed());
 
     let report: Value = serde_json::from_str(&std::fs::read_to_string(result.report_path.as_deref().unwrap()).unwrap()).unwrap();
-    assert_eq!(report["version"], 5);
+    assert_eq!(report["version"], 6);
     let reported = report["steps"].as_array().unwrap().iter().find(|step| step["node_id"] == "load" && step["state"] == "failed").unwrap();
     assert_eq!((reported["load"]["planned"].as_u64(), reported["load"]["thresholds"][1]["metric"].as_str()), (Some(90), Some("p95_ms")));
 }

@@ -67,7 +67,9 @@ pub struct Exchange {
 
 /// Requests, how many no rule took, how many failed, how many met an outage,
 /// and the hits per rule. `missed`: messages a broker could not hand to a
-/// client too far behind (MQTT only; left out while none were).
+/// client too far behind (MQTT only; left out while none were). `refused`:
+/// connections closed as they arrived because it already served its most
+/// (HTTP, TCP, MQTT; left out while none were) — never a request.
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct Counts {
     pub total: u64,
@@ -76,6 +78,8 @@ pub struct Counts {
     pub down: u64,
     #[serde(skip_serializing_if = "is_zero")]
     pub missed: u64,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub refused: u64,
     pub hits: Vec<u64>,
 }
 
@@ -101,6 +105,7 @@ pub struct Emulation {
     failed: AtomicU64,
     down: AtomicU64,
     missed: AtomicU64,
+    refused: AtomicU64,
     /// Taken down by a run's *Emulator down/up* step or a person, until brought up.
     forced: Mutex<Option<DownFault>>,
     seq: AtomicU64,
@@ -120,6 +125,7 @@ impl Emulation {
             failed: AtomicU64::new(0),
             down: AtomicU64::new(0),
             missed: AtomicU64::new(0),
+            refused: AtomicU64::new(0),
             forced: Mutex::new(None),
             seq: AtomicU64::new(0),
             recent: Mutex::new(VecDeque::new()),
@@ -149,6 +155,12 @@ impl Emulation {
             self.missed.fetch_add(count, Ordering::Relaxed);
             self.fresh.lock().unwrap().changed = true;
         }
+    }
+
+    /// A connection closed as it arrived: it already serves as many as it may.
+    pub(crate) fn refuse(&self) {
+        self.refused.fetch_add(1, Ordering::Relaxed);
+        self.fresh.lock().unwrap().changed = true;
     }
 
     /// Requests no rule took so far, plus this one: the fallback's `{{counter}}`.
@@ -194,6 +206,7 @@ impl Emulation {
             failed: self.failed.load(Ordering::Relaxed),
             down: self.down.load(Ordering::Relaxed),
             missed: self.missed.load(Ordering::Relaxed),
+            refused: self.refused.load(Ordering::Relaxed),
             hits: self.hits.iter().map(|hits| hits.load(Ordering::Relaxed)).collect(),
         }
     }

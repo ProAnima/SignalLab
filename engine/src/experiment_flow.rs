@@ -6,7 +6,7 @@
 //! reported as it happens, secret values masked. What a step does is
 //! `experiment_steps`; starting and following a run is `experiment_run`.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
@@ -37,6 +37,83 @@ use super::template::{Renderer, Scope};
 /// How often a repeating step reports how far it has got.
 const REPEAT_REPORT_EVERY: Duration = Duration::from_secs(1);
 
+/// The steps a run reports one by one from its start. A Loop of `MAX_LOOP`
+/// iterations over a full body makes well over 100 000; each one an event to
+/// every window and a line in the report would freeze the timeline and write
+/// tens of megabytes, so past these a run reports a sample and its end.
+pub const STEPS_KEPT: usize = 5_000;
+/// The latest steps held back past `STEPS_KEPT`, reported when the run ends.
+pub const STEPS_TAIL: usize = 500;
+/// Past `STEPS_KEPT`, a step is still reported at most this often (a failure always).
+const STEPS_SAMPLED_EVERY: Duration = Duration::from_secs(1);
+/// The most parallel branches one run starts. A step reached by several wires
+/// runs once per arrival, so a few layers wired to each other double the
+/// branches with every layer — 64 nodes could ask for billions.
+pub const MAX_BRANCHES: usize = 1_000;
+
+/// The steps of a run as it reports them: every one up to `STEPS_KEPT`; then
+/// one a second (and every failure), each saying in `omitted` how many before
+/// it were left out; and, when it ends, the last `STEPS_TAIL`. What the
+/// timeline, the followers and the report get is the same list, so a step left
+/// out is counted where it was, never silently.
+#[derive(Default)]
+pub(crate) struct StepLog {
+    kept: Vec<RunEvent>,
+    /// Steps past `STEPS_KEPT` not reported yet, the latest `STEPS_TAIL`.
+    held: VecDeque<RunEvent>,
+    /// Steps since the last reported one that are no longer held.
+    dropped: u64,
+    last_reported: Option<Instant>,
+}
+
+impl StepLog {
+    /// Take a step; returns it when it is to be reported now.
+    fn push(&mut self, mut event: RunEvent) -> Option<RunEvent> {
+        if self.kept.len() < STEPS_KEPT {
+            self.kept.push(event.clone());
+            return Some(event);
+        }
+        let due = self.last_reported.is_none_or(|at| at.elapsed() >= STEPS_SAMPLED_EVERY);
+        if event.state == "failed" || due {
+            let omitted = self.held.len() as u64 + self.dropped;
+            event.omitted = (omitted > 0).then_some(omitted);
+            self.held.clear();
+            self.dropped = 0;
+            self.last_reported = Some(Instant::now());
+            self.kept.push(event.clone());
+            return Some(event);
+        }
+        self.held.push_back(event);
+        if self.held.len() > STEPS_TAIL {
+            self.held.pop_front();
+            self.dropped += 1;
+        }
+        None
+    }
+
+    /// The steps held back, to report as the run ends: the first says how many before it were left out.
+    fn release(&mut self) -> Vec<RunEvent> {
+        let mut released: Vec<RunEvent> = self.held.drain(..).collect();
+        if let Some(first) = released.first_mut().filter(|_| self.dropped > 0) {
+            first.omitted = Some(self.dropped);
+        }
+        self.dropped = 0;
+        self.kept.extend(released.iter().cloned());
+        released
+    }
+
+    /// Every step as the report has it, the held ones included (a stopped run has no end to release them at).
+    pub(crate) fn list(&self) -> Vec<RunEvent> {
+        let mut list = self.kept.clone();
+        let start = list.len();
+        list.extend(self.held.iter().cloned());
+        if let Some(first) = list.get_mut(start).filter(|_| self.dropped > 0) {
+            first.omitted = Some(self.dropped);
+        }
+        list
+    }
+}
+
 struct JoinBarrier {
     expected: usize,
     arrived: usize,
@@ -60,7 +137,9 @@ struct EngineShared {
     host: Host,
     job_id: u64,
     /// Every step so far; shared with the handle, which reads it if the run is stopped.
-    events: Arc<Mutex<Vec<RunEvent>>>,
+    events: Arc<Mutex<StepLog>>,
+    /// Branches started so far, the first one included: at most `MAX_BRANCHES`.
+    branches: AtomicUsize,
     /// Each step as it happens, for whoever follows the run (gone when nobody does).
     observer: mpsc::UnboundedSender<RunEvent>,
     by_id: HashMap<String, Node>,
@@ -213,13 +292,27 @@ fn emit(shared: &EngineShared, node_id: &str, step: Step) {
         error: step.error.map(|error| error.masked(masked)),
         frame: step.frame,
         load: step.load,
+        omitted: None,
     };
-    if let Ok(mut list) = shared.events.lock() {
-        list.push(event.clone());
+    // Decided and sent under the log's lock, so every follower gets the steps in the log's order.
+    let Ok(mut log) = shared.events.lock() else { return };
+    if let Some(event) = log.push(event) {
+        report(shared, event);
     }
+}
+
+fn report(shared: &EngineShared, event: RunEvent) {
     // Nobody following the run is not an error.
     let _ = shared.observer.send(event.clone());
     shared.host.emit("experiment://step", event);
+}
+
+/// The steps held back past `STEPS_KEPT`, reported as the run ends.
+fn release_steps(shared: &EngineShared) {
+    let Ok(mut log) = shared.events.lock() else { return };
+    for event in log.release() {
+        report(shared, event);
+    }
 }
 
 /// The first failure of a run stops every branch; later ones are only reported.
@@ -284,6 +377,9 @@ fn fan_out(
             };
             if stay.is_none() {
                 stay = Some((target.clone(), next));
+            } else if shared.branches.fetch_add(1, Ordering::SeqCst) >= MAX_BRANCHES {
+                fail(shared, from, EngineError::new("run.too_many_branches").with("max", MAX_BRANCHES));
+                return None;
             } else {
                 spawn_branch(shared.clone(), target.clone(), next, active_tasks.clone(), done_tx.clone());
             }
@@ -579,7 +675,7 @@ pub(crate) struct Prepared {
 
 /// Where the steps of a run go besides the host: its list, and its follower.
 pub(crate) struct Followers {
-    pub(crate) events: Arc<Mutex<Vec<RunEvent>>>,
+    pub(crate) events: Arc<Mutex<StepLog>>,
     pub(crate) steps: mpsc::UnboundedSender<RunEvent>,
 }
 
@@ -594,6 +690,7 @@ pub(crate) async fn run(host: &Host, followers: Followers, job_id: u64, doc: &Ex
         host: host.clone(),
         job_id,
         events: followers.events,
+        branches: AtomicUsize::new(1),
         observer: followers.steps,
         by_id: doc.nodes.iter().map(|node| (node.id.clone(), node.clone())).collect(),
         outgoing: doc.edges.iter().fold(HashMap::new(), |mut outgoing: HashMap<(String, String), Vec<String>>, edge| {
@@ -606,7 +703,7 @@ pub(crate) async fn run(host: &Host, followers: Followers, job_id: u64, doc: &Ex
         end_reached: AtomicBool::new(false),
         params: prepared.params,
         seed: prepared.seed,
-        masked: RwLock::new(prepared.secrets.values().cloned().collect()),
+        masked: RwLock::new(prepared.secrets.values().flat_map(|value| secrets::forms(value)).collect()),
         derived: Mutex::new(Vec::new()),
         secrets: prepared.secrets,
         counts: Mutex::new(HashMap::new()),
@@ -624,7 +721,7 @@ pub(crate) async fn run(host: &Host, followers: Followers, job_id: u64, doc: &Ex
     });
     let _cancel = CancelBranches(shared.clone());
     // The Inspector masks these values while the run lasts (or until it is stopped).
-    let _redaction = secrets::redact(shared.secrets.values().cloned().collect());
+    let _redaction = secrets::redact(shared.masked.read().unwrap().clone());
 
     let (done_tx, mut done_rx) = tokio::sync::mpsc::channel(1);
     // validate_document guarantees exactly one Start.
@@ -660,6 +757,7 @@ pub(crate) async fn run(host: &Host, followers: Followers, job_id: u64, doc: &Ex
             emit(&shared, &end.id, complete);
         }
     }
+    release_steps(&shared);
     let first = shared.first_error.lock().unwrap().clone();
     match first {
         Some(error) => Err(error.masked(&shared.masked.read().unwrap())),

@@ -64,6 +64,12 @@ in the tooltip. A click on a row selects its node on the canvas.
 
 On the canvas, each node carries a badge with its latest state.
 
+**Long runs.** A run shows its first 5 000 steps one by one. Past them — a Loop
+of a thousand iterations over a long body makes over a hundred thousand — it
+shows one step a second and every failure, and when it ends its last 500. A
+row in amber says how many were left out between two others, and the folded
+timeline's count is every step the run made. The report keeps the same steps.
+
 The timeline's header holds:
 
 - the result: [[ui:exp.running]], [[ui:exp.passed]], [[ui:exp.failed]] with the
@@ -119,7 +125,7 @@ another. If it cannot be written, the editor says why.
 
 | Key | What |
 | --- | --- |
-| `version` | the report's format, now 5 |
+| `version` | the report's format, now 6 |
 | `experiment` | the experiment's name |
 | `document_version` | the experiment's version, now 9 |
 | `seed` | the seed the run used |
@@ -129,7 +135,7 @@ another. If it cannot be written, the editor says why.
 | `started_ms`, `ended_ms` | Unix milliseconds |
 | `outcome` | `passed` or `failed` |
 | `error` | the first failure, or `null` |
-| `steps` | every step event, in order (below) |
+| `steps` | the step events, in order (below): the first 5 000, then one a second and every failure, then the last 500 |
 | `emulators` | each Emulator node's counts — present when there is one ([emulators](faults.md#emulator)) |
 | `impairments` | each Impairment node's counts and phases — present when there is one ([phases](faults.md#change-impairment)) |
 
@@ -146,12 +152,14 @@ Each step event has:
 | `error` | why it failed: `code`, `params`, `node`, `field`, `detail` |
 | `frame` | the Inspector frame a wait matched, if capture was on |
 | `load` | what a load measured ([metrics](load.md#metrics)), on its last event |
+| `omitted` | how many steps just before this one were left out, when some were |
 
 Secret values never appear in a report: they are masked as `••••`
 ([masking](data.md#masking)).
 
 The report's format grew with the features: version 3 added the emulators'
-counts, version 4 the impairments' phases, version 5 a load's measurements.
+counts, version 4 the impairments' phases, version 5 a load's measurements,
+version 6 long runs' steps as a sample with `omitted`.
 
 The reports are the run history: [[ui:exp.compare]] reads them, and so does
 [`experiment_runs`](../api/commands.md#experiment_runs). The command line's

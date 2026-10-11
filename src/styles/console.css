@@ -39,7 +39,8 @@
 }
 .console-toggle:active { transform: none; }
 
-.jobs-strip { display: flex; gap: 6px; flex-wrap: wrap; }
+/* A few jobs wrap; hundreds scroll inside two rows instead of pushing the console off the window. */
+.jobs-strip { display: flex; gap: 6px; flex-wrap: wrap; min-width: 0; max-height: 52px; overflow-y: auto; }
 .job-pill {
   display: flex;
   align-items: center;

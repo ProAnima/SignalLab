@@ -14,8 +14,10 @@ use super::experiment_run::{Outcome, RunEvent};
 use super::paths::data_dir;
 
 /// Version of the run report file: 3 added the emulators' counters, 4 the
-/// impairments' phases, 5 a load step's measurements (`load` on its step).
-const REPORT_VERSION: u32 = 5;
+/// impairments' phases, 5 a load step's measurements (`load` on its step), 6
+/// the steps past the first `STEPS_KEPT` as a sample and the last ones, a gap
+/// counted in `omitted` on the step after it.
+const REPORT_VERSION: u32 = 6;
 
 #[derive(Serialize)]
 struct RunReport<'a> {

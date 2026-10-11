@@ -56,7 +56,10 @@ libraries and the same reports.
 All are JSON in UTF-8, written with indentation so they read and diff well.
 Each carries a `version`; a file of an older version is read and migrated
 when it is opened, and written back in the current version the next time it is
-saved — after which an older Signal Lab cannot open it.
+saved — after which an older Signal Lab cannot open it. A file of a newer
+version than this Signal Lab knows is refused (`doc.version_unsupported`) and
+left as it is: read anyway, what the newer version added would be lost on the
+next save. That holds for the experiment and both libraries.
 
 ### experiment.json {#experiment-json}
 
@@ -150,13 +153,13 @@ one emulator, a list of them, or a library like this one.
 
 ### Run reports {#run-reports}
 
-`runs/run-<started ms>-<job>.json`, report version 5: one file per run that
+`runs/run-<started ms>-<job>.json`, report version 6: one file per run that
 passed or failed, never written over (a second run with the same name gets
 `-2`, `-3`… added). A run that was stopped saves none.
 
 | Field | What it is |
 | --- | --- |
-| `version` | 5 |
+| `version` | 6 |
 | `experiment` | The experiment's name |
 | `document_version` | The version of the document that ran |
 | `seed`, `profile` | What it ran with |
@@ -165,7 +168,7 @@ passed or failed, never written over (a second run with the same name gets
 | `started_ms`, `ended_ms` | Milliseconds since 1970 |
 | `outcome` | `passed` or `failed` |
 | `error` | Its first failure, or null |
-| `steps` | Every step, as [`experiment://step`](../api/events.md#event-experiment-step) |
+| `steps` | The steps, as [`experiment://step`](../api/events.md#event-experiment-step): past the first 5 000 one a second and the last 500, a gap counted in `omitted` (since version 6) |
 | `emulators` | What each [[ui:exp.node.emulator]] node received and answered (since version 3); left out when none |
 | `impairments` | What each [[ui:exp.node.impairment]] node's relay did, phase by phase (since version 4); left out when none |
 
@@ -224,11 +227,13 @@ Signal Lab writes no log files; see
   JSON; secret values are not in it, so set them again on a new machine.
 - **Edit** `signals.json`, `emulators.json` and `experiment.json` by hand while
   Signal Lab is closed (or, on a server, while no page is open): the app writes
-  the whole file from what it holds, so a change made while it runs is
-  overwritten by its next save. A mistake is reported with the line and column
-  when the file is next read, never silently replaced — for `signals.json`,
-  also when the app saves into it: that save is refused and the file stays as
-  you left it.
+  the whole file from what it holds. For `signals.json` and `emulators.json` a
+  save over a file changed since the app read it is refused (`file.changed`) and
+  your change is kept — press Reload to read it; `experiment.json` is
+  overwritten by the editor's next save. A mistake is reported with the line
+  and column when the file is next read, never silently replaced — for
+  `signals.json` and `emulators.json`, also when the app saves into it: that
+  save is refused and the file stays as you left it.
 - **Delete** `runs/`, `exports/` and `capture-*` files at any time. Deleting
   `signals.json` or `emulators.json` brings the starter set back; deleting
   `experiment.json` brings the starter experiment back.

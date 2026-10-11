@@ -23,7 +23,23 @@ export function fromOscArg(a: OscArg): ArgRow {
     case "nil": return { type: "nil", value: "" };
     case "bool": return { type: "bool", value: a.value ? "true" : "false" };
     case "blob": return { type: "blob", value: a.value.map(byte => byte.toString(16).padStart(2, "0")).join(" ") };
+    // Types only received, never edited: the editor holds what they read as.
+    case "time": case "char": case "color": case "midi": case "impulse": case "array":
+      return { type: "str", value: fmtArg(a) };
     default: return { type: a.type, value: String(a.value) };
+  }
+}
+
+const hexBytes = (bytes: number[]) => bytes.map(byte => byte.toString(16).padStart(2, "0"));
+
+/** An OSC time tag (64-bit NTP, as decimal text): `t:immediate` for 1, else `t:` and seconds since 1900. */
+function fmtTime(text: string): string {
+  if (text === "1") return "t:immediate";
+  try {
+    const tag = BigInt(text), unit = BigInt(4294967296);
+    return `t:${(Number(tag / unit) + Number(tag % unit) / 4294967296).toFixed(6)}`;
+  } catch {
+    return `t:${text}`;
   }
 }
 
@@ -32,6 +48,12 @@ export function fmtArg(a: OscArg): string {
     case "nil": return "nil";
     case "blob": return `blob[${a.value.length}]`;
     case "bool": return a.value ? "true" : "false";
+    case "time": return fmtTime(a.value);
+    case "char": return `'${a.value}'`;
+    case "color": return `#${hexBytes(a.value).join("")}`;
+    case "midi": return `midi[${hexBytes(a.value).join(" ")}]`;
+    case "impulse": return "impulse";
+    case "array": return `[${a.value.map(fmtArg).join(" ")}]`;
     default: return String(a.value);
   }
 }
