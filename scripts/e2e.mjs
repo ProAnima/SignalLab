@@ -510,5 +510,16 @@ async function main() {
   if (!results.every(Boolean)) process.exitCode = 1;
 }
 
-// No process.exit after network calls: on Windows it can abort Node while sockets close.
-if (isMain(import.meta.url)) main().catch((error) => { console.error(`\n✖ ${error.message ?? error}`); process.exitCode = 1; });
+// No process.exit right after network calls: on Windows it can abort Node while
+// sockets close. The verdict is already printed, though, so whatever is still
+// open 15 s later (a connection or child a step left behind) does not hold the
+// run until the 20-minute limit: it is named and the run ends with its verdict.
+function lingering() {
+  const timer = setTimeout(() => {
+    const left = (process._getActiveHandles?.() ?? []).map((handle) => handle?.constructor?.name ?? typeof handle);
+    console.error(`· still open after the tours, closed by exiting: ${left.join(", ") || "nothing"}`);
+    process.exit(process.exitCode ?? 0);
+  }, 15_000);
+  timer.unref();
+}
+if (isMain(import.meta.url)) main().catch((error) => { console.error(`\n✖ ${error.message ?? error}`); process.exitCode = 1; }).finally(lingering);
