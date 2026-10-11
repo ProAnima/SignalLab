@@ -23,7 +23,9 @@ export async function emulators(expect: Expect, args: StepArgs) {
   expect("it checks itself while being written: nothing in the way", !shown.querySelector(".emu-problem"), textOf(shown.querySelector(".emu-problem")));
   await click(button(shown, T("emu.start")));
   await until("it to answer", () => textOf(shown.querySelector(".emu-state")) === T("emu.runningOn", { local }));
-  expect("the console lists its job", textOf(document.querySelector(".jobs-strip")).includes(T("job.emulator", { name: T("emu.newName.http"), local })), textOf(document.querySelector(".jobs-strip")));
+  const listed = T("job.emulator", { name: T("emu.newName.http"), local });
+  await until("its job in the strip", () => textOf(document.querySelector(".jobs-strip")).includes(listed), 4000).catch(() => null);
+  expect("the console lists its job", textOf(document.querySelector(".jobs-strip")).includes(listed), textOf(document.querySelector(".jobs-strip")));
   const nameless = unnamed(shown);
   expect("emulators: every field and button has a name", nameless.length === 0, nameless.join(" | "));
 

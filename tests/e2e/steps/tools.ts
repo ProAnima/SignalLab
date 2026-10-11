@@ -7,7 +7,9 @@ export async function osc(expect: Expect, args: StepArgs) {
   await type(control(monitor, T("common.bind")), `127.0.0.1:${args.port}`);
   await click(button(monitor, T("osc.listen")));
   await until("the monitor to listen", () => hasButton(monitor, T("common.stop")));
-  expect("the monitor runs as a job", !!document.querySelector(".job-pill"));
+  // The strip lists jobs a moment after the screen shows its own (the job list is refreshed, not pushed).
+  const pill = await until("the monitor in the jobs strip", () => document.querySelector(".job-pill"), 4000).catch(() => null);
+  expect("the monitor runs as a job", !!pill);
 
   const sender = panel(shown, T("osc.sender"));
   await type(control(sender, T("common.target")), `127.0.0.1:${args.port}`);
