@@ -72,6 +72,10 @@ kopiert), den Quellcode und die Lizenz. In der Desktop-App sucht der Abschnitt [
 nach Updates, zeigt sie an und installiert sie — siehe [Updates](install.md#updates). Im Browser
 steht dort [[ui:update.server]]. [[ui:about.writeUs]] öffnet das Feedback-Formular.
 
+Im selben Abschnitt erlaubt [[ui:about.stats]] (standardmäßig an) der Desktop-App,
+anonyme Nutzungsstatistiken zu senden; siehe
+[Was Signal Lab nach außen sendet](../server/security.md#stats).
+
 ### An die Entwickler schreiben {#feedback}
 
 Das **✉** in der Kopfzeile öffnet ein Formular, das direkt an die Entwickler geht:

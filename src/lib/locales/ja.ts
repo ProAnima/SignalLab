@@ -246,6 +246,8 @@ export const ja: Dict = {
   "about.source": "ソースコード",
   "about.license": "ライセンス",
   "about.writeUs": "開発者に連絡",
+  "about.stats": "匿名の利用統計を送信",
+  "about.statsHint": "Signal Lab の起動と、その後実行中は 5 分ごとにまだ動いていることを、このインストールのランダムな番号、バージョン、システムとともに ProAnima ハブに伝えます。それ以外は送りません。名前、このコンピューターの名前やアドレス、送信したり開いたりした内容も送りません",
   "update.title": "更新",
   "update.check": "更新を確認",
   "update.checking": "確認中…",

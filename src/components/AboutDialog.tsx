@@ -13,7 +13,8 @@ export const REPOSITORY = "https://github.com/ProAnima/SignalLab";
 /**
  * Who makes Signal Lab and how to reach them, and — in the desktop app — its
  * updates: the newest published release, what is new in it, and installing
- * it, which saves what is pending, stops every job and restarts the app.
+ * it, which saves what is pending, stops every job and restarts the app — and
+ * whether it sends anonymous usage statistics.
  */
 export function AboutDialog({ onClose, onFeedback }: { onClose: () => void; onFeedback: () => void }) {
   const { t, lang } = useI18n();
@@ -94,6 +95,10 @@ export function AboutDialog({ onClose, onFeedback }: { onClose: () => void; onFe
           <label className="checkbox" data-tip={t("update.autoHint")}>
             <input type="checkbox" checked={updates.auto} onChange={(event) => updates.setAuto(event.target.checked)} disabled={working} />
             {t("update.auto")}
+          </label>
+          <label className="checkbox" data-tip={t("about.statsHint")}>
+            <input type="checkbox" checked={updates.stats} onChange={(event) => updates.setStats(event.target.checked)} />
+            {t("about.stats")}
           </label>
         </>}
       </section>

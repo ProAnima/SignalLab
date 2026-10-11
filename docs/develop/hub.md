@@ -7,12 +7,13 @@ title: The studio's hub
 Signal Lab talks to one service of the studio's: **ProAnima Hub**
 (`https://hub.proanima.net`, its own repository `ProAnima/pas-Hub`), which
 serves every app of ProAnimaStudio. Signal Lab is its project `signal-lab`.
-The hub does two things for it:
+The hub does three things for it:
 
 - **Updates.** The desktop app's updater asks the hub which release to install.
+- **Usage statistics.** The desktop app says it started, then that it still runs.
 - **Feedback.** The **✉** form goes to the hub, which mails it to the developers.
 
-The app holds no secret for either. Its code is open, so a secret could not be
+The app holds no secret for any of them. Its code is open, so a secret could not be
 kept there; the hub keeps the mailbox's password and decides who gets which
 release.
 
@@ -43,6 +44,43 @@ in the hub's console, *Signal Lab → Releases*, *Read from GitHub* (or wait for
 the hourly read), choose the version in `stable`, set the rollout (say 20 %,
 then 100 %) and save. Until a version is promoted, the hub offers nothing and
 the app stays as it is.
+
+## Usage statistics {#stats}
+
+`POST https://hub.proanima.net/v1/signal-lab/events`, JSON
+(`engine/src/stats.rs`, started by the desktop shell, `src-tauri/src/lib.rs`):
+
+```json
+{
+  "install_id": "0f8b3c2e-7d41-4a8e-9c3b-5e2d1a6f7b90",
+  "version": "1.1.0",
+  "os": "windows",
+  "arch": "x86_64",
+  "channel": "stable",
+  "events": [{ "kind": "launch" }]
+}
+```
+
+- **Who.** `install_id` is the update check's `X-Install-Id` (`installId` in
+  `src/lib/platform.ts`), handed to the shell by `stats_configure`, and `os`/`arch`
+  are the updater's `{{target}}`/`{{arch}}` (`windows`, `linux`; `x86_64`, `aarch64`,
+  …), so the hub counts one install for both. Without an id (nothing can be kept
+  in the webview's storage) nothing is sent.
+- **When.** `launch` once per start, then `heartbeat` every 5 minutes while the app
+  runs (`stats::BEAT`; the hub's *online* is heard from within ten minutes). A
+  `launch` the hub did not take (no answer, `5xx`, `429`) goes again at the next
+  tick instead of a heartbeat; a `429` just waits for the next tick; another `4xx`
+  is final. Failures are a debug line, never shown. 20 s per request.
+- **Whether.** *Send anonymous usage statistics* in About (`signal-lab.stats.enabled`,
+  on by default), read at the next tick. The shell starts the sender only where the
+  app looks for updates on its own (`hub::automatic_here`: a release build without
+  `SIGNALLAB_NO_UPDATE_CHECK`), so development and the tour never reach the hub. A
+  server and the command line have no sender.
+
+The hub answers `202 {"accepted"}` and keeps the events with the version, system
+and channel, and no address (`src/analytics.rs` there); a project that keeps no
+statistics answers `204`. `engine/tests/stats.rs` runs the sender against a
+stand-in on loopback.
 
 ## Feedback {#feedback}
 
@@ -77,7 +115,7 @@ test mail* proves it. Feedback is on only when all of that is set.
 
 ## Another hub {#another-hub}
 
-`SIGNALLAB_HUB_URL` points the feedback form elsewhere: set when the engine is
+`SIGNALLAB_HUB_URL` points the feedback form and the usage statistics elsewhere: set when the engine is
 compiled, or in a running engine's environment (the end-to-end tour points it
 at its stand-in, `scripts/e2e/fixtures.mjs`; `engine/tests/feedback.rs` at
 one of its own). The updater's addresses are the app's configuration: another

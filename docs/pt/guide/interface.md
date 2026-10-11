@@ -72,6 +72,10 @@ o código-fonte e a licença. No aplicativo de desktop, a seção [[ui:update.ti
 mostra e instala atualizações — veja [Atualizações](install.md#updates). No navegador, ela diz
 [[ui:update.server]]. O botão [[ui:about.writeUs]] abre o formulário de comentários.
 
+Na mesma seção, [[ui:about.stats]] (ativada por padrão) permite que o aplicativo de
+desktop envie estatísticas de uso anônimas; veja
+[O que o Signal Lab envia para o mundo exterior](../server/security.md#stats).
+
 ### Escrever aos desenvolvedores {#feedback}
 
 O **✉** do cabeçalho abre um formulário que vai direto para os desenvolvedores:

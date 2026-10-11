@@ -4,15 +4,18 @@
 //! an installed app does: updating itself from the project's GitHub releases
 //! (the updater plugin checks each update's signature against the key in
 //! tauri.conf.json before it installs anything), restarting, opening a link in
-//! the system's browser or mail program, and showing the documentation built
-//! into the app in a window of its own.
+//! the system's browser or mail program, showing the documentation built
+//! into the app in a window of its own, and the anonymous usage statistics a
+//! person may turn off in About (`signal_lab_engine::stats`; a server and the
+//! command line never send them).
 
 use std::sync::Arc;
 
 use serde_json::Value;
 use signal_lab_engine::secrets::SystemStore;
 use signal_lab_engine::error::EngineError;
-use signal_lab_engine::{Capture, EventSink, Failure, Host, Mode, Service};
+use signal_lab_engine::stats::{self, Stats};
+use signal_lab_engine::{hub, Capture, EventSink, Failure, Host, Mode, Service};
 use tauri::webview::NewWindowResponse;
 use tauri::{AppHandle, Emitter, Manager, State, Url, Webview, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_opener::OpenerExt;
@@ -100,7 +103,20 @@ fn in_browser(app: &AppHandle, url: &Url) {
 /// hand, from About, always works.
 #[tauri::command]
 fn update_checks() -> bool {
-    !cfg!(debug_assertions) && std::env::var_os("SIGNALLAB_NO_UPDATE_CHECK").is_none()
+    hub::automatic_here(cfg!(debug_assertions))
+}
+
+/// The interface's setting for the usage statistics: this install's id (the one
+/// its update check sends; none where nothing can be kept) and whether the
+/// person lets the app send — at start and whenever *Send anonymous usage
+/// statistics* changes. Read at the sender's next tick.
+#[tauri::command]
+fn stats_configure(webview: Webview, stats: State<'_, Arc<Stats>>, install_id: Option<String>, enabled: bool) -> Result<(), String> {
+    if webview.label() != MAIN {
+        return Err("only the interface sets the statistics".into());
+    }
+    stats.configure(install_id.as_deref(), enabled);
+    Ok(())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -114,6 +130,14 @@ pub fn run() {
             // The service starts the Inspector's pump, which needs the runtime.
             let service = tauri::async_runtime::block_on(async move { Service::new(host, Mode::Desktop, Arc::new(SystemStore)) });
             app.manage(Arc::new(service));
+            // Usage statistics: only where the app looks for updates on its own — never
+            // in a development build or the tour, which would reach the real hub.
+            let usage = Arc::new(Stats::default());
+            app.manage(usage.clone());
+            if update_checks() {
+                let version = app.package_info().version.to_string();
+                tauri::async_runtime::spawn(stats::run(usage, stats::endpoint(), version, stats::BEAT));
+            }
             // The window of tauri.conf.json, made here (it has "create": false) so a debug
             // build can open the webview's DevTools for the end-to-end tour — only when the
             // tour asks, and never in a release build.
@@ -128,7 +152,7 @@ pub fn run() {
             window.build()?;
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![engine, update_checks, open_docs])
+        .invoke_handler(tauri::generate_handler![engine, update_checks, stats_configure, open_docs])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

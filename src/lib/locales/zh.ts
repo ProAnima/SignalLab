@@ -246,6 +246,8 @@ export const zh: Dict = {
   "about.source": "源代码",
   "about.license": "许可证",
   "about.writeUs": "联系开发者",
+  "about.stats": "发送匿名使用统计",
+  "about.statsHint": "在 Signal Lab 启动时告知 ProAnima Hub，之后在运行期间每 5 分钟告知一次它仍在运行，并附带本次安装的一个随机编号、版本和系统。除此之外不发送任何内容：不含您的姓名、这台计算机的名称或地址，也不含您发送或打开的任何内容",
   "update.title": "更新",
   "update.check": "检查更新",
   "update.checking": "正在检查…",

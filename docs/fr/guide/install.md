@@ -237,6 +237,11 @@ cherche d’elle-même — quand le service informatique déploie lui-même les 
 `SIGNALLAB_NO_UPDATE_CHECK` avec n’importe quelle valeur ; [[ui:update.check]] fonctionne toujours quand on appuie dessus.
 Les versions de développement ne cherchent jamais d’elles-mêmes.
 
+Pendant qu’elle tourne, l’application envoie aussi des statistiques d’utilisation
+anonymes, sauf si vous décochez [[ui:about.stats]] dans [[ui:about.open]] ; leur contenu
+est décrit dans [Ce que Signal Lab envoie vers l’extérieur](../server/security.md#stats).
+`SIGNALLAB_NO_UPDATE_CHECK` les désactive aussi.
+
 ### Un serveur {#updates-server}
 
 Un serveur, et la page qu’un navigateur affiche depuis celui-ci, se mettent à jour avec leur image Docker, jamais

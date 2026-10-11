@@ -72,6 +72,10 @@ copie), le code source et la licence. Dans l’application de bureau, sa section
 recherche, affiche et installe les mises à jour — voir [Mises à jour](install.md#updates). Dans un navigateur,
 elle indique [[ui:update.server]]. Le bouton [[ui:about.writeUs]] ouvre le formulaire de retour.
 
+Dans la même section, [[ui:about.stats]] (activée par défaut) permet à l’application
+de bureau d’envoyer des statistiques d’utilisation anonymes ; voir
+[Ce que Signal Lab envoie vers l’extérieur](../server/security.md#stats).
+
 ### Écrire aux développeurs {#feedback}
 
 Le **✉** de l’en-tête ouvre un formulaire qui va directement aux développeurs :

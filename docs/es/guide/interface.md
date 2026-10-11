@@ -73,6 +73,10 @@ copia), el código fuente y la licencia. En la aplicación de escritorio, su sec
 [Actualizaciones](install.md#updates). En un navegador indica [[ui:update.server]].
 [[ui:about.writeUs]] abre el formulario de comentarios.
 
+En la misma sección, [[ui:about.stats]] (activada por defecto) permite que la
+aplicación de escritorio envíe estadísticas de uso anónimas; consulta
+[Qué envía Signal Lab al exterior](../server/security.md#stats).
+
 ### Escribir a los desarrolladores {#feedback}
 
 El **✉** de la cabecera abre un formulario que llega directamente a los desarrolladores:

@@ -55,6 +55,7 @@ pub mod scan;
 pub mod secrets;
 pub mod service;
 pub mod signals;
+pub mod stats;
 pub mod storm;
 pub mod subscribe;
 pub mod template;

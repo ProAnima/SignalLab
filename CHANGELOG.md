@@ -12,6 +12,11 @@ release notes — so what is written here is what users read. See
 
 ### Added
 
+- **Anonymous usage statistics for ProAnima Hub.** The desktop app sends a launch, then
+  a heartbeat every 5 minutes while it runs, with a random install ID, the app version,
+  the system and the processor architecture — nothing about what you send or open. On
+  by default; turn it off in About → *Send anonymous usage statistics*. A server and the
+  command line never send them.
 - **Documentation, in all eleven languages.** A guide to every screen, protocol and
   tool; experiments node by node, with data, flow, load and faults; the command line,
   CI and the assistant's tools (MCP); the server, its security and its HTTP API — every

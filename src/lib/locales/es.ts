@@ -246,6 +246,8 @@ export const es: Dict = {
   "about.source": "Código fuente",
   "about.license": "Licencia",
   "about.writeUs": "Escribir a los desarrolladores",
+  "about.stats": "Enviar estadísticas de uso anónimas",
+  "about.statsHint": "Avisa al hub de ProAnima de que Signal Lab se ha iniciado y, después, cada 5 minutos, de que sigue en marcha, con un número aleatorio de esta instalación, la versión y el sistema. Nada más: ni tu nombre, ni el nombre o la dirección de este equipo, ni nada de lo que envías o abres",
   "update.title": "Actualizaciones",
   "update.check": "Buscar actualizaciones",
   "update.checking": "Buscando…",

@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { api } from "./api";
-import { findUpdate, isDesktop, restartApp, updateChecksEnabled, type FoundUpdate } from "./platform";
+import { configureStats, findUpdate, isDesktop, restartApp, updateChecksEnabled, type FoundUpdate } from "./platform";
 import { flushAll } from "./flush";
 import { usePersistentState } from "./hooks";
 import { useStore } from "./store";
@@ -41,6 +41,9 @@ interface Updates {
   /** Look once a day on its own. */
   auto: boolean;
   setAuto: (auto: boolean) => void;
+  /** Send anonymous usage statistics (a launch, then a heartbeat every 5 minutes). */
+  stats: boolean;
+  setStats: (stats: boolean) => void;
   check: () => Promise<void>;
   install: () => Promise<void>;
 }
@@ -80,6 +83,7 @@ export function UpdatesProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<UpdateState>({ phase: "idle" });
   const [release, setRelease] = useState<Release | null>(null);
   const [auto, setAuto] = usePersistentState("signal-lab.updates.auto", true);
+  const [stats, setStats] = usePersistentState("signal-lab.stats.enabled", true);
   const [allowed, setAllowed] = useState(false);
   const found = useRef<FoundUpdate | null>(null);
   const busy = useRef(false);
@@ -89,6 +93,11 @@ export function UpdatesProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (isDesktop) void updateChecksEnabled().then(setAllowed);
   }, []);
+
+  // The shell reads it at its next tick: turned off, nothing more goes.
+  useEffect(() => {
+    void configureStats(stats);
+  }, [stats]);
 
   /** `quiet`: an automatic look, which shows only what it finds. */
   const look = useCallback(async (quiet: boolean) => {
@@ -155,7 +164,7 @@ export function UpdatesProvider({ children }: { children: ReactNode }) {
     }
   }, [pushLog, refreshJobs]);
 
-  const value: Updates = { supported: isDesktop, state, found: release, auto, setAuto, check: () => look(false), install };
+  const value: Updates = { supported: isDesktop, state, found: release, auto, setAuto, stats, setStats, check: () => look(false), install };
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 

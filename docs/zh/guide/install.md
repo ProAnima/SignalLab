@@ -180,6 +180,8 @@ signallab version
 
 预发布版本和草稿永远不会被推送。若要让一台机器上的每个安装都不自动检查——例如由 IT 自行部署更新时——请将环境变量 `SIGNALLAB_NO_UPDATE_CHECK` 设为任意值；按下 [[ui:update.check]] 时仍会检查。开发版本从不自动检查。
 
+应用运行期间还会发送匿名使用统计，除非您在 [[ui:about.open]] 中取消勾选 [[ui:about.stats]]；其中包含的内容见 [Signal Lab 向外界发送什么](../server/security.md#stats)。`SIGNALLAB_NO_UPDATE_CHECK` 同样会将其关闭。
+
 ### 服务器 {#updates-server}
 
 服务器以及浏览器从它打开的页面都随其 Docker 镜像更新，从不自行更新：“关于”中会注明这一点。如何更新服务器：参见[服务器](../server/index.md)。

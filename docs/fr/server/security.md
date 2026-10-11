@@ -202,7 +202,10 @@ gh attestation verify oci://ghcr.io/proanima/signallab:[[version]] -R ProAnima/S
 
 ## Ce que Signal Lab envoie vers l’extérieur {#outside}
 
-En plus du trafic que vous envoyez, Signal Lab s’adresse à deux endroits, tous deux appartenant au studio.
+En dehors du trafic que vous envoyez, Signal Lab envoie trois choses, toutes au hub
+du studio (`hub.proanima.net`) : les vérifications de mises à jour, des statistiques
+d’utilisation anonymes et les retours. Seule la vérification de mises à jour s’adresse
+à GitHub, lorsque le hub est injoignable.
 
 ### Recherche de mises à jour {#update-check}
 
@@ -221,6 +224,26 @@ injoignable. La demande contient :
 Seules les versions publiées sont proposées. Un téléchargement dont la signature ne correspond pas à
 la clé intégrée à l’application n’est pas installé, et rien n’est installé tant que vous
 n’appuyez pas sur [[ui:update.install]].
+
+### Statistiques d’utilisation {#stats}
+
+Seule l’**application de bureau** les envoie ; un serveur, un navigateur et la ligne de
+commande ne le font jamais. Avec la case [[ui:about.stats]] cochée (dans
+[[ui:about.open]] ; elle l’est par défaut), l’application signale au hub qu’elle a
+démarré, puis toutes les 5 minutes tant qu’elle tourne qu’elle fonctionne encore. Chaque
+message contient :
+
+- le même numéro aléatoire de cette installation que celui de la vérification de mises à jour ;
+- la version de l’application ;
+- le système d’exploitation et l’architecture du processeur.
+
+Rien d’autre : ni votre nom, ni le nom ou l’adresse de l’ordinateur, ni rien de ce que
+vous envoyez, ouvrez ou saisissez. Le hub ne se sert de l’adresse d’où vient un message
+que pour limiter la fréquence des écritures, et n’en conserve aucune. Décochez
+[[ui:about.stats]] : plus rien ne part à partir de l’intervalle de cinq minutes suivant.
+Si le hub est injoignable, l’application réessaie à l’intervalle suivant, sans rien
+dire. Les versions de développement n’envoient jamais rien, pas plus qu’une application
+lancée avec `SIGNALLAB_NO_UPDATE_CHECK` défini.
 
 ### Retours {#feedback}
 

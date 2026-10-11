@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { compareVersions } from "../scripts/release.mjs";
 import { COPIES, MEMBERS, SEMVER, currentVersion, versionProblems } from "../scripts/version.mjs";
 import { promoted, releaseNotes, section } from "../scripts/changelog.mjs";
@@ -117,6 +117,17 @@ test("CI runs the one list of checks, and a release runs CI first", () => {
     "https://github.com/ProAnima/SignalLab/releases/latest/download/latest.json",
   ]);
   assert.ok(updater.endpoints.every((url) => url.startsWith("https://")), "never in the clear");
+  // The usage statistics go to the same hub's `events`, only from the desktop app, and only where it
+  // looks for updates on its own (never a development build or the tour): one gate for both.
+  assert.match(read("engine/src/stats.rs"), /pub fn endpoint\(\) -> String \{\s*hub::endpoint\("events"\)\s*\}/);
+  const shell = read("src-tauri/src/lib.rs");
+  assert.match(shell, /if update_checks\(\) \{[^}]*stats::run\(usage, stats::endpoint\(\), version, stats::BEAT\)/);
+  assert.match(shell, /fn update_checks\(\) -> bool \{\s*hub::automatic_here\(cfg!\(debug_assertions\)\)\s*\}/);
+  for (const front of ["server/src", "cli/src"]) {
+    for (const file of readdirSync(new URL(`../${front}`, import.meta.url), { recursive: true }).filter((name) => String(name).endsWith(".rs"))) {
+      assert.doesNotMatch(read(`${front}/${file}`), /stats::run|stats::endpoint/, `${front}/${file} sends no statistics`);
+    }
+  }
 });
 
 test("a release's image tags never move backwards", () => {

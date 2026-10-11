@@ -10,17 +10,32 @@ import { createServer } from "node:http";
 import { createServer as createTcpServer } from "node:net";
 
 /** A free loopback port for the given protocol (the OS picks; it is released at once). */
-export function freePort(kind = "tcp") {
-  return new Promise((resolve, reject) => {
+/**
+ * A port nothing listens on, from 20000–29999: below the ranges the system
+ * hands out by itself (Windows 49152+, Linux 32768+), where Windows with
+ * Hyper-V or Docker also reserves blocks of ports at any moment — a port asked
+ * for there with port 0 could be reserved by the time the tour binds it, and
+ * the bind is then refused. Tried until one binds.
+ */
+export async function freePort(kind = "tcp") {
+  for (let attempt = 0; attempt < 200; attempt++) {
+    const port = 20000 + Math.floor(Math.random() * 10000);
+    if (await binds(kind, port)) return port;
+  }
+  throw new Error(`no free ${kind} port in 20000–29999`);
+}
+
+function binds(kind, port) {
+  return new Promise((resolve) => {
     if (kind === "udp") {
       const socket = createSocket("udp4");
-      socket.on("error", reject);
-      socket.bind(0, "127.0.0.1", () => { const { port } = socket.address(); socket.close(() => resolve(port)); });
+      socket.on("error", () => { socket.close(); resolve(false); });
+      socket.bind(port, "127.0.0.1", () => socket.close(() => resolve(true)));
       return;
     }
     const server = createTcpServer();
-    server.on("error", reject);
-    server.listen(0, "127.0.0.1", () => { const { port } = server.address(); server.close(() => resolve(port)); });
+    server.on("error", () => resolve(false));
+    server.listen(port, "127.0.0.1", () => server.close(() => resolve(true)));
   });
 }
 

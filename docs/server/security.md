@@ -204,7 +204,9 @@ gh attestation verify oci://ghcr.io/proanima/signallab:[[version]] -R ProAnima/S
 
 ## What Signal Lab sends to the outside world {#outside}
 
-Besides the traffic you send, Signal Lab talks to two places, both the studio's.
+Besides the traffic you send, Signal Lab sends three things, all to the studio's hub
+(`hub.proanima.net`): update checks, anonymous usage statistics and feedback. Only an
+update check goes to GitHub, when the hub cannot be reached.
 
 ### Update checks {#update-check}
 
@@ -223,6 +225,24 @@ reached. The question carries:
 Only published releases are offered. A download whose signature does not match
 the key built into the app is not installed, and nothing is installed until you
 press [[ui:update.install]].
+
+### Usage statistics {#stats}
+
+Only the **desktop app** sends them; a server, a browser and the command line never
+do. With [[ui:about.stats]] on (in [[ui:about.open]]; it is on by default), the app tells
+the hub that it has started, then every 5 minutes while it runs that it is still
+running. Each message carries:
+
+- the same random number of this install that the update check sends;
+- the app's version;
+- the operating system and the processor architecture.
+
+Nothing else: not your name, the computer's name or address, nor anything you send,
+open or type. The hub uses the address a message comes from only to limit how often it
+is written to, and keeps none. Untick [[ui:about.stats]] and nothing more is sent from
+the next five-minute tick. When the hub cannot be reached, the app tries again at the
+next tick, without a word. Development builds never send, nor does an app started with
+`SIGNALLAB_NO_UPDATE_CHECK` set.
 
 ### Feedback {#feedback}
 

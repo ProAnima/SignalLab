@@ -69,6 +69,9 @@ Signal Lab 정보에는 버전, 개발자, 연락처 주소(복사 버튼 포함
 [업데이트](install.md#updates)를 참고하십시오. 브라우저에서는 [[ui:update.server]] 안내가
 표시됩니다. [[ui:about.writeUs]] 버튼은 피드백 양식을 엽니다.
 
+같은 섹션의 [[ui:about.stats]](기본값은 켜짐)는 데스크톱 앱이 익명 사용 통계를 보내도록
+허용합니다. [Signal Lab이 외부로 보내는 것](../server/security.md#stats)을 참고하세요.
+
 ### 개발자에게 문의하기 {#feedback}
 
 헤더의 **✉**를 누르면 개발자에게 바로 전달되는 양식이 열립니다.

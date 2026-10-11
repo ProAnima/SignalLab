@@ -237,6 +237,11 @@ von selbst sucht — etwa wenn die IT Updates selbst verteilt —, setzen Sie di
 `SIGNALLAB_NO_UPDATE_CHECK` auf einen beliebigen Wert; die Schaltfläche [[ui:update.check]] funktioniert weiterhin.
 Entwicklungs-Builds suchen nie von selbst.
 
+Solange sie läuft, sendet die App außerdem anonyme Nutzungsstatistiken, es sei denn,
+Sie entfernen den Haken bei [[ui:about.stats]] unter [[ui:about.open]]; was sie
+enthalten, steht unter [Was Signal Lab nach außen sendet](../server/security.md#stats).
+`SIGNALLAB_NO_UPDATE_CHECK` schaltet auch sie ab.
+
 ### Ein Server {#updates-server}
 
 Ein Server und die Seite, die ein Browser von ihm anzeigt, werden mit seinem Docker-Image aktualisiert, nie von

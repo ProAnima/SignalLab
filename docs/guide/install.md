@@ -237,6 +237,11 @@ looking on its own — when IT deploys updates itself, say — set the environme
 `SIGNALLAB_NO_UPDATE_CHECK` to any value; [[ui:update.check]] still works when pressed.
 Development builds never look on their own.
 
+While it runs, the app also sends anonymous usage statistics, unless you untick
+[[ui:about.stats]] in [[ui:about.open]]; what they carry is in
+[What Signal Lab sends to the outside world](../server/security.md#stats).
+`SIGNALLAB_NO_UPDATE_CHECK` turns them off too.
+
 ### A server {#updates-server}
 
 A server, and the page a browser shows from it, updates with its Docker image, never on

@@ -72,6 +72,10 @@ it), the source code and the license. In the desktop app its [[ui:update.title]]
 looks for, shows and installs updates — see [Updates](install.md#updates). In a browser
 it says [[ui:update.server]]. [[ui:about.writeUs]] opens the feedback form.
 
+In the same section, [[ui:about.stats]] (on by default) lets the desktop app send
+anonymous usage statistics; see
+[What Signal Lab sends to the outside world](../server/security.md#stats).
+
 ### Writing to the developers {#feedback}
 
 The **✉** in the header opens a form that goes straight to the developers:

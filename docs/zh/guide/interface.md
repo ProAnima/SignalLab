@@ -55,6 +55,8 @@ Signal Lab 启动时会打开您上次使用的界面。
 
 “关于”显示版本、开发者、联系地址（带一个复制按钮）、源代码和许可证。在桌面应用中，其中的 [[ui:update.title]] 部分用于查找、显示和安装更新——参见[更新](install.md#updates)。在浏览器中，它显示 [[ui:update.server]]。[[ui:about.writeUs]] 会打开反馈表单。
 
+在同一部分中，[[ui:about.stats]]（默认开启）允许桌面应用发送匿名使用统计；参见 [Signal Lab 向外界发送什么](../server/security.md#stats)。
+
 ### 给开发者留言 {#feedback}
 
 顶栏中的 **✉** 会打开一个直接发给开发者的表单：

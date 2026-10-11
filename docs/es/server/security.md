@@ -196,7 +196,10 @@ gh attestation verify oci://ghcr.io/proanima/signallab:[[version]] -R ProAnima/S
 
 ## Qué envía Signal Lab al exterior {#outside}
 
-Además del tráfico que envías tú, Signal Lab habla con dos lugares, ambos del estudio.
+Además del tráfico que envías, Signal Lab envía tres cosas, todas al hub del estudio
+(`hub.proanima.net`): las búsquedas de actualizaciones, estadísticas de uso anónimas y
+los comentarios. Solo la búsqueda de actualizaciones acude a GitHub, cuando no se puede
+acceder al hub.
 
 ### Búsqueda de actualizaciones {#update-check}
 
@@ -213,6 +216,26 @@ pulsas [[ui:update.check]], la aplicación pregunta al hub del estudio (`hub.pro
 
 Solo se ofrecen versiones publicadas. Una descarga cuya firma no coincide con la clave integrada en
 la aplicación no se instala, y no se instala nada hasta que pulsas [[ui:update.install]].
+
+### Estadísticas de uso {#stats}
+
+Solo las envía la **aplicación de escritorio**; un servidor, un navegador y la línea de
+comandos nunca lo hacen. Con la casilla [[ui:about.stats]] marcada (en
+[[ui:about.open]]; lo está por defecto), la aplicación avisa al hub de que se ha
+iniciado y, después, cada 5 minutos mientras se ejecuta, de que sigue en marcha. Cada
+mensaje lleva:
+
+- el mismo número aleatorio de esta instalación que envía la búsqueda de actualizaciones;
+- la versión de la aplicación;
+- el sistema operativo y la arquitectura del procesador.
+
+Nada más: ni tu nombre, ni el nombre o la dirección del equipo, ni nada de lo que
+envías, abres o escribes. El hub usa la dirección de la que llega un mensaje solo para
+limitar la frecuencia con la que se escribe en él, y no guarda ninguna. Desmarca
+[[ui:about.stats]] y, desde el siguiente intervalo de cinco minutos, no se envía nada
+más. Si no se puede acceder al hub, la aplicación lo vuelve a intentar en el siguiente
+intervalo, sin avisar. Las compilaciones de desarrollo nunca envían nada, como tampoco
+una aplicación iniciada con `SIGNALLAB_NO_UPDATE_CHECK` definida.
 
 ### Comentarios {#feedback}
 

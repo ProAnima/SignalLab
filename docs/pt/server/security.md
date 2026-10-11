@@ -192,7 +192,10 @@ gh attestation verify oci://ghcr.io/proanima/signallab:[[version]] -R ProAnima/S
 
 ## O que o Signal Lab envia para o mundo exterior {#outside}
 
-Além do tráfego que você envia, o Signal Lab conversa com dois lugares, ambos do estúdio.
+Além do tráfego que você envia, o Signal Lab envia três coisas, todas para o hub do
+estúdio (`hub.proanima.net`): verificações de atualização, estatísticas de uso anônimas
+e feedback. Só a verificação de atualização recorre ao GitHub, quando o hub não pode
+ser alcançado.
 
 ### Verificação de atualizações {#update-check}
 
@@ -209,6 +212,25 @@ e a versão mais recente do GitHub só quando o hub não pode ser alcançado. A 
 
 Só versões publicadas são oferecidas. Um download cuja assinatura não confere com a chave embutida
 no aplicativo não é instalado, e nada é instalado até você pressionar [[ui:update.install]].
+
+### Estatísticas de uso {#stats}
+
+Só o **aplicativo de desktop** as envia; um servidor, um navegador e a linha de
+comando nunca o fazem. Com a opção [[ui:about.stats]] marcada (em [[ui:about.open]];
+ela vem marcada), o aplicativo avisa o hub de que foi iniciado e, depois, a cada
+5 minutos enquanto está em execução, de que continua rodando. Cada mensagem leva:
+
+- o mesmo número aleatório desta instalação que a verificação de atualização envia;
+- a versão do aplicativo;
+- o sistema operacional e a arquitetura do processador.
+
+Nada mais: nem o seu nome, nem o nome ou o endereço do computador, nem nada do que você
+envia, abre ou digita. O hub usa o endereço de onde vem uma mensagem só para limitar a
+frequência com que se escreve nele, e não guarda nenhum. Desmarque [[ui:about.stats]] e,
+a partir do próximo intervalo de cinco minutos, nada mais é enviado. Quando o hub não
+pode ser alcançado, o aplicativo tenta de novo no próximo intervalo, sem avisar. Builds
+de desenvolvimento nunca enviam nada, nem um aplicativo iniciado com
+`SIGNALLAB_NO_UPDATE_CHECK` definida.
 
 ### Comentários {#feedback}
 

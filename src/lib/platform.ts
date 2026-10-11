@@ -173,6 +173,22 @@ function installId(): string | null {
 }
 
 /**
+ * The anonymous usage statistics' setting, handed to the desktop shell at start
+ * and whenever it changes: this install's id (the update check's, so the hub
+ * sees one install) and whether the person lets the app send. The shell sends
+ * only in a release build that looks for updates on its own; nothing is sent
+ * without an id. Never in a browser: a server sends no statistics.
+ */
+export async function configureStats(enabled: boolean): Promise<void> {
+  if (!isDesktop) return;
+  try {
+    await tauriInvoke("stats_configure", { installId: installId(), enabled });
+  } catch {
+    // An older shell, or none: then nothing is sent.
+  }
+}
+
+/**
  * The newest published release offered to this app, if it is newer; never in a
  * browser. The hub answers first (`plugins.updater.endpoints`): what its stable
  * channel offers this install, or nothing; GitHub's latest release only when

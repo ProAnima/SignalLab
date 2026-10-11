@@ -133,7 +133,7 @@ gh attestation verify oci://ghcr.io/proanima/signallab:[[version]] -R ProAnima/S
 
 ## Signal Lab 向外界发送什么 {#outside}
 
-除了您发送的流量，Signal Lab 只与两个地方通信，都属于工作室。
+除了您自己发送的流量之外，Signal Lab 还会发送三类内容，全部发往工作室的 Hub（`hub.proanima.net`）：更新检查、匿名使用统计和反馈。只有更新检查会在无法连接 Hub 时转而询问 GitHub。
 
 ### 更新检查 {#update-check}
 
@@ -144,6 +144,16 @@ gh attestation verify oci://ghcr.io/proanima/signallab:[[version]] -R ProAnima/S
 - 此安装的一个随机数（`X-Install-Id`），生成一次，并与应用的设置一起保存，这样新版本可以先推送给一部分安装。它不包含任何关于您或这台电脑的信息。
 
 只提供已发布的版本。签名与应用内置密钥不匹配的下载不会被安装，在您按下 [[ui:update.install]] 之前也不会安装任何内容。
+
+### 使用统计 {#stats}
+
+只有**桌面应用**会发送使用统计；服务器、浏览器和命令行从不发送。在 [[ui:about.stats]] 开启时（位于 [[ui:about.open]] 中，默认开启），应用会在启动时告知 Hub，之后在运行期间每 5 分钟告知一次它仍在运行。每条消息包含：
+
+- 与更新检查发送的相同的本次安装的随机编号；
+- 应用的版本；
+- 操作系统和处理器架构。
+
+除此之外不发送任何内容：不含您的姓名、计算机的名称或地址，也不含您发送、打开或输入的任何内容。Hub 只用消息来源的地址来限制写入频率，不会保存任何地址。取消勾选 [[ui:about.stats]] 后，从下一个 5 分钟周期起不再发送任何内容。无法连接 Hub 时，应用会在下一个周期静默重试。开发版本从不发送，设置了 `SIGNALLAB_NO_UPDATE_CHECK` 后启动的应用也不会发送。
 
 ### 反馈 {#feedback}
 

@@ -244,6 +244,11 @@ máquina verifiquem por conta própria — quando a TI implanta as atualizaçõe
 [[ui:update.check]] continua funcionando quando pressionado. Builds de desenvolvimento nunca
 verificam por conta própria.
 
+Enquanto está em execução, o aplicativo também envia estatísticas de uso anônimas, a
+menos que você desmarque [[ui:about.stats]] em [[ui:about.open]]; o que elas contêm está
+em [O que o Signal Lab envia para o mundo exterior](../server/security.md#stats).
+`SIGNALLAB_NO_UPDATE_CHECK` também as desativa.
+
 ### Um servidor {#updates-server}
 
 Um servidor, e a página que um navegador mostra a partir dele, se atualiza com a sua imagem

@@ -246,6 +246,8 @@ export const ko: Dict = {
   "about.source": "소스 코드",
   "about.license": "라이선스",
   "about.writeUs": "개발자에게 문의",
+  "about.stats": "익명 사용 통계 보내기",
+  "about.statsHint": "Signal Lab이 시작되었음을, 그 뒤로는 실행 중인 동안 5분마다 아직 실행 중임을 이 설치의 임의 번호, 버전, 시스템과 함께 ProAnima 허브에 알립니다. 그 밖에는 아무것도 보내지 않습니다. 이름, 이 컴퓨터의 이름이나 주소, 보내거나 여는 내용도 보내지 않습니다",
   "update.title": "업데이트",
   "update.check": "업데이트 확인",
   "update.checking": "확인 중…",

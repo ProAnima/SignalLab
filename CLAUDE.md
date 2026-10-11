@@ -169,6 +169,7 @@ engine/src/               signal-lab-engine — no Tauri, no window
   firewall.rs             Windows Firewall per program: status (COM, any language), allow (UAC)
   feedback.rs             feedback_send: the form to the studio's hub, its limits checked first
   hub.rs                  where the hub is (SIGNALLAB_HUB_URL) and Signal Lab's project on it (docs/develop/hub.md)
+  stats.rs                the desktop app's usage statistics: launch, then a heartbeat every 5 min, to the hub's events
 engine/tests/burst.rs     the HTTP burst against loopback: closed, paced, missed, stopped
 engine/tests/load.rs      a node under load: a ramp failing p95 for the right reason, progress, statuses and
                           causes, missed, Stop, validation, two runs compared
@@ -345,6 +346,15 @@ src/components/FirewallBanner.tsx  the desktop app's firewall notice, with Allow
   the app's settings (`installId`), and the *Check once a day* tip says so.
   Installing is a person's click: `flushAll`, jobs stopped, then the installer.
   Debug builds and the tour (`SIGNALLAB_NO_UPDATE_CHECK`) never look on their own.
+- **Usage statistics come only from the desktop app, and only with consent.**
+  `engine/src/stats.rs` posts `launch` once, then `heartbeat` every 5 minutes, to
+  `hub::endpoint("events")`: the update check's install id (`stats_configure` from
+  the interface; no id, nothing sent), version, `os`/`arch` as the updater's
+  `{{target}}`/`{{arch}}`, channel `stable` — nothing else. A launch not taken goes
+  again at the next tick; failures are silent. *Send anonymous usage statistics* in
+  About (on by default) stops it at the next tick. The shell starts it only where
+  `update_checks` is true (`hub::automatic_here`: never a debug build or the tour);
+  the server and the CLI never send (`tests/delivery.test.mjs`).
 - **The app carries no secret for feedback.** `feedback_send` posts to the
   studio's hub (`hub::endpoint("feedback")`; `SIGNALLAB_HUB_URL`, default
   hub.proanima.net), which alone holds the mailbox's password and fixes the

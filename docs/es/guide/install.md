@@ -242,6 +242,11 @@ busque por su cuenta (cuando TI despliega las actualizaciones por sí mismo, por
 variable de entorno `SIGNALLAB_NO_UPDATE_CHECK` con cualquier valor; [[ui:update.check]] sigue
 funcionando al pulsarlo. Las compilaciones de desarrollo nunca buscan por su cuenta.
 
+Mientras se ejecuta, la aplicación también envía estadísticas de uso anónimas, salvo
+que desmarques [[ui:about.stats]] en [[ui:about.open]]; lo que contienen está en
+[Qué envía Signal Lab al exterior](../server/security.md#stats).
+`SIGNALLAB_NO_UPDATE_CHECK` también las desactiva.
+
 ### Un servidor {#updates-server}
 
 Un servidor, y la página que un navegador muestra desde él, se actualiza con su imagen de Docker,

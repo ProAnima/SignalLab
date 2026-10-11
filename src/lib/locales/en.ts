@@ -249,6 +249,8 @@ export const en = {
   "about.source": "Source code",
   "about.license": "License",
   "about.writeUs": "Write to the developers",
+  "about.stats": "Send anonymous usage statistics",
+  "about.statsHint": "Tells the ProAnima hub that Signal Lab started, then every 5 minutes that it is still running, with a random number of this install, the version and the system. Nothing else: not your name, this computer's or its address, nor anything you send or open",
   "update.title": "Updates",
   "update.check": "Check for updates",
   "update.checking": "Checking…",

@@ -235,6 +235,11 @@ Windows에서는 업데이트가 질문 없이 설치 프로그램을 실행하�
 값으로나 설정하십시오. 그래도 [[ui:update.check]] 버튼을 누르면 확인합니다.
 개발 빌드는 스스로 확인하지 않습니다.
 
+앱은 실행되는 동안 익명 사용 통계도 보냅니다. [[ui:about.open]]에서 [[ui:about.stats]]를
+해제하면 보내지 않습니다. 담기는 내용은
+[Signal Lab이 외부로 보내는 것](../server/security.md#stats)에 있습니다.
+`SIGNALLAB_NO_UPDATE_CHECK`도 이를 끕니다.
+
 ### 서버 {#updates-server}
 
 서버와 브라우저가 서버에서 받아 표시하는 페이지는 Docker 이미지와 함께 업데이트되며, 스스로
