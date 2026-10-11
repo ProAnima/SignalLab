@@ -972,10 +972,11 @@ mod tests {
         let target = UdpSocket::bind("127.0.0.1:0").await.unwrap();
         let (downstream, upstream) = open("127.0.0.1:0".parse().unwrap(), "127.0.0.1:0", target.local_addr().unwrap(), "target").await.unwrap();
         let listen = downstream.local_addr().unwrap();
-        let relay = Relay::new(listen, target.local_addr().unwrap(), RelayProtocol::Udp, ImpairProfile { latency_ms: 10_000.0, ..calm() }, 1);
+        let relay = Relay::new(listen, target.local_addr().unwrap(), RelayProtocol::Udp, ImpairProfile { latency_ms: MAX_DELAY_MS, ..calm() }, 1);
         let serving = tokio::spawn(relay.clone().serve(Host::new(Recorder::new(), Capture::new()), 0, "test".into(), downstream, upstream));
         let client = UdpSocket::bind("127.0.0.1:0").await.unwrap();
         let datagram = vec![7u8; 60_000];
+        let began = std::time::Instant::now();
         let fits = MAX_IN_FLIGHT_BYTES / datagram.len();
         for _ in 0..fits + 200 {
             client.send_to(&datagram, listen).await.unwrap();
@@ -983,6 +984,10 @@ mod tests {
             tokio::time::sleep(Duration::from_micros(200)).await;
         }
         tokio::time::sleep(Duration::from_millis(300)).await;
+        // Held for the longest delay there is: a coarse timer (15 ms on a
+        // Windows runner) stretches the paced sends to some 20 s, all still
+        // before the first is due, so nothing has been forwarded yet.
+        assert!(began.elapsed() < Duration::from_secs_f64(MAX_DELAY_MS / 1000.0), "sending outlasted the delay");
         let counts = relay.counts();
         assert!(counts.received > fits as u64, "enough arrived to pass the limit: {counts:?}");
         assert_eq!(counts.throttled, counts.received - fits as u64, "{counts:?}");
