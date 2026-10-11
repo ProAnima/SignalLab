@@ -33,7 +33,7 @@ en la franja de la consola y también se puede detener allí.
 | [[ui:common.port]] | El puerto del bróker | `1883` |
 | [[ui:mq.clientId]] | El nombre de tu cliente en el bróker. No puede estar vacío y debe ser único allí: un segundo cliente con el mismo id expulsa al primero. | `signal-lab-` y seis dígitos hexadecimales aleatorios, nuevos cada vez que se inicia la aplicación |
 | [[ui:mq.username]], [[ui:mq.password]] | Se envían solo si el bróker los necesita — en texto plano, ya que no hay TLS. Una contraseña sin nombre de usuario no se envía: MQTT 3.1.1 no puede transportarla. | vacío |
-| [[ui:mq.keepAlive]] | Segundos que la conexión puede estar en silencio. Signal Lab hace ping al bróker cada mitad de ese tiempo; un bróker descarta a un cliente que calla 1,5 veces ese tiempo. 0 desactiva el ping. | `60` |
+| [[ui:mq.keepAlive]] | Segundos que la conexión puede estar en silencio. Signal Lab hace ping al bróker cada mitad de ese tiempo; un bróker descarta a un cliente que calla 1,5 veces ese tiempo, y Signal Lab termina la conexión («No answer from … in time») cuando el bróker no ha dicho nada —ni siquiera a sus pings— durante 1,5 veces ese tiempo. 0 desactiva el ping. | `60` |
 | [[ui:mq.cleanSession]] | Activado: cada conexión empieza sin suscripciones guardadas ni mensajes en cola. Desactivado pide al bróker que las conserve para este id de cliente entre conexiones. | activado |
 | [[ui:mq.scanFilter]] y su [[ui:mq.qos]] | Un filtro al que se suscribe en cuanto la conexión está lista; `#` es todos los temas. Vacío: ninguno. | `#`, QoS 0 |
 | [[ui:mq.willEnable]] | Dar una última voluntad al bróker ([más abajo](#will)) | desactivado |
@@ -88,13 +88,19 @@ tenido cuando hay más de uno. Haz clic en un nivel para abrirlo o cerrarlo.
 - Sobre el árbol están el número de temas, cuántos guardan un valor retenido y, mientras
   estás conectado, el bróker en el que escuchas.
 - Las cargas útiles se muestran como texto; los bytes que no son UTF-8 se muestran como
-  caracteres de reemplazo.
+  caracteres de reemplazo. De una carga útil de más de 4 KB se muestra el comienzo, con su
+  tamaño total; no se puede copiar a [[ui:mq.publish]] ni guardar como señal, porque se
+  enviaría cortada.
 - [[ui:common.clear]] vacía el árbol. Nada más lo hace: se queda como está cuando cambias
   de pantalla o te desconectas, hasta que se cierra la aplicación.
 
-Los mensajes llegan a la pantalla en lotes, diez veces por segundo. Cuando un bróker envía
-más de 4000 mensajes en una décima de segundo, los más antiguos de ese lote se dejan fuera
-del árbol y se cuentan como "no mostrados" sobre él.
+Los mensajes llegan a la pantalla en lotes, diez veces por segundo, cada uno con el
+último mensaje de cada tema que tuvo alguno y cuántos tuvo: una avalancha sobre unos pocos
+temas no pierde nada, y todos los recuentos son correctos. Cuando un lote se llena — 4000
+temas, o 2 MB de cargas útiles, como lo hacen los valores retenidos de un bróker al
+suscribirse a `#` — la conexión sigue leyendo solo cuando ha salido, así que el bróker
+espera en lugar de perderse un tema enviado una sola vez. El árbol guarda hasta 100 000
+temas; los mensajes de temas más allá de eso se cuentan como "no mostrados" sobre él.
 
 ### El panel de un tema {#topic}
 
@@ -226,7 +232,7 @@ alcanzar o lo rechazó. Consulta
 | `… is unavailable right now — try again later` | El bróker está activo pero no acepta clientes. |
 | `Enter a client ID — brokers refuse an empty one` | [[ui:mq.clientId]] está vacío. |
 | `A publish topic cannot contain the wildcards + or #` | El tema al que publicar tiene un `+` o un `#`. Esos son para suscribirse; publica en un tema a la vez. |
-| Un filtro muestra [[ui:mq.refused]] | Las reglas de acceso del bróker lo prohíben, o el filtro está mal formado (`#` no al final, `+` compartiendo nivel con otros caracteres). |
+| Un filtro muestra [[ui:mq.refused]] | Las reglas de acceso del bróker lo prohíben. Un filtro mal formado (`#` no al final, `+` compartiendo nivel con otros caracteres) se rechaza antes de enviarlo: los bróker cierran toda la conexión por uno. |
 | La conexión se corta un momento después de conectar | Otro cliente se conectó con el mismo [[ui:mq.clientId]]. |
 | No aparece nada en el árbol | El filtro de exploración está vacío, o el bróker no deja ver nada a este cliente. |
 

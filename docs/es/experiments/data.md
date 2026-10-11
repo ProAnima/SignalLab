@@ -140,6 +140,10 @@ Un nombre de campo después de `.` puede contener letras, dígitos, `_` y `-`. L
 | `null` | `null` |
 | objeto, array | JSON compacto: `["x","y"]` |
 
+Un campo, una vez escritos sus valores, ocupa como máximo 16 MiB; más allá el paso falla
+con `template.too_large` — un valor grande usado una y otra vez no puede hacer uno
+sin límite.
+
 ### Valores integrados {#built-ins}
 
 | Expresión | Valor |
@@ -439,7 +443,9 @@ reemplaza por `••••` en todo lo que sale del motor:
   cada byte de un valor se convierte en `*`, así que los desplazamientos siguen siendo correctos.
 
 La autenticación Basic envía `name:password` en base64; cuando una de las dos partes contiene un
-secreto, ese texto base64 también se enmascara. El tráfico en sí lleva el valor real. La vista previa
+secreto, ese texto base64 también se enmascara. También lo están las formas que dan a un valor una solicitud y un
+servidor que la repite: codificado con porcentajes como en una URL o un formulario, con el `+` de una
+consulta leído de vuelta como un espacio, y escapado dentro de JSON. El tráfico en sí lleva el valor real. La vista previa
 muestra un secreto guardado como `••••`. Las respuestas de un [[ui:exp.node.emulator]] no pueden usar
 secretos.
 

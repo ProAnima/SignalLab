@@ -152,7 +152,7 @@ OSC-Bundles mit ihren Argumenten, die Header einer HTTP-Antwort und der Anfang i
 die Anfrage eines Emulators und seine Antwort.
 
 Unter [[ui:ins.rawBytes]] steht ein Hex-Dump: Offset, 16 Bytes in Hex und dieselben Bytes als
-Text. Die Liste enthält das erste KiB jedes Frames; ist ein Frame länger, lädt eine
+Text. Die Liste enthält die ersten 256 Bytes jedes Frames; ist ein Frame länger, lädt eine
 Schaltfläche unter dem Dump alles davon.
 
 ### Was ein Frame behält {#limits}
@@ -241,7 +241,7 @@ gibt.
 
 - **`.jsonl`** — ein JSON-Objekt pro Zeile, eine Zeile pro Frame: `seq`, `ts` (Millisekunden
   seit 1970), `proto`, `dir`, `source`, `job_id`, `local`, `remote`, `bytes`, `kept`,
-  `summary`, `detail`, `hex` (der Dump des ersten KiB), `verdict` und `data`, die behaltenen
+  `summary`, `detail`, `hex` (der Dump der ersten 256 Bytes), `verdict` und `data`, die behaltenen
   Bytes als Base64.
 - **`.txt`** — zum Lesen: eine Zeile pro Frame mit seiner Nummer, Zeit, Richtung, Protokoll,
   Gegenstelle, Größe und seinem Befund, dann sein Inhalt, sein dekodierter Text und ein

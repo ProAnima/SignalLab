@@ -26,7 +26,7 @@ programarlo en un experimento.
 | --- | --- | --- |
 | [[ui:field.url]] | `ws://` o `wss://`, un host, un puerto opcional (80 para `ws`, 443 para `wss`) y una ruta de acceso | `ws://127.0.0.1:9001/` |
 | [[ui:exp.wsProtocols]] | Subprotocolos que ofrecer, separados por comas, en orden de preferencia; el servidor elige uno. Un nombre no tiene espacios, comas ni barras. | ninguno |
-| [[ui:http.headers]] | Encabezados extra para la solicitud de upgrade; [[ui:http.addHeader]] añade una fila. Una fila sin nombre se omite. | ninguno |
+| [[ui:http.headers]] | Encabezados extra para la solicitud de upgrade; [[ui:http.addHeader]] añade una fila. Una fila sin nombre se omite. Un `Host` (u otro encabezado que el propio upgrade escribe, como `Sec-WebSocket-Version`) sustituye al que enviaría el upgrade. | ninguno |
 
 Conectar — la resolución del nombre, la conexión TCP, TLS para `wss://` y el
 upgrade — tiene 10 segundos. La URL se conserva cuando cambias de pantalla y cuando
@@ -81,10 +81,14 @@ Haz clic en un mensaje para verlo entero bajo la lista: JSON formateado, binario
 Un mensaje muy largo se muestra en parte — texto hasta 64 KiB, binario hasta
 4096 bytes — y entonces no se puede copiar, porque se enviaría cortado.
 
-La pantalla conserva los 2000 mensajes más recientes; [[ui:common.clear]] vacía la
-lista. Si un servicio envía más rápido de lo que la pantalla puede asumir — más de 2000 en una
-décima de segundo — los más antiguos de esos se omiten de la lista y se cuentan como
-"sin mostrar". El Inspector todavía los tiene mientras la captura está activada.
+La pantalla conserva los 2000 mensajes más recientes, menos cuando son largos (8
+millones de caracteres en total); [[ui:common.clear]] vacía la lista. Los recuentos de
+recibidos y enviados sobre ella son los de la conexión, con todos los mensajes. Si un
+servicio envía más rápido de lo que la pantalla puede asumir — más de 2000 mensajes, o
+1 MB de texto, en una décima de segundo — los más antiguos de esos se omiten de la lista y
+se cuentan como "sin mostrar". El Inspector todavía los tiene mientras la captura está
+activada. Por rápido que inunde un servicio, [[ui:ws.disconnect]] y una parada siguen
+surtiendo efecto al instante.
 
 ## Cerrar {#close}
 
@@ -160,7 +164,7 @@ falla. Consulta [Línea de comandos](../automation/cli.md#cli-send-ws).
 | Lo que ves | Causa habitual |
 | --- | --- |
 | `… is not a WebSocket address` | La URL no empieza por `ws://` o `wss://`, o no tiene host. |
-| `… answered HTTP n instead of switching to WebSocket` | El servidor rechazó el upgrade: una ruta de acceso equivocada (404), un token ausente o incorrecto (401, 403). El inicio de su respuesta está bajo los detalles técnicos. |
+| `… answered HTTP n instead of switching to WebSocket` | El servidor rechazó el upgrade: una ruta de acceso equivocada (404), un token ausente o incorrecto (401, 403). El inicio del cuerpo de su respuesta (por `ws://`, lo que llega en 0,3 s) está bajo los detalles técnicos. |
 | `… did not take any of the subprotocols offered` | Ofreciste subprotocolos y el servidor no eligió ninguno, o respondió con uno que no ofreciste. |
 | `… is not a subprotocol name` | Un nombre con un espacio, una coma o una barra. |
 | `The header … cannot be sent with the upgrade` | Un nombre o valor de encabezado con caracteres que HTTP no permite. |

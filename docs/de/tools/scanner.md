@@ -19,7 +19,9 @@ Intrusion-Detection auslösen und ist oft gegen die Regeln.
 
 ## Einen Host scannen {#scan}
 
-1. Geben Sie den [[ui:sc.host]] ein: ein Host, eine IP-Adresse oder ein Name.
+1. Geben Sie den [[ui:sc.host]] ein: ein Host, eine IP-Adresse oder ein Name. Ein Name
+   wird einmal nachgeschlagen, wenn der Scan startet; einer, der sich nicht auflösen
+   lässt, hält ihn dort an, mit dem Grund.
 2. Setzen Sie [[ui:sc.fromPort]] und [[ui:sc.toPort]] oder wählen Sie eine [[ui:sc.preset]].
 3. Passen Sie [[ui:common.concurrency]] und [[ui:common.timeoutMs]] an, wenn nötig.
 4. Lassen Sie [[ui:sc.grabBanner]] an, um zu lesen, was jeder Dienst als Erstes sagt.
@@ -33,7 +35,7 @@ versuchte Ports werden nicht versucht. Die Felder sind fest, solange er läuft.
 | Feld | Was | Standard |
 | --- | --- | --- |
 | [[ui:sc.host]] | Der zu scannende Host. | `127.0.0.1` |
-| [[ui:sc.fromPort]], [[ui:sc.toPort]] | Der Bereich, beide Enden eingeschlossen, 1–65 535. Ist der erste größer, werden sie getauscht. | 1–1024 |
+| [[ui:sc.fromPort]], [[ui:sc.toPort]] | Der Bereich, beide Enden eingeschlossen, 1–65 535: Eine Zahl, die über ein Ende hinaus getippt wird, hält dort an. Ist der erste größer, werden sie getauscht. | 1–1024 |
 | [[ui:common.concurrency]] | Wie viele Verbindungsversuche gleichzeitig offen sind, 1–1024. | 400 |
 | [[ui:common.timeoutMs]] | Wie lange auf jede Verbindung gewartet wird, 50–10 000 ms. | 500 |
 | [[ui:sc.grabBanner]] | Nach dem Verbinden bis zu 400 ms darauf warten, dass der Dienst etwas sendet, und seine ersten 256 Bytes behalten. | an |
@@ -55,7 +57,9 @@ beim Start des Scans in ihn gebracht.
 Ein Port, der annimmt, antwortet sofort. Ein Port, der nicht annimmt, kann bis zum ganzen
 Timeout kosten: Eine Firewall, die Verbindungsversuche verwirft, antwortet nie, und unter
 Windows kann sogar eine Verweigerung länger dauern als der Standard-Timeout. Ein Scan eines
-Hosts, der gar nichts beantwortet, dauert also etwa:
+Hosts, der gar nichts beantwortet, dauert also etwa (unter Windows braucht ein
+verweigerter Port etwa 2 s, weil Windows es erneut versucht, dort entscheidet also der
+Timeout):
 
 ```text
 ports ÷ concurrency × timeout
@@ -78,13 +82,28 @@ Portreihenfolge:
 
 Ein Port, der verweigert hat, und einer, der nicht innerhalb des Timeouts geantwortet hat,
 bleiben beide aus: Der Scanner unterscheidet nicht zwischen geschlossen und gefiltert. Die
-Liste behält bis zu 2000 offene Ports.
+Liste behält jeden offenen Port, wie viele es auch sind.
+
+Wenige offene Ports sind das übliche Ergebnis: Ein Windows-PC empfängt unter den ersten
+tausend Ports typischerweise auf 135 und 445 (und 139 auf seiner Netzwerkadresse), die
+meisten Geräte auf einer Handvoll. Zum Vergleich listen Sie auf, worauf dieser Computer
+empfängt, mit `netstat -an` (oder `Get-NetTCPConnection -State Listen` in PowerShell).
+
+### Nicht geprüfte Ports {#unchecked}
+
+Jede Verbindung belegt einen der eigenen Ports dieses Computers. Gehen sie aus — oder die
+Sockets —, scheitert ein Versuch hier, bevor er den Host erreicht; der Scanner wartet und
+versucht es erneut, und ein Port, den er dennoch nicht versuchen kann, wird als
+*nicht geprüft* gezählt, in Bernstein neben der Zahl der offenen angezeigt, nie als
+geschlossen. Sehen Sie das, scannen Sie erneut mit einer niedrigeren
+[[ui:common.concurrency]].
 
 Nur Dienste, die zuerst sprechen, haben ein Banner — SSH, SMTP, FTP, viele
 Gerätesteuerungsprotokolle. Ein Webserver wartet auf eine Anfrage, daher zeigt sein Port `—`.
 Das Auslesen von Bannern lässt jeden offenen Port bis zu 400 ms länger dauern.
 
-Eine Verbindung, die der Scanner öffnet, wird sofort wieder geschlossen. Der Scanner sendet
+Eine Verbindung, die der Scanner öffnet, wird sofort mit einem Reset wieder geschlossen,
+sie hält also danach nicht minutenlang den Port dieses Computers. Der Scanner sendet
 nichts darauf.
 
 Mit eingeschaltetem Mitschnitt steht jeder offene Port auch im [Inspektor](inspector.md), mit

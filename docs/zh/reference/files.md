@@ -44,7 +44,7 @@ Signal Lab 保存的一切都是纯 JSON（或文本），放在一个文件夹�
 
 ## 格式 {#formats}
 
-它们都是 UTF-8 的 JSON，带缩进书写，便于阅读和对比差异。每个文件都带有一个 `version`；较旧版本的文件在打开时会被读取并迁移，并在下次保存时按当前版本写回——此后较旧的 Signal Lab 就无法打开它。
+它们都是 UTF-8 的 JSON，带缩进书写，便于阅读和对比差异。每个文件都带有一个 `version`；较旧版本的文件在打开时会被读取并迁移，并在下次保存时按当前版本写回——此后较旧的 Signal Lab 就无法打开它。版本比当前 Signal Lab 所知更新的文件会被拒绝（`doc.version_unsupported`）并保持原样：若强行读取，更新版本所新增的内容会在下次保存时丢失。实验和两个库都是如此。
 
 ### experiment.json {#experiment-json}
 
@@ -114,11 +114,11 @@ Signal Lab 保存的一切都是纯 JSON（或文本），放在一个文件夹�
 
 ### 运行报告 {#run-reports}
 
-`runs/run-<started ms>-<job>.json`，报告版本 5：每个通过或失败的运行一个文件，绝不覆盖（同名第二次运行会加 `-2`、`-3`……）。被停止的运行不会保存报告。
+`runs/run-<started ms>-<job>.json`，报告版本 6：每个通过或失败的运行一个文件，绝不覆盖（同名第二次运行会加 `-2`、`-3`……）。被停止的运行不会保存报告。
 
 | 字段 | 它是什么 |
 | --- | --- |
-| `version` | 5 |
+| `version` | 6 |
 | `experiment` | 实验的名称 |
 | `document_version` | 所运行文档的版本 |
 | `seed`、`profile` | 运行所用的值 |
@@ -127,7 +127,7 @@ Signal Lab 保存的一切都是纯 JSON（或文本），放在一个文件夹�
 | `started_ms`、`ended_ms` | 自 1970 年以来的毫秒数 |
 | `outcome` | `passed` 或 `failed` |
 | `error` | 它的第一个失败，或 null |
-| `steps` | 每个步骤，格式为 [`experiment://step`](../api/events.md#event-experiment-step) |
+| `steps` | 步骤，格式为 [`experiment://step`](../api/events.md#event-experiment-step)：前 5 000 个之后每秒一个，以及最后 500 个，缺口以 `omitted` 计数（自版本 6 起） |
 | `emulators` | 每个 [[ui:exp.node.emulator]] 节点收到和应答的内容（自版本 3 起）；没有时省略 |
 | `impairments` | 每个 [[ui:exp.node.impairment]] 节点的中继逐阶段做了什么（自版本 4 起）；没有时省略 |
 
@@ -165,7 +165,7 @@ Signal Lab 不写日志文件；参见[故障排除](troubleshooting.md#logs)。
 ## 备份、编辑、移动 {#backup}
 
 - **备份**：复制整个文件夹。其中一切都是自包含的 JSON；机密值不在其中，因此在新机器上需要重新设置。
-- **编辑** `signals.json`、`emulators.json` 和 `experiment.json` 时，请在 Signal Lab 关闭时手工进行（在服务器上则是没有页面打开时）：应用会根据自己的内容写入整个文件，因此它运行时所做的更改会在下次保存时被覆盖。错误会在下次读取文件时连同行和列一起报告，绝不会被静默替换——对于 `signals.json`，应用向其保存时也是如此：该保存会被拒绝，文件保持您离开时的样子。
+- **编辑** `signals.json`、`emulators.json` 和 `experiment.json` 时，请在 Signal Lab 关闭时手工进行（在服务器上则是没有页面打开时）：应用会根据自己的内容写入整个文件。对于 `signals.json` 和 `emulators.json`，如果保存时文件自应用读取以来已发生变化，保存会被拒绝（`file.changed`），您的更改会保留——按“重新加载”即可读取它；`experiment.json` 则会被编辑器的下次保存覆盖。错误会在下次读取文件时连同行和列一起报告，绝不会被静默替换——对于 `signals.json` 和 `emulators.json`，应用向其保存时也是如此：该保存会被拒绝，文件保持您离开时的样子。
 - **删除** `runs/`、`exports/` 和 `capture-*` 文件随时都可以。删除 `signals.json` 或 `emulators.json` 会恢复起始集合；删除 `experiment.json` 会恢复起始实验。
 - **移动**文件夹：复制它，并让 Signal Lab 指向新位置：服务器用 `--data-dir`，桌面应用用 `SIGNALLAB_DATA_DIR`。
 - **共享**实验：将其导出，或者把它针对的项目的 JSON 一并提交；[`signallab run`](../automation/cli.md#cli-run) 会从那里运行它。

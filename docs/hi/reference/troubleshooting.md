@@ -8,7 +8,7 @@ description: Signal Lab की आम समस्याएँ और उन्�
 Signal Lab जो भी विफलता बताता है उसका एक कोड होता है; हर एक का संदेश
 [त्रुटि संदेश](errors.md) में है। नेटवर्क विफलताएँ [`transport`](errors.md#transport) कोड
 हैं: `refused`, `timeout`, `dns`, `unreachable`, `reset`, `address_in_use`,
-`address_unavailable`, `denied`, `tls`, `target_invalid`, `failed`. नीचे दी गई समस्याएँ आम हैं।
+`address_unavailable`, `denied`, `tls`, `target_invalid`, `exhausted`, `failed`. नीचे दी गई समस्याएँ आम हैं।
 
 ## कुछ नहीं पहुँचता {#nothing-arrives}
 
@@ -213,7 +213,7 @@ Signal Lab सादे TCP पर MQTT 3.1.1 बोलता है। यह �
 ## रन पाँच मिनट बाद रुक जाता है {#run-timeout}
 
 300 सेकंड से अधिक लेने वाला रन `run.timeout` के साथ विफल होता है; किसी रन का यह अधिकतम समय है।
-छोटी सीमा API (`/api/run` का `timeout`) या कमांड लाइन (`signallab run --timeout`) के ज़रिए रन
+छोटी सीमा API ([`/api/run`](../api/run.md#request) का `timeout`) या कमांड लाइन (`signallab run --timeout`) के ज़रिए रन
 को दी जा सकती है।
 
 ## ऐप अपडेट नहीं होता {#updates}

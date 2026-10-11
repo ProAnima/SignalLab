@@ -9,7 +9,7 @@ Cada fallo que reporta Signal Lab tiene un código; el mensaje de cada uno está
 [mensajes de error](errors.md). Los fallos de red son los códigos
 [`transport`](errors.md#transport): `refused`, `timeout`, `dns`,
 `unreachable`, `reset`, `address_in_use`, `address_unavailable`, `denied`,
-`tls`, `target_invalid`, `failed`. Los problemas de abajo son los habituales.
+`tls`, `target_invalid`, `exhausted`, `failed`. Los problemas de abajo son los habituales.
 
 ## No llega nada {#nothing-arrives}
 

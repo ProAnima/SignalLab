@@ -57,7 +57,10 @@ de l’exécution. Sur un serveur, chaque navigateur travaille sur le même
 Tous sont du JSON en UTF-8, écrit avec indentation pour bien se lire et se
 comparer. Chacun porte une `version` ; un fichier d’une version plus ancienne est
 lu et migré à son ouverture, puis réécrit dans la version courante à la prochaine
-sauvegarde — après quoi un Signal Lab plus ancien ne peut plus l’ouvrir.
+sauvegarde — après quoi un Signal Lab plus ancien ne peut plus l’ouvrir. Un fichier d’une version plus
+récente que celle que connaît ce Signal Lab est refusé (`doc.version_unsupported`) et laissé
+tel quel  lu quand même, ce que la version plus récente a ajouté serait perdu à la
+prochaine sauvegarde. Cela vaut pour l’expérience et les deux bibliothèques.
 
 ### experiment.json {#experiment-json}
 
@@ -153,13 +156,13 @@ contenant un émulateur, une liste de ceux-ci, ou une bibliothèque comme celle-
 
 ### Rapports d’exécution {#run-reports}
 
-`runs/run-<started ms>-<job>.json`, version de rapport 5 : un fichier par
+`runs/run-<started ms>-<job>.json`, version de rapport 6 : un fichier par
 exécution réussie ou échouée, jamais écrasé (une seconde exécution du même nom
 reçoit `-2`, `-3`…). Une exécution arrêtée n’en enregistre aucun.
 
 | Champ | Ce que c’est |
 | --- | --- |
-| `version` | 5 |
+| `version` | 6 |
 | `experiment` | Le nom de l’expérience |
 | `document_version` | La version du document exécuté |
 | `seed`, `profile` | Ce avec quoi elle a tourné |
@@ -168,7 +171,7 @@ reçoit `-2`, `-3`…). Une exécution arrêtée n’en enregistre aucun.
 | `started_ms`, `ended_ms` | Millisecondes depuis 1970 |
 | `outcome` | `passed` ou `failed` |
 | `error` | Son premier échec, ou null |
-| `steps` | Chaque étape, comme [`experiment://step`](../api/events.md#event-experiment-step) |
+| `steps` | Les étapes, comme [`experiment://step`](../api/events.md#event-experiment-step) : au-delà des 5 000 premières, une par seconde et les 500 dernières, un trou étant compté dans `omitted` (depuis la version 6) |
 | `emulators` | Ce que chaque nœud [[ui:exp.node.emulator]] a reçu et répondu (depuis la version 3) ; omis lorsqu’il n’y en a aucun |
 | `impairments` | Ce qu’a fait le relais de chaque nœud [[ui:exp.node.impairment]], phase par phase (depuis la version 4) ; omis lorsqu’il n’y en a aucun |
 
@@ -231,11 +234,13 @@ Signal Lab n’écrit aucun fichier journal ; voir [dépannage](troubleshooting
 - **Modifier** `signals.json`, `emulators.json` et `experiment.json` à la main
   pendant que Signal Lab est fermé (ou, sur un serveur, pendant qu’aucune page
   n’est ouverte) : l’application écrit tout le fichier à partir de ce qu’elle
-  détient, donc une modification faite pendant qu’elle tourne est écrasée par sa
-  prochaine sauvegarde. Une erreur est signalée avec la ligne et la colonne à la
-  prochaine lecture du fichier, jamais remplacée en silence — pour `signals.json`,
-  aussi lorsque l’application y sauvegarde : cette sauvegarde est refusée et le
-  fichier reste tel que vous l’avez laissé.
+  détient. Pour `signals.json` et `emulators.json`, une sauvegarde par-dessus un fichier
+  modifié depuis sa lecture par l’application est refusée (`file.changed`) et votre
+  modification est conservée — appuyez sur Recharger pour la lire  `experiment.json`
+  est écrasé par la prochaine sauvegarde de l’éditeur. Une erreur est signalée avec la
+  ligne et la colonne à la prochaine lecture du fichier, jamais remplacée en silence —
+  pour `signals.json` et `emulators.json`, aussi lorsque l’application y sauvegarde 
+  cette sauvegarde est refusée et le fichier reste tel que vous l’avez laissé.
 - **Supprimer** les fichiers `runs/`, `exports/` et `capture-*` à tout moment.
   Supprimer `signals.json` ou `emulators.json` ramène le jeu de départ ; supprimer
   `experiment.json` ramène l’expérience de départ.

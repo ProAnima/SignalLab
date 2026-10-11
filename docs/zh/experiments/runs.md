@@ -63,6 +63,8 @@ description: 使用实验的值或其他值启动运行、时间线、停止、�
 
 在画布上，每个节点带有一个显示其最新状态的标记。
 
+**长时间运行。**运行会逐个显示它的前 5 000 个步骤。超过之后——一个循环体很长的千次迭代 Loop 会产生十万多个——它每秒显示一个步骤和每次失败，并在结束时显示最后 500 个。琥珀色的一行会说明两行之间有多少被略去，折叠起来的时间线上的计数则是运行所做的每一个步骤。报告保留相同的步骤。
+
 时间线的标题包含：
 
 - 结果：[[ui:exp.running]]、带原因的 [[ui:exp.passed]]、[[ui:exp.failed]]，
@@ -112,7 +114,7 @@ description: 使用实验的值或其他值启动运行、时间线、停止、�
 
 | 键 | 内容 |
 | --- | --- |
-| `version` | 报告的格式，现为 5 |
+| `version` | 报告的格式，现为 6 |
 | `experiment` | 实验的名称 |
 | `document_version` | 实验的版本，现为 9 |
 | `seed` | 本次运行使用的种子 |
@@ -122,7 +124,7 @@ description: 使用实验的值或其他值启动运行、时间线、停止、�
 | `started_ms`、`ended_ms` | Unix 毫秒 |
 | `outcome` | `passed` 或 `failed` |
 | `error` | 第一个失败，或 `null` |
-| `steps` | 每个步骤事件，按顺序（见下文） |
+| `steps` | 步骤事件，按顺序（见下文）：前 5 000 个，然后每秒一个和每次失败，最后是最后 500 个 |
 | `emulators` | 每个 Emulator 节点的计数——有时出现（[模拟器](faults.md#emulator)） |
 | `impairments` | 每个 Impairment 节点的计数和阶段——有时出现（[阶段](faults.md#change-impairment)） |
 
@@ -139,12 +141,13 @@ description: 使用实验的值或其他值启动运行、时间线、停止、�
 | `error` | 失败原因：`code`、`params`、`node`、`field`、`detail` |
 | `frame` | 等待节点匹配到的 Inspector 帧，如果捕获已开启 |
 | `load` | 负载测得的内容（[测量项](load.md#metrics)），在其最后一个事件上 |
+| `omitted` | 紧挨在此步骤之前有多少个步骤被略去（有的话） |
 
 机密值绝不会出现在报告中：它们被遮蔽为 `••••`
 （[遮蔽](data.md#masking)）。
 
 报告的格式随功能增长：版本 3 添加了模拟器的
-计数，版本 4 添加了损伤的阶段，版本 5 添加了负载的测量。
+计数，版本 4 添加了损伤的阶段，版本 5 添加了负载的测量，版本 6 把长时间运行的步骤改为带 `omitted` 的抽样。
 
 报告就是运行历史：[[ui:exp.compare]] 读取它们，
 [`experiment_runs`](../api/commands.md#experiment_runs) 也是如此。命令行的

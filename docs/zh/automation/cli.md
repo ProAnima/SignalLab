@@ -369,7 +369,8 @@ signallab send osc <host:port> <address> [ARG]...
 | `T`、`F` | true、false |
 | `N` | nil |
 | `3`、`-3` | 普通整数是 int32 |
-| `2.5` | 普通小数是 float32 |
+| `3000000000` | 超出 32 位的整数是 int64 |
+| `2.5`、`1e3` | 普通小数或带指数的数字是 float32（超出 float32 范围时为 float64） |
 | 其他任何内容 | 字符串 |
 
 ```bash

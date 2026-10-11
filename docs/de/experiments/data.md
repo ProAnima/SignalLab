@@ -139,6 +139,10 @@ Bearer {{secret.API_TOKEN}}
 Ein Feldname nach `.` darf Buchstaben, Ziffern, `_` und `-` enthalten. Schritte
 verketten sich: `{{reply.args[0]}}`, `{{order.items[2].sku}}`.
 
+Ein Feld ist, sobald seine Werte eingesetzt sind, höchstens 16 MiB groß; darüber
+schlägt der Schritt mit `template.too_large` fehl — ein großer Wert, der immer
+wieder verwendet wird, kann kein unbegrenzt großes Feld erzeugen.
+
 ### Wie Werte geschrieben werden {#value-text}
 
 | Wert | Geschrieben als |
@@ -474,8 +478,10 @@ Vorkommen ihrer Werte in allem, was die Engine verlässt, durch `••••` e
   die Offsets stimmen.
 
 Basic-Authentifizierung sendet `name:password` in Base64; enthält einer der Teile
-ein Geheimnis, wird auch dieser Base64-Text maskiert. Der Verkehr selbst trägt den
-echten Wert. Die Vorschau zeigt ein gespeichertes Geheimnis als `••••`. Die
+ein Geheimnis, wird auch dieser Base64-Text maskiert. Ebenso die Formen, in denen eine
+Anfrage und ein Server, der sie zurückgibt, einen Wert wiedergeben: prozentkodiert wie in einer URL
+oder einem Formular, wobei ein `+` in einer Query als Leerzeichen zurückgelesen wird, und
+innerhalb von JSON maskiert. Der Verkehr selbst trägt den echten Wert. Die Vorschau zeigt ein gespeichertes Geheimnis als `••••`. Die
 Antworten eines [[ui:exp.node.emulator]] können keine Geheimnisse verwenden.
 
 ## Befehle {#commands}

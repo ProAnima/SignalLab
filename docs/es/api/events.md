@@ -65,7 +65,8 @@ objetos [`EngineError`](index.md#errors); sus códigos están listados en
 | [`experiment://step`](#event-experiment-step) | Una ejecución | Un paso empieza, se supera, falla, reintenta, repite o informa de una carga |
 | [`experiment://ended`](#event-experiment-ended) | Una ejecución | Una vez, cuando la ejecución termina sola |
 | [`job://ended`](#event-job-ended) | Cada tarea | Una vez, cuando la tarea termina sola o falla |
-| [`osc://message`](#event-osc-message) | Monitor OSC | Cada paquete |
+| [`osc://message`](#event-osc-message) | Monitor OSC | Cada paquete, muestreado a 200/s bajo una avalancha |
+| [`osc://monitor-stat`](#event-osc-monitor-stat) | Monitor OSC | Cada 250 ms, y al final |
 | [`osc://gen-tick`](#event-osc-gen-tick) | Generador OSC | Cada mensaje, o de 30 a 45 veces por segundo por encima de 60 mensajes por segundo |
 | [`http://burst-progress`](#event-http-burst-progress) | Ráfaga HTTP | Cada 100 ms, y al final |
 | [`ws://state`](#event-ws-state) | Conexión WebSocket | Conectada, cerrada |
@@ -102,6 +103,7 @@ los mismos pasos en su respuesta (consulta [ejecuciones](run.md)).
 | `error` | `EngineError` | Por qué falló, o por qué falló el intento (`retry`); se omite en caso contrario |
 | `frame` | number | La trama del Inspector del mensaje con el que coincidió una espera (o la respuesta esperada de un envío), cuando la captura estaba activada; se omite en caso contrario |
 | `load` | object | Lo que midió una carga, leídos sus umbrales — en el último evento de un paso de carga, superado o fallido; se omite en caso contrario. Consulta [carga](../experiments/load.md) |
+| `omitted` | number | Pasos justo antes de este que se dejaron fuera; se omite cuando no hay ninguno. Una ejecución informa de sus primeros 5 000 pasos uno por uno, luego uno por segundo (y cada fallo), y al terminar de los últimos 500 — así un Bucle de mil iteraciones sigue siendo legible |
 
 El nodo [[ui:exp.node.end]] de una ejecución muestra `running` cuando la primera rama lo alcanza y
 `passed` cuando cada rama ha terminado sin un fallo. Los valores secretos se enmascaran en cada
@@ -155,8 +157,10 @@ El `job://ended` de una ejecución lleva también los campos de
 
 ### `osc://message` {#event-osc-message}
 
-Un paquete UDP que recibió un monitor OSC, decodificado. Se envía por cada paquete, sin
-agrupar.
+Un paquete UDP que recibió un monitor OSC, decodificado. Los paquetes decodificados
+se muestrean a un máximo de 200 eventos por segundo para que una avalancha no sature
+el enlace con la interfaz ([`osc://monitor-stat`](#event-osc-monitor-stat) dice
+cuántos se recibieron y cuántos no se reenviaron); un paquete mal formado se envía siempre.
 
 | Campo | Tipo | Significado |
 | --- | --- | --- |
@@ -166,6 +170,20 @@ agrupar.
 | `bytes` | number | El tamaño del paquete |
 | `messages` | object[] | Cada mensaje del paquete (un bundle tiene varios): `address` y `args` ([`OscArg`](commands.md#type-oscarg)`[]`) |
 | `error` | `EngineError` or null | `osc.packet_malformed` cuando el paquete no se decodificó (entonces `messages` está vacío) |
+
+### `osc://monitor-stat` {#event-osc-monitor-stat}
+
+Los totales acumulados de un monitor OSC, cada 250 ms y una vez más cuando termina,
+para que una lista muestreada indique cuánto tráfico representa.
+
+| Campo | Tipo | Significado |
+| --- | --- | --- |
+| `job_id` | number | La tarea del monitor |
+| `ts` | number | Cuándo |
+| `packets` | number | Paquetes recibidos, decodificados o no |
+| `bytes` | number | Bytes recibidos |
+| `not_shown` | number | Paquetes recibidos pero no reenviados como [`osc://message`](#event-osc-message) (el muestreo los retuvo) |
+| `malformed` | number | Paquetes que no se decodificaron como OSC |
 
 ### `osc://gen-tick` {#event-osc-gen-tick}
 
@@ -190,8 +208,9 @@ Las cifras de una ráfaga HTTP, cada 100 ms mientras se ejecuta, y una vez más 
 | `job_id` | number | La tarea de la ráfaga |
 | `ts` | number | Cuándo |
 | `sent` | number | Solicitudes respondidas o fallidas hasta ahora |
-| `ok` | number | De esas, respondidas con un estado 2xx |
-| `failed` | number | De esas, con cualquier otro estado o sin respuesta |
+| `ok` | number | De esas, respondidas con un estado 2xx y el cuerpo completo |
+| `failed` | number | De esas, con cualquier otro estado, un cuerpo cortado o sin respuesta — nunca una que este equipo no pudo enviar |
+| `local` | number | De esas, solicitudes que este equipo no pudo enviar: se quedó sin sockets o puertos locales (`transport.exhausted`). No están en `failed` ni en las latencias |
 | `missed` | number | Las solicitudes de una ráfaga regulada que esperaron demasiado a un trabajador libre y se omitieron |
 | `rps` | number | Solicitudes por segundo durante los últimos 100 ms; en el último evento, durante toda la ráfaga |
 | `last_latency_ms`, `min_latency_ms`, `max_latency_ms`, `avg_latency_ms` | number | Latencias hasta ahora |
@@ -220,8 +239,9 @@ Lo que una conexión WebSocket envió y recibió desde el último evento, cada
 | --- | --- | --- |
 | `job_id` | number | La tarea de la conexión |
 | `ts` | number | Cuándo |
-| `messages` | object[] | En orden: `ts`, `dir` (`rx` recibido, `tx` enviado), `kind` (`text` o `binary`), `text` (los primeros 64 KiB como UTF-8, también en un mensaje binario; los bytes que no lo son se convierten en `�`), `hex` (los primeros 4096 bytes de un mensaje binario como hex, si no null), `bytes` (el tamaño completo) y `truncated` (más de lo que se mostró: más de 64 KiB de texto, más de 4096 bytes de binario) |
-| `dropped` | number | Mensajes excluidos de este evento porque había más de 2000; los más antiguos van primero |
+| `messages` | object[] | En orden: `ts`, `dir` (`rx` recibido, `tx` enviado), `kind` (`text` o `binary`), `text` (los primeros 64 KiB como UTF-8; de un mensaje binario, los primeros 4096 bytes; los bytes que no son UTF-8 se convierten en `�`), `hex` (los primeros 4096 bytes de un mensaje binario como hex, si no null), `bytes` (el tamaño completo) y `truncated` (más de lo que se mostró: más de 64 KiB de texto, más de 4096 bytes de binario) |
+| `dropped` | number | Mensajes excluidos de este evento porque había más de 2000, o más de 1 MiB de `text` y `hex`; los más antiguos van primero |
+| `received`, `sent` | number | Mensajes recibidos y enviados por la conexión hasta ahora, mostrados o no |
 
 ### `mqtt://state` {#event-mqtt-state}
 
@@ -245,8 +265,8 @@ algo. Un mensaje QoS 2 reentregado se muestra una vez.
 | --- | --- | --- |
 | `job_id` | number | La tarea de la conexión |
 | `ts` | number | Cuándo |
-| `messages` | object[] | `ts`, `topic`, `payload` (como UTF-8; los bytes que no lo son se convierten en `�`), `bytes`, `qos`, `retain`, `dup` |
-| `dropped` | number | Mensajes excluidos porque llegaron más de 4000 en 100 ms; los más antiguos van primero |
+| `messages` | object[] | Uno por tema, el último que llegó en él: `ts`, `topic`, `payload` (sus primeros 4096 bytes como UTF-8; los bytes que no lo son se convierten en `�`), `bytes` (el tamaño de toda la carga útil), `truncated` (`payload` es solo el comienzo), `qos`, `retain`, `dup` y `count` (mensajes en el tema desde el último evento, este incluido) |
+| `dropped` | number | Siempre 0: cuando un evento llevaría más de 4000 temas o 2 MiB de carga útil, la conexión deja de leer hasta que haya salido, y el bróker espera |
 
 ### `mqtt://ack` {#event-mqtt-ack}
 
@@ -273,6 +293,7 @@ Los contadores de una baliza, cada 250 ms, y una vez más cuando termina sola co
 | `rounds` | number | Rondas enviadas |
 | `packets`, `bytes` | number | Datagramas y bytes enviados |
 | `errors` | number | Envíos que fallaron |
+| `local` | number | Envíos que este equipo no pudo hacer (sin búferes o sockets), no incluidos en `errors`; se omite mientras es 0 |
 | `pps` | number | Datagramas por segundo durante los últimos 250 ms |
 
 ### `broadcast://peers` {#event-broadcast-peers}
@@ -286,6 +307,8 @@ Lo que ha oído una escucha de descubrimiento, cada 400 ms.
 | `peers` | object[] | El oído más recientemente primero: `addr`, `proto`, `packets`, `bytes`, `first_ms`, `last_ms`, `last_summary`, `responded` (sus paquetes que se respondieron, contados según llegaron); como máximo 512 |
 | `packets`, `bytes` | number | Todo lo recibido |
 | `responses` | number | Respuestas enviadas |
+| `unlisted` | number | Pares distintos más allá de los 512 que guarda la tabla: contados aquí, no en `peers` |
+| `replies_skipped` | number | Sondeos sin responder porque ya había demasiadas respuestas automáticas (1024) en curso — el tope que impide que una avalancha de sondeos se amplifique sin límite |
 
 ### `netsim://stat` {#event-netsim-stat}
 
@@ -302,6 +325,8 @@ nodos [[ui:exp.node.impairment]] de una ejecución informan en el informe de la 
 | `duplicated`, `corrupted`, `reordered` | number | Lo que el perfil les hizo |
 | `bytes` | number | Bytes reenviados |
 | `connections`, `reset`, `stalled` | number | TCP: conexiones tomadas, restablecidas, dejadas a medias; se omite mientras sea 0 |
+| `refused` | number | TCP: conexiones que el destino rechazó o no respondió, trasladadas al cliente como un restablecimiento; se omite mientras sea 0 |
+| `failed` | number | Lo que este equipo no pudo trasladar: un datagrama que el sistema no quiso enviar, una conexión para la que no tenía puerto local o socket (se reintenta unos dos segundos antes), o una por encima de las 1 024 conexiones simultáneas del relé; se omite mientras sea 0 |
 | `profile` | string | El perfil con el que degrada ahora, como lo nombra la línea de tiempo: su nombre, o lo que hace (`60 ms ±25 · loss 2%`) |
 
 ### `storm://stat` {#event-storm-stat}
@@ -314,7 +339,8 @@ Los contadores de una tormenta, cada 250 ms, y una vez más cuando termina sola 
 | `job_id` | number | La tarea de la tormenta |
 | `ts` | number | Cuándo |
 | `packets`, `bytes` | number | Datagramas (o conexiones TCP) y bytes enviados |
-| `errors` | number | Envíos o conexiones que fallaron |
+| `errors` | number | Envíos o conexiones que el destino rechazó, restableció o no respondió |
+| `local` | number | Unidades que este equipo no pudo enviar — se quedó sin puertos locales, sockets o búferes, no es que el destino rechazara; nunca se cuentan como `errors` |
 | `pps` | number | Por segundo durante los últimos 250 ms |
 | `mbps` | number | Megabits por segundo durante los últimos 250 ms |
 
@@ -341,6 +367,7 @@ con `done` igual a `total` (ese puede llegar dos veces).
 | `done` | number | Puertos probados |
 | `total` | number | Puertos del rango |
 | `open` | number | Puertos abiertos encontrados |
+| `unchecked` | number | Puertos que este equipo no pudo probar (se quedó sin puertos locales o sockets), así que no están ni abiertos ni cerrados; 0 normalmente |
 
 ### `emulator://activity` {#event-emulator-activity}
 
@@ -353,7 +380,7 @@ están en el informe de la ejecución.
 | --- | --- | --- |
 | `job_id` | number | La tarea del emulador |
 | `ts` | number | Cuándo |
-| `counts` | object | `total`, `unmatched`, `failed`, `down`, `hits` (por regla), y `missed` (MQTT; se omite mientras sea 0) — como [`emulator_exchanges`](commands.md#emulator_exchanges) |
+| `counts` | object | `total`, `unmatched`, `failed`, `down`, `hits` (por regla), `missed` (MQTT; se omite mientras sea 0) y `refused` (conexiones por encima del límite; se omite mientras sea 0) — como [`emulator_exchanges`](commands.md#emulator_exchanges) |
 | `forced` | string | `unavailable`, `reset` o `timeout` mientras está caído; se omite en caso contrario |
 | `exchanges` | object[] | Los intercambios nuevos, como los enumera `emulator_exchanges` pero sin `data`; como máximo 200 |
 | `dropped` | number | Intercambios más allá de los primeros 200 del intervalo, no enviados aquí; `emulator_exchanges` sigue teniendo los últimos 500 |

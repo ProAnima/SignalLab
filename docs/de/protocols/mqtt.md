@@ -94,14 +94,21 @@ auf eine Ebene, um sie zu öffnen oder zu schließen.
 - Über dem Baum stehen die Anzahl der Topics, wie viele einen Retained-Wert
   halten, und, solange die Verbindung steht, der Broker, auf den Sie hören.
 - Nutzdaten werden als Text angezeigt; Bytes, die kein UTF-8 sind, erscheinen
-  als Ersatzzeichen.
+  als Ersatzzeichen. Von Nutzdaten über 4 KB wird der Anfang mit der ganzen Größe
+  gezeigt; sie lassen sich nicht in [[ui:mq.publish]] kopieren oder als Signal
+  speichern, da sie abgeschnitten gesendet würden.
 - [[ui:common.clear]] leert den Baum. Sonst tut das nichts: Er bleibt, wie er
   ist, wenn Sie die Ansicht wechseln oder die Verbindung trennen, bis die App
   geschlossen wird.
 
-Nachrichten erreichen die Ansicht in Stapeln, zehnmal pro Sekunde. Sendet ein
-Broker mehr als 4000 Nachrichten in einer Zehntelsekunde, werden die ältesten
-dieses Stapels aus dem Baum gelassen und über ihm als „nicht angezeigt“ gezählt.
+Nachrichten erreichen die Ansicht in Stapeln, zehnmal pro Sekunde, jeder mit der
+jüngsten Nachricht jedes Topics, das eine hatte, und wie viele es waren: Ein Dauerfeuer
+auf wenigen Topics verliert nichts, und jede Zahl stimmt. Ist ein Stapel voll —
+4000 Topics oder 2 MB Nutzdaten, wie es die Retained-Werte eines Brokers beim
+Abonnieren von `#` ergeben —, liest die Verbindung erst weiter, wenn er hinausgegangen
+ist, sodass der Broker wartet, statt dass ein einmal gesendetes Topic verpasst wird. Der
+Baum hält bis zu 100.000 Topics; Nachrichten auf Topics darüber hinaus werden über ihm
+als „nicht angezeigt“ gezählt.
 
 ### Der Bereich eines Topics {#topic}
 

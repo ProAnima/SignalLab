@@ -100,6 +100,7 @@ Während er läuft, zählt [[ui:emu.live]]:
 | [[ui:emu.failed]] | Austausche, bei denen eine Antwort nicht erzeugt oder nicht gesendet werden konnte. |
 | [[ui:emu.down]] | Was eintraf, während der Emulator ausgefallen war. Wird angezeigt, wenn ein Ausfall eingestellt ist oder etwas ihn im Ausfall angetroffen hat. Nie als [[ui:emu.unmatched]] gezählt. |
 | [[ui:emu.missed]] | Nur MQTT, wenn es vorkommt: Nachrichten, die ein Client nicht annehmen konnte, weil er zu weit zurücklag. |
+| [[ui:emu.refused]] | Wenn es vorkommt: Verbindungen, die beim Eintreffen geschlossen wurden, weil der Emulator schon so viele bediente, wie er darf (siehe [Grenzen](#limits)). Keine Anfragen, daher nicht in [[ui:emu.total]]. |
 
 Der Kopf jeder Regel zeigt, wie oft sie seit dem Start gepasst hat.
 
@@ -408,11 +409,11 @@ Parameter und Generatoren, ein Wert außerhalb des Bereichs. [[ui:emu.start]] le
 | Ein Body, eine Antwort oder eine Begrüßung, wie geschrieben | 256 KiB | Abgelehnt. |
 | Eine Verzögerung oder ein Jitter | 60.000 ms | Abgelehnt. |
 | HTTP-Anfrage-Body | 1 MiB | 413. |
-| HTTP-Verbindungen gleichzeitig | 512 | Weitere werden geschlossen, sobald sie eintreffen. |
+| HTTP-Verbindungen gleichzeitig | 512 | Weitere werden geschlossen, sobald sie eintreffen; gezählt als [[ui:emu.refused]]. |
 | HTTP-Anfragekopf | 30 s | Ein Client muss ihn innerhalb dieser Zeit senden. |
-| TCP-Verbindungen gleichzeitig | 256 | Weitere werden geschlossen, sobald sie eintreffen. |
+| TCP-Verbindungen gleichzeitig | 256 | Weitere werden geschlossen, sobald sie eintreffen; gezählt als [[ui:emu.refused]]. |
 | OSC- und UDP-Antworten, die auf ihre Verzögerung warten | 1024 | Weitere werden verworfen und als [[ui:emu.failed]] gezählt. |
-| MQTT-Clients gleichzeitig | 256 | Weitere werden geschlossen, sobald sie eintreffen. |
+| MQTT-Clients gleichzeitig | 256 | Weitere werden geschlossen, sobald sie eintreffen; gezählt als [[ui:emu.refused]]. |
 | MQTT-Paket | 256 KiB | Die Verbindung des Clients endet. |
 | MQTT-Abonnements pro Client | 100 | Weitere werden abgelehnt. |
 | MQTT-Retained-Topics | 1000 Topics, 16 MiB | Eine neue Retained-Nachricht wird weitergeleitet, aber nicht gehalten. |
@@ -470,8 +471,11 @@ Die Bibliothek ist `emulators.json` im Datenordner (siehe
 Pfad zu sehen. Sie wird 0,7 s nach der letzten Änderung vollständig geschrieben, über eine temporäre
 Datei, sodass ein fehlgeschlagener Schreibvorgang die vorherige Fassung hinterlässt. Lässt sich die Datei nicht lesen,
 zeigt die Liste den Fehler mit Pfad, Zeile und Spalte, und die Datei bleibt,
-wie sie ist: Korrigieren Sie sie und drücken Sie [[ui:emu.reload]]. Drücken Sie [[ui:emu.reload]] auch, nachdem
-Sie sie von Hand bearbeitet haben. Fehlt die Datei, werden die Beispiel-Emulatoren erneut angelegt.
+wie sie ist — auch dann, wenn sie kaputtgeht, während die App läuft: Das Speichern wird abgelehnt.
+Korrigieren Sie sie und drücken Sie [[ui:emu.reload]]. Drücken Sie [[ui:emu.reload]] auch, nachdem
+Sie sie von Hand bearbeitet haben. Ein Speichern über eine Datei, die sich seit dem Lesen geändert hat —
+von Hand oder durch eine andere Seite desselben Servers —, wird abgelehnt, und die Datei behält diese
+Änderung; die Liste sagt es und hört auf zu schreiben, bis [[ui:emu.reload]] sie liest. Fehlt die Datei, werden die Beispiel-Emulatoren erneut angelegt.
 
 ```json
 {

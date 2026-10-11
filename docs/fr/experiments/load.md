@@ -125,12 +125,13 @@ Après la dernière réponse, l’étape dispose de ses mesures, conservées dan
 | Mesure | Quoi |
 | --- | --- |
 | planned | les requêtes auxquelles correspond le profil ([[ui:exp.loadShape.poisson]] : en moyenne) |
-| sent | les requêtes qui ont reçu une réponse ou ont échoué |
+| sent | les requêtes qui ont reçu une réponse ou ont échoué, et celles comptées dans local |
 | ok | celles qui ont reçu une réponse de statut 2xx |
 | failed | tout autre statut, ou aucune réponse |
 | missed | dues alors que toutes les places étaient occupées, et sautées |
-| rps | requêtes envoyées par seconde : sent ÷ la durée du profil — ou ÷ le temps jusqu’au départ de la dernière requête, s’il est plus long |
-| error_rate | failed, en % de sent |
+| local | les requêtes que cet ordinateur n’a pas pu envoyer — il a manqué de sockets ou de ports locaux — et que le serveur n’a donc jamais vues ; pas dans failed, rps, error_rate ni les latences |
+| rps | requêtes parvenues au serveur par seconde : sent moins local ÷ la durée du profil — ou ÷ le temps jusqu’au départ de la dernière requête, s’il est plus long |
+| error_rate | failed, en % des requêtes parvenues au serveur |
 | min, mean, max | la requête la plus rapide, la moyenne et la plus lente, ms |
 | p50, p90, p95, p99 | la latence à laquelle ou sous laquelle se trouvaient 50, 90, 95 et 99 % des requêtes, ms |
 | received_bytes | les octets de corps reçus au total |
@@ -184,7 +185,8 @@ et la part d’échecs. Sélectionnez le nœud : ses propriétés affichent
 - chaque seuil, ✓ [[ui:exp.thresholdHeld]] ou ✕ [[ui:exp.thresholdBroken]],
   avec la valeur mesurée ;
 - [[ui:http.sent]], [[ui:exp.loadRps]], [[ui:exp.loadErrors]] avec leur part,
-  [[ui:http.missed]] ;
+  [[ui:http.missed]], et [[ui:http.local]] quand cet ordinateur a manqué
+  de ports ;
 - [[ui:http.p50]], [[ui:http.p90]], [[ui:http.p95]], [[ui:http.p99]],
   [[ui:http.avg]], [[ui:http.max]] ;
 - [[ui:exp.loadPerSecond]] : les requêtes de chaque seconde, les échouées en

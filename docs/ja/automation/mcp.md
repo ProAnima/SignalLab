@@ -131,7 +131,7 @@ docker run -i --rm --network host --entrypoint signallab ghcr.io/proanima/signal
 
 `describe_nodes` は、アシスタントが実験を書く前に読むものです。[`signallab nodes`](cli.md#cli-nodes) と同じ内容です。`list_templates` と `get_template` は、実行や調整に使える動作する例を提供します。
 
-`validate_experiment` と `run_experiment` は、実験を次の 3 つのうち**ちょうど 1 つ**の方法で受け取ります。
+`validate_experiment` と `run_experiment` は、実験を次の 3 通りのいずれかで受け取ります。最初の 3 つの引数のうち**ちょうど 1 つ**を指定し、残りは実行を調整します。
 
 | 引数 | 内容 |
 | --- | --- |

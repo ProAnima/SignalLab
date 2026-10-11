@@ -8,7 +8,7 @@ description: Типичные проблемы Signal Lab и как их исп�
 У каждого сбоя, о котором сообщает Signal Lab, есть код; сообщение для каждого — в
 [сообщениях об ошибках](errors.md). Сетевые сбои — это коды [`transport`](errors.md#transport):
 `refused`, `timeout`, `dns`, `unreachable`, `reset`, `address_in_use`, `address_unavailable`,
-`denied`, `tls`, `target_invalid`, `failed`. Ниже — самые частые проблемы.
+`denied`, `tls`, `target_invalid`, `exhausted`, `failed`. Ниже — самые частые проблемы.
 
 ## Ничего не приходит {#nothing-arrives}
 

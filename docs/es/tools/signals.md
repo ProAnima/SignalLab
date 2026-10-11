@@ -267,6 +267,12 @@ señales bajo el árbol para ver la ruta completa.
   Después de editarlo, o de sustituirlo por uno de otra máquina, pulsa
   [[ui:sig.reload]]. Recargar vuelve a leer el archivo y descarta un cambio que
   aún esperaba a escribirse.
+- **Cambiado en otro sitio.** Cada guardado dice qué archivo leyó. Si el archivo
+  cambió desde entonces — lo editaste, o otra página del mismo servidor guardó
+  su propio cambio — el guardado se rechaza, el archivo conserva ese cambio, y el
+  árbol muestra el error y deja de escribir, como con un archivo roto más
+  abajo. Pulsa [[ui:sig.reload]] para ver lo que hay ahora; el cambio que esta
+  página no pudo guardar desaparece con la recarga, así que hazlo de nuevo.
 - **Nunca se sustituye mientras está roto.** Si el archivo no es JSON válido, o
   no es una biblioteca de señales, el árbol muestra el error con la ruta, la línea
   y la columna del archivo, y la consola dice lo mismo. El archivo se deja tal
@@ -280,8 +286,8 @@ señales bajo el árbol para ver la ruta completa.
   archivo y lo dejas ilegible y la aplicación guarda luego un cambio, el guardado
   se rechaza con el mismo error, el archivo se deja como lo dejaste y la
   aplicación deja de escribir hasta que lo corrijas y pulses [[ui:sig.reload]]. Un
-  archivo que editaste y dejaste válido se sustituye por la lista de la aplicación
-  en su siguiente guardado, como arriba: recarga primero.
+  archivo que editaste y dejaste válido tampoco se sustituye: el siguiente guardado
+  se rechaza por cambiado en otro sitio, y [[ui:sig.reload]] lee tu edición.
 
 Un ejemplo breve del archivo:
 

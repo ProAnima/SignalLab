@@ -96,6 +96,7 @@ Mientras funciona, el panel [[ui:emu.live]] cuenta:
 | [[ui:emu.failed]] | Intercambios en los que no se pudo crear o enviar una respuesta. |
 | [[ui:emu.down]] | Lo que llegó mientras el emulador estaba caído. Se muestra cuando tiene una caída programada o algo lo encontró caído. Nunca se cuenta en [[ui:emu.unmatched]]. |
 | [[ui:emu.missed]] | Solo MQTT, cuando ocurre: mensajes que un cliente no pudo recibir porque iba demasiado atrasado. |
+| [[ui:emu.refused]] | Cuando ocurre: conexiones cerradas al llegar porque el emulador ya atendía tantas como puede (consulta [Límites](#limits)). No son solicitudes, así que no están en [[ui:emu.total]]. |
 
 La cabecera de cada regla muestra cuántas veces coincidió desde el inicio.
 
@@ -394,11 +395,11 @@ regla, la respuesta o el mensaje retenido, y el campo) y qué está mal: una rut
 | Un cuerpo, una respuesta o un saludo, tal como se escribe | 256 KiB | Se rechaza. |
 | Un retardo o un jitter | 60 000 ms | Se rechaza. |
 | Cuerpo de una solicitud HTTP | 1 MiB | 413. |
-| Conexiones HTTP a la vez | 512 | Las demás se cierran según llegan. |
+| Conexiones HTTP a la vez | 512 | Las demás se cierran según llegan; se cuentan como [[ui:emu.refused]]. |
 | Cabecera de una solicitud HTTP | 30 s | Un cliente debe enviarla en este tiempo. |
-| Conexiones TCP a la vez | 256 | Las demás se cierran según llegan. |
+| Conexiones TCP a la vez | 256 | Las demás se cierran según llegan; se cuentan como [[ui:emu.refused]]. |
 | Respuestas OSC y UDP a la espera de su retardo | 1024 | Las demás se descartan y se cuentan en [[ui:emu.failed]]. |
-| Clientes MQTT a la vez | 256 | Los demás se cierran según llegan. |
+| Clientes MQTT a la vez | 256 | Los demás se cierran según llegan; se cuentan como [[ui:emu.refused]]. |
 | Paquete MQTT | 256 KiB | La conexión del cliente termina. |
 | Suscripciones MQTT por cliente | 100 | Las demás se rechazan. |
 | Temas MQTT retenidos | 1000 temas, 16 MiB | Un nuevo mensaje retenido se encamina, pero no se retiene. |
@@ -450,9 +451,12 @@ La biblioteca es `emulators.json`, en la carpeta de datos (consulta
 [Archivos](../reference/files.md)); pasa el puntero por encima del recuento bajo la lista para ver
 su ruta. Se escribe entero 0,7 s después del último cambio, a través de un archivo temporal, así
 que una escritura fallida deja el anterior. Si el archivo no se puede leer, la lista muestra el
-error con la ruta, la línea y la columna, y el archivo se deja como está: corrígelo y pulsa
-[[ui:emu.reload]]. Pulsa también [[ui:emu.reload]] después de editarlo a mano. Si no hay archivo,
-se vuelve a escribir el conjunto inicial.
+error con la ruta, la línea y la columna, y el archivo se deja como está — también cuando se rompe mientras la aplicación funciona: el
+guardado se rechaza. Corrígelo y pulsa [[ui:emu.reload]]. Pulsa también [[ui:emu.reload]] después
+de editarlo a mano. Un guardado sobre un archivo que cambió desde que se leyó — a mano, o por otra
+página del mismo servidor — se rechaza y el archivo conserva ese cambio; la lista lo dice y deja de
+escribir hasta que [[ui:emu.reload]] lo lea. Si no hay archivo, se vuelve a escribir el conjunto
+inicial.
 
 ```json
 {

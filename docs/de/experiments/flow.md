@@ -90,7 +90,11 @@ den nächsten Knoten.
 :::
 
 Ein Knoten, der kein Join ist und von zwei parallelen Zweigen erreicht wird, läuft
-einmal für jeden von ihnen.
+einmal für jeden von ihnen. Schicht für Schicht so verdrahtet, verdoppelt sich das mit
+jeder Schicht, daher startet ein Durchlauf insgesamt höchstens 1 000 parallele
+Zweige; ein weiterer lässt ihn mit `run.too_many_branches` an dem Knoten scheitern,
+der ihn gestartet hätte. Führen Sie solche Zweige mit einem [[ui:exp.node.join]]
+zusammen.
 
 ### Wenn ein Schritt fehlschlägt {#failure}
 

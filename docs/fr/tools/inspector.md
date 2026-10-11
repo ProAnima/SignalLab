@@ -158,7 +158,7 @@ d’un bundle OSC avec ses arguments, les en-têtes d’une réponse HTTP et le 
 son corps, la requête d’un émulateur et sa réponse.
 
 Sous [[ui:ins.rawBytes]] se trouve un vidage hexadécimal : décalage, 16 octets en
-hexadécimal, et les mêmes octets en texte. La liste porte le premier Kio de chaque
+hexadécimal, et les mêmes octets en texte. La liste porte les 256 premiers octets de chaque
 trame ; quand une trame est plus longue, un bouton sous le vidage charge tout.
 
 ### Ce qu’une trame conserve {#limits}
@@ -250,7 +250,7 @@ Une capture vide n’est pas écrite ; la console dit qu’il n’y a rien à en
 
 - **`.jsonl`** — un objet JSON par ligne, une ligne par trame : `seq`, `ts`
   (millisecondes depuis 1970), `proto`, `dir`, `source`, `job_id`, `local`,
-  `remote`, `bytes`, `kept`, `summary`, `detail`, `hex` (le vidage du premier Kio),
+  `remote`, `bytes`, `kept`, `summary`, `detail`, `hex` (le vidage des 256 premiers octets),
   `verdict`, et `data`, les octets conservés en base64.
 - **`.txt`** — pour la lecture : une ligne par trame avec son numéro, son heure,
   son sens, son protocole, son pair, sa taille et son verdict, puis son résumé, son

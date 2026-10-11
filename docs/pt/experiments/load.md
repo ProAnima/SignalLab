@@ -120,12 +120,13 @@ do tempo e no [relatório da execução](runs.md#report):
 | Medição | O quê |
 | --- | --- |
 | planned | as requisições que o perfil soma ([[ui:exp.loadShape.poisson]]: em média) |
-| sent | requisições que foram respondidas ou falharam |
+| sent | requisições que foram respondidas ou falharam, e as contadas em local |
 | ok | respondidas com um status 2xx |
 | failed | qualquer outro status, ou nenhuma resposta |
 | missed | com hora marcada enquanto todos os lugares estavam ocupados, e puladas |
-| rps | requisições enviadas por segundo: sent ÷ a duração do perfil — ou ÷ o tempo até a última requisição sair, quando isso foi mais tarde |
-| error_rate | failed, em % de sent |
+| local | requisições que este computador não conseguiu enviar — ficou sem sockets ou portas locais —, de modo que o servidor nunca as viu; não entram em failed, rps, error_rate nem nas latências |
+| rps | requisições que chegaram ao servidor por segundo: sent menos local ÷ a duração do perfil — ou ÷ o tempo até a última requisição sair, quando isso foi mais tarde |
+| error_rate | failed, em % das requisições que chegaram ao servidor |
 | min, mean, max | a requisição mais rápida, a média e a mais lenta, em ms |
 | p50, p90, p95, p99 | a latência em que ou abaixo da qual ficaram 50, 90, 95 e 99% das requisições, em ms |
 | received_bytes | bytes de corpo recebidos ao todo |
@@ -175,7 +176,7 @@ falhou. Selecione o nó: as propriedades dele mostram [[ui:exp.loadResult]] —
 
 - cada limiar, ✓ [[ui:exp.thresholdHeld]] ou ✕ [[ui:exp.thresholdBroken]], com o valor medido;
 - [[ui:http.sent]], [[ui:exp.loadRps]], [[ui:exp.loadErrors]] com a sua parcela,
-  [[ui:http.missed]];
+  [[ui:http.missed]] e [[ui:http.local]] quando este computador ficou sem portas;
 - [[ui:http.p50]], [[ui:http.p90]], [[ui:http.p95]], [[ui:http.p99]], [[ui:http.avg]],
   [[ui:http.max]];
 - [[ui:exp.loadPerSecond]]: as requisições de cada segundo, as que falharam em vermelho, e a

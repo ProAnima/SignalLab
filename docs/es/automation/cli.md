@@ -481,7 +481,8 @@ Un mensaje OSC. Los argumentos se tipan con un prefijo, o se infieren:
 | `T`, `F` | true, false |
 | `N` | nil |
 | `3`, `-3` | un entero simple es int32 |
-| `2.5` | un decimal simple es float32 |
+| `3000000000` | un entero más allá de 32 bits es int64 |
+| `2.5`, `1e3` | un decimal simple, o un número con exponente, es float32 (float64 más allá del rango de float32) |
 | cualquier otra cosa | cadena |
 
 ```bash

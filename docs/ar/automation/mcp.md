@@ -145,7 +145,7 @@ docker run -i --rm --network host --entrypoint signallab ghcr.io/proanima/signal
 `describe_nodes` هو ما يقرؤه المساعد قبل كتابة تجربة؛ وهو نفسه [`signallab nodes`](cli.md#cli-nodes).
 ويقدّم `list_templates` و`get_template` أمثلة عاملة تُشغَّل أو تُعدَّل.
 
-تأخذ `validate_experiment` و`run_experiment` التجربة بإحدى ثلاث طرق — واحدة منها بالضبط:
+تأخذ `validate_experiment` و`run_experiment` التجربة بإحدى ثلاث طرق — واحدة بالضبط من الوسائط الثلاث الأولى — وتضبط الوسائط الأخرى التشغيل:
 
 | الوسيطة | ما هي |
 | --- | --- |

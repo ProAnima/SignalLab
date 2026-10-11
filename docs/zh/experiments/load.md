@@ -88,12 +88,13 @@ description: 按负载模式发送 HTTP 节点的请求——恒定、斜坡、�
 | 测量项 | 内容 |
 | --- | --- |
 | planned | 负载模式合计的请求数（[[ui:exp.loadShape.poisson]]：平均值） |
-| sent | 已得到应答或已失败的请求 |
+| sent | 已得到应答或已失败的请求，以及计入 local 的请求 |
 | ok | 以 2xx 状态应答的请求 |
 | failed | 任何其他状态，或根本没有应答 |
 | missed | 在所有并发槽都忙时到期而被跳过的请求 |
-| rps | 每秒发送的请求数：sent ÷ 负载模式的时长；如果最后一个请求发出得更晚，则 ÷ 到最后一个请求发出为止的时间 |
-| error_rate | failed 占 sent 的百分比 |
+| local | 此计算机未能发出的请求——套接字或本地端口已用尽——因此服务器从未见到它们；不计入 failed、rps、error_rate 或延迟 |
+| rps | 到达服务器的请求每秒数：sent 减去 local，÷ 负载模式的时长；如果最后一个请求发出得更晚，则 ÷ 到最后一个请求发出为止的时间 |
+| error_rate | failed 占到达服务器的请求的百分比 |
 | min, mean, max | 最快、平均和最慢的请求，ms |
 | p50, p90, p95, p99 | 50%、90%、95% 和 99% 的请求不超过的延迟，ms |
 | received_bytes | 收到的正文字节总数 |
@@ -133,7 +134,7 @@ description: 按负载模式发送 HTTP 节点的请求——恒定、斜坡、�
 步骤通过时，时间线会给出汇总：请求数、速率、p95 和失败比例。选中该节点，其属性会显示 [[ui:exp.loadResult]]：
 
 - 每个阈值，✓ [[ui:exp.thresholdHeld]] 或 ✕ [[ui:exp.thresholdBroken]]，附带测得的值；
-- [[ui:http.sent]]、[[ui:exp.loadRps]]、[[ui:exp.loadErrors]] 及其比例、[[ui:http.missed]]；
+- [[ui:http.sent]]、[[ui:exp.loadRps]]、[[ui:exp.loadErrors]] 及其比例、[[ui:http.missed]]，以及此计算机端口用尽时的 [[ui:http.local]]；
 - [[ui:http.p50]]、[[ui:http.p90]]、[[ui:http.p95]]、[[ui:http.p99]]、[[ui:http.avg]]、[[ui:http.max]]；
 - [[ui:exp.loadPerSecond]]：每一秒的请求，失败的以红色显示，平均延迟以折线显示；
 - [[ui:exp.loadLatencies]]：多少请求用了多长时间；

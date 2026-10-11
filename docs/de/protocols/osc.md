@@ -8,8 +8,8 @@ description: Typisierte Open-Sound-Control-Nachrichten senden, beobachten, was a
 Die Ansicht [[ui:nav.osc]] ist der Ort, an dem Sie Open Sound Control (OSC 1.0)
 von Hand über UDP sprechen. Sie hat drei Teile:
 
-- [[ui:osc.sender]]: eine Nachricht mit typisierten Argumenten, gesendet mit
-  <kbd>Enter</kbd>.
+- [[ui:osc.sender]]: eine Nachricht mit typisierten Argumenten, gesendet, wenn Sie
+  Enter drücken.
 - [[ui:osc.monitor]]: empfängt auf einem Port und dekodiert jedes Paket, das
   eintrifft.
 - [[ui:osc.generator]]: sendet einen Wert, der einer Wellenform folgt, viele
@@ -95,17 +95,22 @@ Jedes Paket wird zu einer Zeile, das Neueste oben:
 | [[ui:common.time]] | Wann es eingetroffen ist, auf die Millisekunde |
 | [[ui:osc.from]] | `IP:port` des Absenders |
 | [[ui:osc.address]] | Die OSC-Adresse, oder [[ui:osc.decodeError]], wenn das Paket kein gültiges OSC ist |
-| [[ui:osc.args]] | Die Argumentwerte; ein Blob erscheint als `blob[n]`, `nil` als `nil`. Bei einem Paket, das nicht dekodiert werden konnte, der Grund. |
+| [[ui:osc.args]] | Die Argumentwerte; ein Blob erscheint als `blob[n]`, `nil` als `nil`, ein Zeit-Tag als `t:` und seine Sekunden seit 1900 (`t:immediate` für das „jetzt" von OSC), ein Zeichen als `'A'`, eine Farbe als `#rrggbbaa`, eine MIDI-Nachricht als `midi[01 90 3c 7f]`, ein Array in `[ ]`. Bei einem Paket, das nicht dekodiert werden konnte, der Grund. |
 
 Ein Bundle ergibt eine Zeile pro Nachricht. Die Liste behält die neuesten 300
 Zeilen; [[ui:common.clear]] leert sie. Drücken Sie [[ui:common.stop]], um den
 Port zu schließen. Der Monitor ist außerdem ein Job in der Leiste der Konsole,
 sodass er auch von dort gestoppt werden kann.
 
-Der Monitor liest Pakete bis 64 KiB. Er dekodiert die Tags
-`i f s S b h d T F N I` (`S` liest sich als Text, `I` als nil); ein Paket mit
-einem anderen Tag oder ein abgeschnittenes wird als Dekodierfehler gezeigt statt
-verworfen.
+Der Monitor liest Pakete bis 64 KiB. Er dekodiert jedes Typ-Tag von OSC 1.0 —
+`i f s S b h d T F N I t c r m` und Arrays `[ ]` (`S` liest sich als Text, `I` als
+`impulse`). Eine Nachricht einer älteren Implementierung ohne Typ-Tag-String
+liest sich als Nachricht ohne Argumente, wie es die Spezifikation verlangt. Ein
+Paket mit einem anderen Tag, ein abgeschnittenes oder eines, dessen Adresse nicht
+mit `/` beginnt, wird als Dekodierfehler gezeigt statt verworfen. Warteknoten und
+Emulatoren lesen dieselben Typen: In einem Antwortwert ist ein Zeit-Tag seine
+64-Bit-Zahl als Text, eine Farbe `#rrggbbaa`, eine MIDI-Nachricht ihre vier Bytes,
+ein Array eine Liste.
 
 ### Eine Nachricht in einen Warteknoten verwandeln {#wait-for-this}
 

@@ -45,7 +45,8 @@ websocat -H "Authorization: Bearer $TOKEN" ws://127.0.0.1:1430/api/events
 | [`experiment://step`](#event-experiment-step) | 一次运行 | 一个步骤开始、通过、失败、重试、重复或报告负载时 |
 | [`experiment://ended`](#event-experiment-ended) | 一次运行 | 运行自行结束时发送一次 |
 | [`job://ended`](#event-job-ended) | 每个任务 | 任务自行结束或失败时发送一次 |
-| [`osc://message`](#event-osc-message) | OSC 监视器 | 每个数据包 |
+| [`osc://message`](#event-osc-message) | OSC 监视器 | 每个数据包，洪泛时抽样为每秒 200 个 |
+| [`osc://monitor-stat`](#event-osc-monitor-stat) | OSC 监视器 | 每 250 ms，以及结束时 |
 | [`osc://gen-tick`](#event-osc-gen-tick) | OSC 生成器 | 每条消息；超过每秒 60 条消息时每秒 30 到 45 次 |
 | [`http://burst-progress`](#event-http-burst-progress) | HTTP 突发 | 每 100 ms，以及结束时 |
 | [`ws://state`](#event-ws-state) | WebSocket 连接 | 已连接、已关闭 |
@@ -80,6 +81,7 @@ websocat -H "Authorization: Bearer $TOKEN" ws://127.0.0.1:1430/api/events
 | `error` | `EngineError` | 它为何失败，或该次尝试为何失败（`retry`）；否则省略 |
 | `frame` | number | 捕获开启时，某个等待（或发送的预期回复）所匹配消息的检查器帧号；否则省略 |
 | `load` | object | 一次负载测得的内容及读取到的阈值——在负载步骤的最后一个事件上，无论通过还是失败；否则省略。参见[负载](../experiments/load.md) |
+| `omitted` | number | 紧挨在此步骤之前被略去的步骤数；没有时省略。一次运行逐个报告它的前 5 000 个步骤，之后每秒一个（以及每次失败），并在结束时报告最后 500 个——因此一千次迭代的 Loop 仍然可读 |
 
 运行的 [[ui:exp.node.end]] 节点在第一个分支到达时显示 `running`，并在每个分支都无失败地完成后显示 `passed`。每个字段中的机密值都会被遮蔽。
 
@@ -127,7 +129,7 @@ websocat -H "Authorization: Bearer $TOKEN" ws://127.0.0.1:1430/api/events
 
 ### `osc://message` {#event-osc-message}
 
-OSC 监视器收到并解码的一个 UDP 数据包。每个数据包都发送，不批量。
+OSC 监视器收到并解码的一个 UDP 数据包。解码后的数据包被抽样为每秒最多 200 个事件，以免洪泛淹没通往界面的链路（[`osc://monitor-stat`](#event-osc-monitor-stat) 会说明收到了多少、有多少没有转发）；格式错误的数据包总是会发送。
 
 | 字段 | 类型 | 含义 |
 | --- | --- | --- |
@@ -137,6 +139,19 @@ OSC 监视器收到并解码的一个 UDP 数据包。每个数据包都发送�
 | `bytes` | number | 数据包的大小 |
 | `messages` | object[] | 数据包中的每条消息（一个包内消息组会有多条）：`address` 和 `args`（[`OscArg`](commands.md#type-oscarg)`[]`） |
 | `error` | `EngineError` or null | 数据包未解码时为 `osc.packet_malformed`（此时 `messages` 为空） |
+
+### `osc://monitor-stat` {#event-osc-monitor-stat}
+
+OSC 监视器的累计总数，每 250 ms 一次，并在它结束时再发送一次，使抽样后的列表能显示它所代表的流量有多大。
+
+| 字段 | 类型 | 含义 |
+| --- | --- | --- |
+| `job_id` | number | 监视器的任务 |
+| `ts` | number | 时间 |
+| `packets` | number | 收到的数据包，无论是否解码 |
+| `bytes` | number | 收到的字节数 |
+| `not_shown` | number | 已收到但没有作为 [`osc://message`](#event-osc-message) 转发的数据包（被速率抽样拦下了） |
+| `malformed` | number | 无法解码为 OSC 的数据包 |
 
 ### `osc://gen-tick` {#event-osc-gen-tick}
 
@@ -158,8 +173,9 @@ HTTP 突发的数字，运行时每 100 ms 一次，并在它自行结束时再�
 | `job_id` | number | 突发的任务 |
 | `ts` | number | 时间 |
 | `sent` | number | 到目前为止已应答或失败的请求 |
-| `ok` | number | 其中以 2xx 状态应答的 |
-| `failed` | number | 其中其他状态或没有应答的 |
+| `ok` | number | 其中以 2xx 状态应答且整个正文都已到达的 |
+| `failed` | number | 其中其他状态、正文被截断或没有应答的——绝不包括此计算机未能发出的 |
+| `local` | number | 其中此计算机未能发出的请求：套接字或本地端口用尽（`transport.exhausted`）。不在 `failed` 中，也不在延迟中 |
 | `missed` | number | 有节奏的突发中等待空闲工作器过久而跳过的请求 |
 | `rps` | number | 最近 100 ms 内的每秒请求数；在最后一个事件中，为整个突发的 |
 | `last_latency_ms`, `min_latency_ms`, `max_latency_ms`, `avg_latency_ms` | number | 到目前为止的延迟 |
@@ -186,8 +202,9 @@ HTTP 突发的数字，运行时每 100 ms 一次，并在它自行结束时再�
 | --- | --- | --- |
 | `job_id` | number | 连接的任务 |
 | `ts` | number | 时间 |
-| `messages` | object[] | 按顺序：`ts`、`dir`（`rx` 接收，`tx` 发送）、`kind`（`text` 或 `binary`）、`text`（前 64 KiB 作为 UTF-8，二进制消息也一样；不是 UTF-8 的字节会变成 `�`）、`hex`（二进制消息前 4096 字节的十六进制，否则为 null）、`bytes`（完整大小）以及 `truncated`（超过显示的部分：文本超过 64 KiB，二进制超过 4096 字节） |
-| `dropped` | number | 因为超过 2000 条而没有被包含进此事件的消息；最旧的先被丢弃 |
+| `messages` | object[] | 按顺序：`ts`、`dir`（`rx` 接收，`tx` 发送）、`kind`（`text` 或 `binary`）、`text`（前 64 KiB 作为 UTF-8；二进制消息则是前 4096 字节；不是 UTF-8 的字节会变成 `�`）、`hex`（二进制消息前 4096 字节的十六进制，否则为 null）、`bytes`（完整大小）以及 `truncated`（超过显示的部分：文本超过 64 KiB，二进制超过 4096 字节） |
+| `dropped` | number | 因为超过 2000 条，或 `text` 和 `hex` 合计超过 1 MiB，而没有被包含进此事件的消息；最旧的先被丢弃 |
+| `received`, `sent` | number | 连接上到目前为止已接收和已发送的消息数，无论是否显示 |
 
 ### `mqtt://state` {#event-mqtt-state}
 
@@ -210,8 +227,8 @@ MQTT 连接的状态发生变化。
 | --- | --- | --- |
 | `job_id` | number | 连接的任务 |
 | `ts` | number | 时间 |
-| `messages` | object[] | `ts`、`topic`、`payload`（作为 UTF-8；不是 UTF-8 的字节会变成 `�`）、`bytes`、`qos`、`retain`、`dup` |
-| `dropped` | number | 因为 100 ms 内到达超过 4000 条而略去的消息；最旧的先被丢弃 |
+| `messages` | object[] | 每个主题一条，即其上到达的最新一条：`ts`、`topic`、`payload`（其前 4096 字节作为 UTF-8；不是 UTF-8 的字节会变成 `�`）、`bytes`（整个载荷的大小）、`truncated`（`payload` 只是开头部分）、`qos`、`retain`、`dup`，以及 `count`（自上一个事件以来该主题上的消息数，含这一条） |
+| `dropped` | number | 始终为 0：当一个事件要承载超过 4000 个主题或 2 MiB 的载荷时，连接会停止读取，直到它送出，而代理会等待 |
 
 ### `mqtt://ack` {#event-mqtt-ack}
 
@@ -237,6 +254,7 @@ MQTT 连接的状态发生变化。
 | `rounds` | number | 已发送的轮数 |
 | `packets`, `bytes` | number | 已发送的数据报和字节数 |
 | `errors` | number | 失败的发送 |
+| `local` | number | 此计算机未能完成的发送（缓冲区或套接字用尽），不在 `errors` 之内；为 0 时省略 |
 | `pps` | number | 最近 250 ms 内的每秒数据报数 |
 
 ### `broadcast://peers` {#event-broadcast-peers}
@@ -250,6 +268,8 @@ MQTT 连接的状态发生变化。
 | `peers` | object[] | 最近听到的在最前：`addr`、`proto`、`packets`、`bytes`、`first_ms`、`last_ms`、`last_summary`、`responded`（其数据包中得到应答的，按到达时计数）；最多 512 个 |
 | `packets`, `bytes` | number | 收到的一切 |
 | `responses` | number | 已发送的应答 |
+| `unlisted` | number | 超出表所容纳的 512 个之后的不同对等端：计在这里，不在 `peers` 中 |
+| `replies_skipped` | number | 因已有太多自动回复（1024 个）在途而没有应答的探测——这个上限防止探测洪泛被无限放大 |
 
 ### `netsim://stat` {#event-netsim-stat}
 
@@ -265,6 +285,8 @@ MQTT 连接的状态发生变化。
 | `duplicated`, `corrupted`, `reordered` | number | 配置对它们做了什么 |
 | `bytes` | number | 转发出去的字节数 |
 | `connections`, `reset`, `stalled` | number | TCP：已接受的连接、已重置的、处于半开状态的；为 0 时省略 |
+| `refused` | number | TCP：目标拒绝或没有应答的连接，以重置的形式传给了客户端；为 0 时省略 |
+| `failed` | number | 此计算机无法转发的内容：系统不肯发送的数据报、没有本地端口或套接字可用的连接（先重试约两秒），或超出中继同时 1024 个连接的上限的连接；为 0 时省略 |
 | `profile` | string | 它现在用来制造损伤的配置，按时间线的称法：其名称，或它所做的事（`60 ms ±25 · loss 2%`） |
 
 ### `storm://stat` {#event-storm-stat}
@@ -276,7 +298,8 @@ MQTT 连接的状态发生变化。
 | `job_id` | number | 风暴的任务 |
 | `ts` | number | 时间 |
 | `packets`, `bytes` | number | 已发送的数据报（或 TCP 连接）和字节数 |
-| `errors` | number | 失败的发送或连接 |
+| `errors` | number | 被目标拒绝、重置或没有应答的发送或连接 |
+| `local` | number | 此计算机未能发出的单位——本地端口、套接字或缓冲区用尽，而不是目标拒绝；绝不计为 `errors` |
 | `pps` | number | 最近 250 ms 内的每秒数 |
 | `mbps` | number | 最近 250 ms 内的每秒兆比特数 |
 
@@ -302,6 +325,7 @@ MQTT 连接的状态发生变化。
 | `done` | number | 已尝试的端口 |
 | `total` | number | 范围内的端口数 |
 | `open` | number | 发现的打开端口数 |
+| `unchecked` | number | 此计算机未能尝试的端口（本地端口或套接字用尽），因此既不算打开也不算关闭；通常为 0 |
 
 ### `emulator://activity` {#event-emulator-activity}
 
@@ -311,7 +335,7 @@ MQTT 连接的状态发生变化。
 | --- | --- | --- |
 | `job_id` | number | 模拟器的任务 |
 | `ts` | number | 时间 |
-| `counts` | object | `total`、`unmatched`、`failed`、`down`、`hits`（每条规则）以及 `missed`（MQTT；为 0 时省略）——如 [`emulator_exchanges`](commands.md#emulator_exchanges) 所示 |
+| `counts` | object | `total`、`unmatched`、`failed`、`down`、`hits`（每条规则）、`missed`（MQTT；为 0 时省略）以及 `refused`（超出上限的连接；为 0 时省略）——如 [`emulator_exchanges`](commands.md#emulator_exchanges) 所示 |
 | `forced` | string | 被停机期间为 `unavailable`、`reset` 或 `timeout`；否则省略 |
 | `exchanges` | object[] | 新的交互，如 `emulator_exchanges` 所列，但没有 `data`；最多 200 条 |
 | `dropped` | number | 该时间段内超过前 200 条、未在此发送的交互；`emulator_exchanges` 仍保留最近 500 条 |

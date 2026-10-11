@@ -58,7 +58,10 @@ Alle sind JSON in UTF-8, mit Einrückung geschrieben, damit sie sich gut lesen
 und vergleichen lassen. Jede trägt eine `version`; eine Datei einer älteren
 Version wird beim Öffnen gelesen und migriert und beim nächsten Speichern in der
 aktuellen Version zurückgeschrieben — danach kann ein älteres Signal Lab sie
-nicht mehr öffnen.
+nicht mehr öffnen. Eine Datei einer neueren Version, als dieses Signal Lab kennt, wird
+abgelehnt (`doc.version_unsupported`) und bleibt, wie sie ist: Würde sie trotzdem gelesen,
+ginge beim nächsten Speichern verloren, was die neuere Version hinzugefügt hat. Das gilt für
+das Experiment und beide Bibliotheken.
 
 ### experiment.json {#experiment-json}
 
@@ -156,14 +159,14 @@ eine Bibliothek wie diese enthält.
 
 ### Berichte von Durchläufen {#run-reports}
 
-`runs/run-<started ms>-<job>.json`, Berichtversion 5: eine Datei pro Durchlauf,
+`runs/run-<started ms>-<job>.json`, Berichtversion 6: eine Datei pro Durchlauf,
 der bestanden oder fehlgeschlagen ist, nie überschrieben (ein zweiter Durchlauf
 desselben Namens erhält `-2`, `-3`… angehängt). Ein gestoppter Durchlauf
 speichert keinen.
 
 | Feld | Was es ist |
 | --- | --- |
-| `version` | 5 |
+| `version` | 6 |
 | `experiment` | Der Name des Experiments |
 | `document_version` | Die Version des Dokuments, das lief |
 | `seed`, `profile` | Womit er lief |
@@ -172,7 +175,7 @@ speichert keinen.
 | `started_ms`, `ended_ms` | Millisekunden seit 1970 |
 | `outcome` | `passed` oder `failed` |
 | `error` | Sein erster Fehlschlag oder null |
-| `steps` | Jeder Schritt, wie [`experiment://step`](../api/events.md#event-experiment-step) |
+| `steps` | Die Schritte, wie [`experiment://step`](../api/events.md#event-experiment-step): nach den ersten 5 000 einer pro Sekunde und die letzten 500, eine Lücke in `omitted` gezählt (seit Version 6) |
 | `emulators` | Was jeder [[ui:exp.node.emulator]]-Knoten empfangen und geantwortet hat (seit Version 3); weggelassen, wenn keiner |
 | `impairments` | Was das Relais jedes [[ui:exp.node.impairment]]-Knotens tat, Phase für Phase (seit Version 4); weggelassen, wenn keiner |
 
@@ -235,12 +238,14 @@ Signal Lab schreibt keine Log-Dateien; siehe
   neuen Rechner also erneut.
 - **Bearbeiten** Sie `signals.json`, `emulators.json` und `experiment.json` von
   Hand, während Signal Lab geschlossen ist (oder, auf einem Server, während keine
-  Seite offen ist): Die App schreibt die ganze Datei aus dem, was sie hält, daher
-  wird eine Änderung während des Betriebs durch ihr nächstes Speichern
-  überschrieben. Ein Fehler wird mit Zeile und Spalte gemeldet, wenn die Datei
+  Seite offen ist): Die App schreibt die ganze Datei aus dem, was sie hält. Bei
+  `signals.json` und `emulators.json` wird ein Speichern über eine Datei, die sich seit dem
+  Lesen durch die App geändert hat, abgelehnt (`file.changed`) und Ihre Änderung bleibt —
+  drücken Sie Neu laden, um sie zu lesen; `experiment.json` wird durch das nächste Speichern
+  des Editors überschrieben. Ein Fehler wird mit Zeile und Spalte gemeldet, wenn die Datei
   das nächste Mal gelesen wird, nie stillschweigend ersetzt — bei
-  `signals.json` auch, wenn die App hineinspeichert: Dieses Speichern wird
-  abgelehnt und die Datei bleibt, wie Sie sie hinterlassen haben.
+  `signals.json` und `emulators.json` auch, wenn die App hineinspeichert: Dieses Speichern
+  wird abgelehnt und die Datei bleibt, wie Sie sie hinterlassen haben.
 - **Löschen** Sie `runs/`, `exports/` und `capture-*`-Dateien jederzeit. Das
   Löschen von `signals.json` oder `emulators.json` bringt den Startersatz zurück;
   das Löschen von `experiment.json` bringt das Starter-Experiment zurück.

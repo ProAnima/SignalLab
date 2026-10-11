@@ -157,7 +157,7 @@ bundle OSC con sus argumentos, los encabezados de una respuesta HTTP y el inicio
 de su cuerpo, la solicitud y la respuesta de un emulador.
 
 Bajo [[ui:ins.rawBytes]] hay un volcado hex: desplazamiento, 16 bytes en hex y
-los mismos bytes como texto. La lista lleva el primer KiB de cada trama; cuando
+los mismos bytes como texto. La lista lleva los primeros 256 bytes de cada trama; cuando
 una trama es más larga, un botón bajo el volcado carga todo.
 
 ### Qué conserva una trama {#limits}
@@ -250,8 +250,8 @@ Una captura vacía no se escribe; la consola dice que no hay nada que guardar.
 
 - **`.jsonl`** — un objeto JSON por línea, una línea por trama: `seq`, `ts`
   (milisegundos desde 1970), `proto`, `dir`, `source`, `job_id`, `local`,
-  `remote`, `bytes`, `kept`, `summary`, `detail`, `hex` (el volcado del primer
-  KiB), `verdict` y `data`, los bytes que conservó en base64.
+  `remote`, `bytes`, `kept`, `summary`, `detail`, `hex` (el volcado de los primeros
+  256 bytes), `verdict` y `data`, los bytes que conservó en base64.
 - **`.txt`** — para leer: una línea por trama con su número, hora, dirección,
   protocolo, extremo, tamaño y veredicto, y luego su resumen, su texto
   decodificado y un volcado hex de cada byte que conservó.

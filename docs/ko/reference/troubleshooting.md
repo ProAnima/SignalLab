@@ -8,7 +8,7 @@ description: Signal Lab의 흔한 문제와 해결 방법 — 아무것도 도�
 Signal Lab이 보고하는 모든 실패에는 코드가 있습니다. 각 코드의 메시지는
 [오류 메시지](errors.md)에 있습니다. 네트워크 실패는 [`transport`](errors.md#transport)
 코드입니다: `refused`, `timeout`, `dns`, `unreachable`, `reset`, `address_in_use`,
-`address_unavailable`, `denied`, `tls`, `target_invalid`, `failed`. 아래는 흔한 문제들입니다.
+`address_unavailable`, `denied`, `tls`, `target_invalid`, `exhausted`, `failed`. 아래는 흔한 문제들입니다.
 
 ## 아무것도 도착하지 않음 {#nothing-arrives}
 

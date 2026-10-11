@@ -29,7 +29,7 @@ para o destino, traz as respostas de volta e degrada os dois sentidos.
 | Campo | O quê |
 | --- | --- |
 | [[ui:exp.relayListen]] | `IP:port` para o qual o sistema em teste envia ou ao qual se conecta, porta diferente de 0 |
-| [[ui:exp.relayTarget]] | `IP:port` do destino real |
+| [[ui:exp.relayTarget]] | `IP:port` do destino real, ou `host:port`; um nome de host é resolvido quando a execução começa |
 | [[ui:ns.protocol]] | UDP — cada datagrama tem a sua própria sorte — ou TCP — cada conexão é ligada a uma conexão própria até o destino |
 | o perfil | uma [[ui:ns.preset]] ou valores seus |
 

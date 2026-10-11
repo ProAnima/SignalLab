@@ -8,7 +8,7 @@ description: OSC 화면에서 타입이 있는 Open Sound Control 메시지를 �
 [[ui:nav.osc]] 화면은 Open Sound Control(OSC 1.0)을 UDP로 직접 주고받는 곳입니다. 세 부분으로
 이루어집니다.
 
-- [[ui:osc.sender]]: 메시지 하나, 타입이 있는 인수, <kbd>Enter</kbd>를 누르면 전송됩니다.
+- [[ui:osc.sender]]: 메시지 하나, 타입이 있는 인수, Enter를 누르면 전송됩니다.
 - [[ui:osc.monitor]]: 포트에서 수신하며 도착하는 모든 패킷을 디코딩합니다.
 - [[ui:osc.generator]]: 파형을 따르는 값을 초당 여러 번 보내고, 그것을 그립니다.
 
@@ -84,14 +84,18 @@ OSC `true`는 텍스트 `"true"`가 아니라 태그 `T`입니다. bool을 기�
 | [[ui:common.time]] | 도착한 시각, 밀리초까지 |
 | [[ui:osc.from]] | 보낸 쪽의 `IP:port` |
 | [[ui:osc.address]] | OSC 주소, 또는 패킷이 유효한 OSC가 아닐 때 [[ui:osc.decodeError]] |
-| [[ui:osc.args]] | 인수 값; blob은 `blob[n]`, `nil`은 `nil`로 표시됩니다. 디코딩할 수 없었던 패킷이면 그 이유. |
+| [[ui:osc.args]] | 인수 값; blob은 `blob[n]`, `nil`은 `nil`, 타임 태그는 `t:`와 1900년부터의 초(OSC의 "지금"은 `t:immediate`), char는 `'A'`, 색상은 `#rrggbbaa`, MIDI 메시지는 `midi[01 90 3c 7f]`, 배열은 `[ ]` 안에 표시됩니다. 디코딩할 수 없었던 패킷이면 그 이유. |
 
 번들은 메시지마다 한 행을 줍니다. 목록은 최근 300행을 유지하고, [[ui:common.clear]]가 비웁니다.
 [[ui:common.stop]]을 누르면 포트가 닫힙니다. 모니터는 콘솔 표시줄의 작업이기도 하므로 거기서도
 중지할 수 있습니다.
 
-모니터는 최대 64 KiB의 패킷을 읽습니다. `i f s S b h d T F N I` 태그를 디코딩하며(`S`는 텍스트로,
-`I`는 nil로 읽습니다). 다른 태그가 있거나 잘린 패킷은 버리지 않고 디코딩 오류로 표시합니다.
+모니터는 최대 64 KiB의 패킷을 읽습니다. OSC 1.0의 모든 타입 태그
+`i f s S b h d T F N I t c r m`와 배열 `[ ]`을 디코딩합니다(`S`는 텍스트로,
+`I`는 `impulse`로 읽습니다). 타입 태그 문자열이 없는 오래된 구현의 메시지는 사양에 따라
+인수 없는 메시지로 읽습니다. 다른 태그가 있거나, 잘렸거나, 주소가 `/`로 시작하지 않는 패킷은
+버리지 않고 디코딩 오류로 표시합니다. 대기와 에뮬레이터도 같은 타입을 읽습니다. 회신 값에서
+타임 태그는 텍스트로 쓴 64비트 숫자, 색상은 `#rrggbbaa`, MIDI 메시지는 네 바이트, 배열은 목록입니다.
 
 ### 메시지를 대기로 바꾸기 {#wait-for-this}
 

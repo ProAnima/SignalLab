@@ -14,7 +14,8 @@ description: Все команды движка Signal Lab, вызываемые
 
 - **Имена аргументов** — в camelCase (`jobId`, `nodeId`). Незнакомый команде аргумент или
   пропущенный обязательный отклоняется с `command.args_invalid`; этим может завершиться
-  любая команда с аргументами. Команда без аргументов тело не читает.
+  любая команда с аргументами. Команда без аргументов принимает пустое тело, `null` или
+  `{}`; всё остальное тоже отклоняется с `command.args_invalid`.
 - **Объекты, переданные как аргумент**, — `config`, `request`, `document`, `library`,
   `emulator`, `profile` — используют собственные имена полей движка, в основном в
   snake_case (`timeout_ms`). Поле, которого движок не знает, внутри них **игнорируется**,
@@ -152,7 +153,8 @@ invoke app_info
 ### job_stop {#job_stop}
 
 Немедленно останавливает одну задачу: её сокеты закрываются, её реле, сервер или
-соединение уходят. Остановленная задача не отправляет [`job://ended`](events.md#event-job-ended);
+соединение уходят. Ответ приходит, когда они ушли: запуск сразу после этого занимает тот
+же порт. Остановленная задача не отправляет [`job://ended`](events.md#event-job-ended);
 остановленный запуск не сохраняет отчёт.
 
 | Аргумент | Тип | Обязателен | Значение |
@@ -163,7 +165,9 @@ invoke app_info
 
 ### jobs_stop_all {#jobs_stop_all}
 
-Останавливает все работающие задачи, кто бы их ни начал. Без аргументов.
+Останавливает все работающие задачи, кто бы их ни начал, и отвечает, когда они отпустили
+свои порты, как [`job_stop`](#job_stop). Задача, которая ещё запускается (запуск, открывающий
+свои порты), останавливается в момент запуска. Без аргументов.
 
 **Результат**: null.
 
@@ -530,7 +534,8 @@ invoke osc_monitor_start '{"bind":"0.0.0.0:9000"}'
 
 **Результат**: [`HttpResponse`](#type-httpresponse).
 
-**Ошибки**: `http.client_failed` (запрос не удалось даже подготовить).
+**Ошибки**: `node.method_invalid` (поле `method`: не токен HTTP, например `BAD METHOD`),
+`http.client_failed` (запрос не удалось даже подготовить).
 
 ### http_burst_start {#http_burst_start}
 
@@ -559,7 +564,7 @@ invoke osc_monitor_start '{"bind":"0.0.0.0:9000"}'
 
 **Результат**: [`JobInfo`](#type-jobinfo).
 
-**Ошибки**: `http.rate_invalid`, `http.duration_invalid`, `http.client_failed`.
+**Ошибки**: `http.rate_invalid`, `http.duration_invalid`, `node.method_invalid`, `http.client_failed`.
 
 ### http_cookies {#http_cookies}
 
@@ -688,7 +693,12 @@ MQTT 3.1.1 по обычному TCP, QoS 0, 1 и 2. См. [MQTT](../protocols/m
 **Ошибки**: `mqtt.client_id_required`, `transport.*` (отказ, недоступность, `dns`,
 `timeout` через 6 с), `mqtt.no_answer` (нет CONNACK за 6 с), `mqtt.protocol`,
 `mqtt.refused_protocol`, `mqtt.refused_client_id`, `mqtt.refused_unavailable`,
-`mqtt.refused_credentials`, `mqtt.refused_not_authorized`, `mqtt.refused`.
+`mqtt.refused_credentials`, `mqtt.refused_not_authorized`, `mqtt.refused`; до подключения —
+`node.topic_filter` (фильтр `subscribe`, который 3.1.1 запрещает), `node.too_long` (имя
+пользователя, пароль, ID клиента или завещание больше 65 535 байт MQTT) и
+`node.topic_wildcard` / `mqtt.topic_invalid` (завещание в топик, в который нельзя было бы
+опубликовать). Соединение, в котором брокер молчит, даже на пинги, в течение
+1,5 × `keep_alive_s`, завершается с `transport.timeout` в `job://ended`.
 
 ### mqtt_publish {#mqtt_publish}
 
@@ -705,9 +715,10 @@ MQTT 3.1.1 по обычному TCP, QoS 0, 1 и 2. См. [MQTT](../protocols/m
 **Результат**: null. Публикацию QoS 1 или 2 позже подтверждает
 [`mqtt://ack`](events.md#event-mqtt-ack).
 
-**Ошибки**: `node.topic_wildcard` (поле `topic`) и `mqtt.topic_required` (поле `topic`),
-как у [`mqtt_publish_once`](#mqtt_publish_once) — команда отклоняет их до поиска
-соединения; `mqtt.not_connected`.
+**Ошибки**: `node.topic_wildcard`, `mqtt.topic_required`, `mqtt.topic_invalid` (NUL в нём)
+и `node.too_long` (больше 65 535 байт), все с полем `topic`, как у
+[`mqtt_publish_once`](#mqtt_publish_once) — команда отклоняет их до поиска соединения;
+`mqtt.not_connected`.
 
 ### mqtt_subscribe {#mqtt_subscribe}
 
@@ -721,7 +732,9 @@ MQTT 3.1.1 по обычному TCP, QoS 0, 1 и 2. См. [MQTT](../protocols/m
 
 **Результат**: null.
 
-**Ошибки**: `mqtt.filter_required`, `mqtt.not_connected`.
+**Ошибки**: `mqtt.filter_required`, `node.topic_filter` (поле `topic`: фильтр, который 3.1.1
+запрещает, например `a/#/b` или `a+` — брокеры из-за такого закрывают соединение),
+`mqtt.not_connected`.
 
 ### mqtt_unsubscribe {#mqtt_unsubscribe}
 
@@ -735,7 +748,7 @@ MQTT 3.1.1 по обычному TCP, QoS 0, 1 и 2. См. [MQTT](../protocols/m
 **Результат**: null. Ответ брокера приходит событием [`mqtt://ack`](events.md#event-mqtt-ack)
 с `kind: "unsubscribed"`.
 
-**Ошибки**: `mqtt.filter_required`, `mqtt.not_connected`.
+**Ошибки**: `mqtt.filter_required`, `node.topic_filter` (поле `topic`), `mqtt.not_connected`.
 
 ### mqtt_publish_once {#mqtt_publish_once}
 
@@ -948,13 +961,16 @@ invoke netsim_start '{"config":{"listen":"127.0.0.1:9010","target":"127.0.0.1:90
 | `target` | строка | — | `IP:port` или `host:port`; имя разрешается один раз, при старте задачи |
 | `protocol` | строка | — | `udp`: датаграммы; `tcp`: на каждую единицу — соединение, которое записывает содержимое и закрывается (каждое подключение может занять 500 мс) |
 | `size` | число | — | Байт содержимого, ограничено от 1 до 65 507 |
-| `rate` | число | — | Единиц в секунду, по расписанию: единица *n* должна уйти через *n* / `rate` секунд после старта, и при каждом пробуждении отправляется всё, что подошло (не больше 256; если расписание отстало дальше, более старые единицы пропускаются); 0 — отправлять так быстро, как получится |
-| `duration_s` | число | `0` | Остановиться через столько секунд; 0 — пока не остановят |
+| `rate` | число | — | Единиц в секунду, не больше 10 000 000, по расписанию: единица *n* должна уйти через *n* / `rate` секунд после старта, и при каждом пробуждении отправляется всё, что подошло (не больше 256; если расписание отстало дальше, более старые единицы пропускаются); 0 — отправлять так быстро, как получится |
+| `duration_s` | число | `0` | Остановиться через столько секунд; 0 (или отрицательное число) — пока не остановят |
 
 **Результат**: [`JobInfo`](#type-jobinfo).
 
-**Ошибки**: `transport.target_invalid`, `transport.dns`. Неудавшиеся отправки учитываются
-в событиях, а не сообщаются как ошибки.
+**Ошибки**: `transport.target_invalid`, `transport.dns` и, для UDP, сбой привязки или
+подключения (`transport.*`), если сокет вообще не удалось открыть. Отправки, которые цель
+отвергла, учитываются в событиях как `errors`; то, что не смогла отправить эта машина
+(кончились порты, сокеты или буферы), считается как `local` и никогда не записывается на
+счёт цели.
 
 ### scan_start {#scan_start}
 
@@ -1039,7 +1055,7 @@ invoke scan_start '{"config":{"host":"127.0.0.1","port_start":8000,"port_end":91
 
 ### inspect_payload {#inspect_payload}
 
-Байты, которые хранит кадр, сверх 1 КиБ предпросмотра, который несла его пачка.
+Байты, которые хранит кадр, сверх 256-байтового предпросмотра, который несла его пачка.
 
 | Аргумент | Тип | Обязателен | Значение |
 | --- | --- | --- | --- |
@@ -1068,8 +1084,9 @@ invoke inspect_snapshot '{"limit":20}' | jq '.[] | {seq, proto, dir, summary}'
 
 Читает библиотеку. Если файла нет, сначала записывается стартовый набор. Без аргументов.
 
-**Результат**: `{ "path": string, "library": library, "seeded": boolean }` — `seeded`
-истинно, если стартовый набор только что записан. Библиотека — это
+**Результат**: `{ "path": string, "library": library, "seeded": boolean, "stamp": string }` —
+`seeded` истинно, если стартовый набор только что записан; `stamp` называет то, что
+содержал файл, — для `base` следующего сохранения. Библиотека — это
 `{ "version", "signals": [...], "folders": [...] }`: `version` равна 2 (файл версии 1
 возвращается как есть), `folders` пропускается, если папок нет. У каждого сигнала есть
 `id`, `name`, `group` (его папка, `"A/B"`; пусто, если папки нет), `note` и `body`.
@@ -1080,16 +1097,22 @@ invoke inspect_snapshot '{"limit":20}' | jq '.[] | {seq, proto, dir, summary}'
 ### signals_save {#signals_save}
 
 Заменяет весь файл библиотеки через временный файл в той же папке. Существующий файл,
-который не читается как библиотека, остаётся как есть.
+который не читается как библиотека, остаётся как есть. С `base` файл, изменившийся после
+чтения — другой страницей сервера или человеком в редакторе, — тоже остаётся как есть, а
+сохранение отклоняется, чтобы их изменение не потерялось под списком, который его не видел.
 
 | Аргумент | Тип | Обязателен | Значение |
 | --- | --- | --- | --- |
 | `library` | объект | да | `{ version, signals, folders }`, как его возвращает `signals_load` |
+| `base` | строка | нет | `stamp`, с которым библиотека была прочитана (или который вернуло последнее сохранение); `""`, если файла не было |
 
-**Результат**: строка — записанный путь.
+**Результат**: строка — записанный путь; с `base` — `{ "path", "stamp" }`: метка того, что
+файл содержит теперь, `base` следующего сохранения.
 
 **Ошибки**: `signals.json_invalid` (файл, который сейчас на диске, не читается, с `path`,
-`line`, `column`; ничего не записывается), `signals.encode`, `file.io`.
+`line`, `column`; ничего не записывается), `file.changed` (с `path`: файл больше не
+содержит `base`; ничего не записывается — прочитайте его снова), `signals.encode`,
+`file.io`.
 
 `body` сигнала зависит от его `transport`:
 
@@ -1116,22 +1139,28 @@ TCP, брокер MQTT. Его документ — `name`, `bind`, `protocol`, 
 Читает библиотеку эмуляторов. Если файла нет, сначала записывается стартовый набор. Без
 аргументов.
 
-**Результат**: `{ "path", "library": { "version": 1, "emulators": [{ "id", "note", "emulator" }] }, "seeded" }`.
+**Результат**: `{ "path", "library": { "version": 1, "emulators": [{ "id", "note", "emulator" }] }, "seeded", "stamp" }` —
+`stamp` называет то, что содержал файл, — для `base` следующего сохранения.
 
 **Ошибки**: `emulators.json_invalid` (с `path`, `line`, `column`; никогда не заменяется),
 `file.io`.
 
 ### emulators_save {#emulators_save}
 
-Заменяет всю библиотеку эмуляторов через временный файл.
+Заменяет всю библиотеку эмуляторов через временный файл. Существующий файл, который не
+читается как библиотека, остаётся как есть; с `base` так же остаётся файл, изменившийся
+после чтения, как у [`signals_save`](#signals_save).
 
 | Аргумент | Тип | Обязателен | Значение |
 | --- | --- | --- | --- |
 | `library` | объект | да | `{ version, emulators }`, как его возвращает `emulators_load` |
+| `base` | строка | нет | `stamp`, с которым библиотека была прочитана (или который вернуло последнее сохранение); `""`, если файла не было |
 
-**Результат**: строка — записанный путь.
+**Результат**: строка — записанный путь; с `base` — `{ "path", "stamp" }`.
 
-**Ошибки**: `emulators.encode`, `file.io`.
+**Ошибки**: `emulators.json_invalid` (файл, который сейчас на диске, не читается; ничего не
+записывается), `file.changed` (файл больше не содержит `base`; ничего не записывается),
+`emulators.encode`, `file.io`.
 
 ### emulator_check {#emulator_check}
 
@@ -1187,7 +1216,7 @@ TCP, брокер MQTT. Его документ — `name`, `bind`, `protocol`, 
 | --- | --- | --- |
 | `job_id` | число | Задача |
 | `name`, `protocol`, `local` | строка | Эмулятор, его протокол и адрес, на котором он слушает |
-| `counts` | объект | `total`, `unmatched` (ни одно правило не сработало), `failed`, `down` (пришло, пока он был отключён: его отключение по расписанию или [`emulator_down`](#emulator_down)), `hits` (по правилам) и `missed` (MQTT: сообщения, которые не получил слишком отставший клиент; пропускается, пока 0) |
+| `counts` | объект | `total`, `unmatched` (ни одно правило не сработало), `failed`, `down` (пришло, пока он был отключён: его отключение по расписанию или [`emulator_down`](#emulator_down)), `hits` (по правилам), `missed` (MQTT: сообщения, которые не получил слишком отставший клиент; пропускается, пока 0) и `refused` (HTTP, TCP, MQTT: соединения, закрытые сразу при подключении, сверх лимита; пропускается, пока 0) |
 | `forced` | строка | `unavailable`, `reset` или `timeout`, пока он отключён; иначе пропускается |
 | `exchanges` | object[] | Каждый: `seq`, `ts`, `from`, `request`, `rule` (с 1; пропускается, если ни одно правило не сработало), `reply`, `status`, `fault`, `ms`, `error`, `frame`, `down` и `data` (запрос в том виде, как его читают шаблоны) |
 
@@ -1236,6 +1265,15 @@ invoke emulator_exchanges '{"jobId":5,"after":0}' | jq '.counts, (.exchanges[] |
 | `bool` | `true` или `false` | `T` или `F` |
 | `blob` | массив байтов, `[222, 173]` | `b` |
 | `nil` | нет: `{ "type": "nil" }` | `N` |
+| `time` | метка времени, её 64 бита десятичным текстом: `"1"` — «немедленно» | `t` |
+| `char` | один символ, `"A"` | `c` |
+| `color` | `[red, green, blue, alpha]` | `r` |
+| `midi` | `[port, status, data1, data2]` | `m` |
+| `impulse` | нет | `I` |
+| `array` | массив OscArg | `[` … `]` |
+
+Последние шесть несут принятые сообщения (`osc://message` монитора OSC); команда тоже
+может их отправлять.
 
 ### HttpRequest {#type-httprequest}
 
@@ -1245,7 +1283,7 @@ invoke emulator_exchanges '{"jobId":5,"after":0}' | jq '.counts, (.exchanges[] |
 | `url` | строка | — | `http://` или `https://` |
 | `headers` | `[name, value][]` | `[]` | Заголовки запроса |
 | `body` | строка или null | null | Тело |
-| `timeout_ms` | число | `10000` | На весь обмен |
+| `timeout_ms` | число | `10000` | На весь обмен, включая тело: от 1 до 120 000; вне этих пределов команда завершается ошибкой `node.range` (поле `timeout_ms`) |
 | `auth` | объект | нет | `{ "scheme": "basic", "username", "password" }`, `{ "scheme": "digest", "username", "password" }` или `{ "scheme": "bearer", "token" }` |
 
 Выполняется до 10 перенаправлений. Учётные данные и cookie, введённые для одного хоста,
@@ -1256,15 +1294,15 @@ invoke emulator_exchanges '{"jobId":5,"after":0}' | jq '.counts, (.exchanges[] |
 
 | Поле | Тип | Значение |
 | --- | --- | --- |
-| `ok` | логическое | Статус 2xx |
+| `ok` | логическое | Статус 2xx, и всё тело пришло |
 | `status`, `status_text` | число, строка | Статус; 0 и пусто, если ответа не было |
 | `latency_ms` | число | До прихода всего тела |
 | `headers` | `[name, value][]` | Заголовки ответа |
 | `body` | строка | Тело как текст, не больше 256 КиБ |
 | `body_bytes` | число | Полный размер тела |
 | `truncated` | логическое | `body` обрезано на 256 КиБ |
-| `error` | строка или null | Почему не было ответа, каждый слой причины |
-| `cause` | строка или null | Какого рода сбой: `refused`, `timeout`, `dns`, `unreachable`, `reset`, `address_in_use`, `address_unavailable`, `denied`, `tls`, `target_invalid`, `failed` — то же, что коды `transport.*` |
+| `error` | строка или null | Почему не было ответа или почему тело оборвалось (тогда `status`, `headers` и пришедшая часть тела тоже есть), каждый слой причины |
+| `cause` | строка или null | Какого рода сбой: `refused`, `timeout`, `dns`, `unreachable`, `reset`, `address_in_use`, `address_unavailable`, `denied`, `tls`, `target_invalid`, `exhausted` (у этой машины кончились сокеты или локальные порты), `failed` — то же, что коды `transport.*` |
 | `digest` | объект | Только для запроса Digest, получившего 401; иначе пропускается. `challenged`: на вызов ответили, и запрос отправлен снова. `error`: почему этого не удалось сделать, `EngineError` (`http.digest_not_offered`, `http.digest_unsupported`, `http.digest_invalid`, `http.digest_other_origin`) или null |
 
 ### Payload {#type-payload}
@@ -1334,7 +1372,7 @@ invoke emulator_exchanges '{"jobId":5,"after":0}' | jq '.counts, (.exchanges[] |
 | `bytes` | Его размер |
 | `summary` | Одна строка |
 | `detail` | Расшифровка в несколько строк или null |
-| `hex` | Hex-дамп первого 1 КиБ или null |
+| `hex` | Hex-дамп первых 256 байт или null |
 | `verdict` | Что с ним стало — `dropped`, `sampled`, статус — или null |
 | `kept` | Сколько из `bytes` хранится (до 256 КиБ); 0, если записан только размер |
 | `publish` | Только для публикации MQTT: `{ broker, topic, qos, retain, text }` — брокер как `host:port` и то, является ли хранимое, то есть содержимое сообщения, текстом UTF-8. Отсутствует у всех остальных кадров |

@@ -149,11 +149,12 @@ viermal pro Sekunde aktualisiert.
 | [[ui:ns.received]] | Datagramme, die das Relais erreicht haben. |
 | [[ui:ns.forwarded]] | Weitergeleitete Datagramme; ein dupliziertes zählt zweimal. |
 | [[ui:ns.dropped]] | Absichtlich verloren: offline, ein Burst oder Verlust. |
-| [[ui:ns.throttled]] | Von der Bandbreitengrenze verworfen oder weil bereits 10 000 unterwegs waren. |
+| [[ui:ns.throttled]] | Von der Bandbreitengrenze verworfen oder weil bereits 10 000 — oder 64 MB — unterwegs waren. |
 | [[ui:ns.duplicated]] | Datagramme, die zweimal gesendet wurden. |
 | [[ui:ns.corrupted]] | Kopien mit einem gekippten Bit. |
 | [[ui:ns.reordered]] | Kopien, die zurückgehalten wurden, sodass spätere sie überholten. |
 | [[ui:common.volume]] | Weitergeleitete Bytes. |
+| [[ui:ns.notRelayed]] | Wird angezeigt, sobald es welche gibt: Datagramme, die das System nicht weitersenden wollte. Nie das Werk des Profils. |
 
 Über TCP:
 
@@ -162,10 +163,18 @@ viermal pro Sekunde aktualisiert.
 | [[ui:ns.connections]] | Verbindungen, die Clients zum Relais aufbauten. |
 | [[ui:ns.received]] | Blöcke, die das Relais gelesen hat, in beide Richtungen. |
 | [[ui:ns.forwarded]] | Blöcke, die es weiterschrieb. |
+| [[ui:ns.refused]] | Verbindungen, die das Ziel verweigerte oder nicht beantwortete; der Client erhielt einen Reset. |
 | [[ui:ns.resets]] | Zurückgesetzte Verbindungen. |
 | [[ui:ns.stalled]] | Halboffen gelassene Verbindungen. |
-| [[ui:ns.held]] | Wie oft ein Datenstrom auf die Bandbreitengrenze wartete: Der Sender wurde gebremst, nichts wurde verworfen. |
+| [[ui:ns.held]] | Wie oft ein Datenstrom auf die Bandbreitengrenze wartete: Der Sender wurde gebremst, nichts wurde verworfen. Ein Relais hält außerdem höchstens 64 MB auf dem Weg, alle Verbindungen zusammen, und wartet darüber hinaus ebenso. |
 | [[ui:common.volume]] | Weitergeschriebene Bytes. |
+| [[ui:ns.notRelayed]] | Wird angezeigt, sobald es welche gibt: Verbindungen, die dieser Computer zum Ziel nicht herstellen konnte — kein lokaler Port oder Socket mehr, auch nach zwei Sekunden Versuchen — und Verbindungen jenseits von 1 024 gleichzeitigen. Jede erhielt einen Reset. Nie die Antwort des Ziels. |
+
+Ein Relais, das seine Seite einer Verbindung zuerst schließt, behält danach ein paar
+Minuten einen lokalen Port (das TIME_WAIT des Systems), wie jedes Programm. Viele
+hundert kurze Verbindungen pro Sekunde durch ein Relais verbrauchen die Ports dieses
+Computers; das Relais wartet dann und versucht es erneut, und was dennoch nicht geht,
+wird in [[ui:ns.notRelayed]] gezählt, nie als Verweigerung des Ziels ausgegeben.
 
 Mit eingeschaltetem Mitschnitt zeigt der [Inspektor](inspector.md) weitergeleitete Datagramme
 und Blöcke — höchstens eines alle 25 ms, beide Richtungen zusammen —, jedes mit seinem

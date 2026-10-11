@@ -38,7 +38,7 @@ description: 发送单个 HTTP 请求并读取完整响应，使用 Basic、Bear
 | [[ui:field.auth]] | 请求如何进行认证（[见下文](#auth)） | [[ui:http.auth.none]] |
 | [[ui:http.keepCookies]] | 回送服务器设置的 Cookie（[见下文](#cookies)） | 开 |
 | [[ui:http.body]] | 按书写的内容原样发送；不添加 `Content-Type`，因此请添加与之匹配的标头。空正文不会被发送。GET 和 HEAD 不显示该字段，此时请求完全不携带正文——发送时不带、保存的信号中不带、[[ui:common.toExperiment]] 中也不带——即使您曾在另一种方法下输入过正文。 | 空 |
-| [[ui:common.timeoutMs]] | 整个交换可以花多长时间，包括应答和正文 | 10 000 |
+| [[ui:common.timeoutMs]] | 整个交换可以花多长时间，包括应答和正文：1 ms 到 120,000（两分钟），与 HTTP 步骤相同 | 10 000 |
 
 ## 认证 {#auth}
 
@@ -83,6 +83,8 @@ description: 发送单个 HTTP 请求并读取完整响应，使用 Basic、Bear
 
 请求和响应下方的 Cookie 面板列出存储中保存的内容：[[ui:http.cookieName]]、[[ui:http.cookieValue]]、[[ui:http.cookieWhere]]（以 `.` 开头的域也涵盖其子域）、[[ui:http.cookieExpires]]（没有过期时间的 Cookie 显示为 [[ui:http.cookieSession]]）和 [[ui:http.cookieFlags]]（`Secure`、`HttpOnly`、`SameSite`）。已过期的 Cookie 不会列出。[[ui:common.clear]] 清空该存储。
 
+存储最多保存 3000 个 Cookie，与浏览器的上限相近。一个每次应答都设置新 Cookie 的服务器只会把它填到这个数量：超出之后，新的 Cookie 不再保存，而存储里已有的仍会被更新或删除。
+
 该存储与应用同生命周期：重启后从空开始。在[服务器](../server/index.md)上，每个登录的页面各有一个存储。一次实验运行有自己的存储（见[实验](../experiments/index.md)），而 `signallab send http` 不使用任何存储。
 
 ## 响应 {#response}
@@ -93,13 +95,15 @@ description: 发送单个 HTTP 请求并读取完整响应，使用 Basic、Bear
 | [[ui:http.latency]] | 从发送到正文最后一个字节的时间，以毫秒计 |
 | [[ui:http.size]] | 正文的大小 |
 | 响应标头 | 点击带有其数量的那一行可显示或隐藏它们 |
-| 正文 | 是 JSON 时会格式化；[[ui:http.rawBody]] 和 [[ui:http.formatJson]] 可切换。最多显示 256 KiB，之后为 `… (truncated)`。 |
+| 正文 | 是 JSON 时会格式化；[[ui:http.rawBody]] 和 [[ui:http.formatJson]] 可切换。最多显示 256 KiB，之后为 `… (truncated)`；[[ui:http.size]] 仍是整个正文的大小。 |
+
+正文是边到达边读取的，只保留其前 256 KiB，因此几 GB 的正文——或永不结束的正文——占用的内存也不会超过这个数；它在超时时结束。中途中断的正文（超时，或服务器挂断）是一次失败，措辞与其他失败相同，状态和已到达的部分仍会显示：带着半截正文的 `200` 不是成功。
 
 没有响应时，面板会用与 Signal Lab 各处相同的措辞说明原因：被拒绝、未及时应答、名称无法解析、证书问题等。来自系统的技术细节折叠在其下方。
 
 ### 重定向 {#redirects}
 
-重定向（301、302、303、307、308）会被跟随，最多 10 次；显示的响应是最后一个。经过 301、302 和 303 之后，请求以不带正文的 GET 继续（HEAD 仍是 HEAD）；经过 307 和 308 之后则保持原样。为一个主机输入的 `Authorization` 和 Cookie 不会发往另一个主机。
+重定向（301、302、303、307、308）会被跟随，最多 10 次；显示的响应是最后一个。经过 303 之后，请求以不带正文的 GET 继续（HEAD 仍是 HEAD）；经过 301 或 302 之后，POST 同样如此，而 PUT、DELETE 和其他方法则保持原样，正文也一并带上（RFC 9110）；经过 307 和 308 之后，每个请求都保持原样。使用 Digest 时也是如此。为一个主机输入的 `Authorization` 和 Cookie 不会发往另一个主机。不是 HTTP 令牌的方法（例如其中含有空格）会在发出任何内容之前被拒绝。
 
 ### 安全连接 {#tls}
 
@@ -123,14 +127,15 @@ description: 发送单个 HTTP 请求并读取完整响应，使用 Basic、Bear
 
 有两种发送方式：
 
-- **[[ui:http.rate]] 为 0。**每个工作线程一得到应答就再次发送。这样能测出服务器能承受多少，但服务器慢也会拖慢突发负载。
-- **设定速率。**请求按固定时间表启动——每秒 10 个时，从开始起每 100 ms 一个——无论应答多慢。某个请求到点时所有工作线程都忙，它会最多等待 50 ms 以求一个空闲；超过之后就被跳过并计为 [[ui:http.missed]]，绝不推迟发送。错过的请求意味着并发数对该速率太低，或者服务器比该速率所需的更慢。
+- **[[ui:http.rate]] 为 0**。每个工作线程一得到应答就再次发送。这样能测出服务器能承受多少，但服务器慢也会拖慢突发负载。
+- **设定速率**。请求按固定时间表启动——每秒 10 个时，从开始起每 100 ms 一个——无论应答多慢。某个请求到点时所有工作线程都忙，它会最多等待 50 ms 以求一个空闲；超过之后就被跳过并计为 [[ui:http.missed]]，绝不推迟发送。错过的请求意味着并发数对该速率太低，或者服务器比该速率所需的更慢。
 
 | 数字 | 内容 |
 | --- | --- |
 | [[ui:http.sent]] | 已得到应答或失败的请求 |
-| [[ui:http.ok]] | 以 2xx 状态应答的 |
-| [[ui:http.failed]] | 没有应答，或任何不在 200–299 范围内的状态 |
+| [[ui:http.ok]] | 以 2xx 状态应答，且整个正文都已到达的 |
+| [[ui:http.failed]] | 没有应答、正文被截断，或任何不在 200–299 范围内的状态 |
+| [[ui:http.local]] | 此计算机未能发出的请求：套接字或本地端口已用尽（在 Windows 上，每个关闭的连接会占用一个端口最长两分钟）。服务器从未收到它们，因此它们计入 [[ui:http.sent]]，但不计入 [[ui:http.failed]] 或延迟。仅在有时才显示。 |
 | [[ui:http.missed]] | 被跳过，如上所述（仅在设定速率时） |
 | [[ui:http.rps]] | 最近十分之一秒内的每秒请求数；突发负载结束后，则为整个突发期间的每秒请求数。设定速率时，标签会标出所要求的速率。 |
 | [[ui:http.p50]]、[[ui:http.p90]]、[[ui:http.p95]]、[[ui:http.p99]] | 该比例的请求在此时间内完成，失败也计入；误差在 0.5% 以内 |
@@ -152,9 +157,9 @@ description: 发送单个 HTTP 请求并读取完整响应，使用 Basic、Bear
 
 ## 保存与复用 {#library}
 
-- **保存为信号。**[[ui:sig.saveNew]] 会把请求——方法、URL、标头、正文、超时和认证——保存到信号库中。界面会与它保持关联：[[ui:sig.save]]（<kbd>Ctrl</kbd>+<kbd>S</kbd>）更新它，[[ui:sig.saveAs]] 复制它，标签会在 [[ui:nav.signals]] 中打开它。从库中打开一个 HTTP 信号会把它连同凭据一起加载回这里。见[信号](../tools/signals.md)。
-- **添加到实验。**[[ui:common.toExperiment]] 会把一个请求相同的 [HTTP 请求](../experiments/nodes.md#node-http)步骤添加到打开的实验，紧挨着 End 之前或所选步骤之后，并打开它。
-- **模拟此请求。**在响应下方，[[ui:http.mockThis]] 会创建一个模拟器路由，按此方法、路径、状态、标头和正文应答。在 [[ui:http.mockInto]] 中选择一个 HTTP 模拟器，或选择 [[ui:http.mockNew]]，然后按 [[ui:http.mockAdd]]；该路由会放在该模拟器的最前面，[[ui:nav.emulators]] 界面会打开并定位到它。见[模拟器](../tools/emulators.md)。
+- **保存为信号**。[[ui:sig.saveNew]] 会把请求——方法、URL、标头、正文、超时和认证——保存到信号库中。界面会与它保持关联：[[ui:sig.save]]（<kbd>Ctrl</kbd>+<kbd>S</kbd>）更新它，[[ui:sig.saveAs]] 复制它，标签会在 [[ui:nav.signals]] 中打开它。从库中打开一个 HTTP 信号会把它连同凭据一起加载回这里。见[信号](../tools/signals.md)。
+- **添加到实验**。[[ui:common.toExperiment]] 会把一个请求相同的 [HTTP 请求](../experiments/nodes.md#node-http)步骤添加到打开的实验，紧挨着 End 之前或所选步骤之后，并打开它。
+- **模拟此请求**。在响应下方，[[ui:http.mockThis]] 会创建一个模拟器路由，按此方法、路径、状态、标头和正文应答。在 [[ui:http.mockInto]] 中选择一个 HTTP 模拟器，或选择 [[ui:http.mockNew]]，然后按 [[ui:http.mockAdd]]；该路由会放在该模拟器的最前面，[[ui:nav.emulators]] 界面会打开并定位到它。见[模拟器](../tools/emulators.md)。
 
 ## 在实验中 {#experiments}
 
@@ -211,6 +216,7 @@ HTTP 200 OK · 3 ms · 15 B
 | 使用 Digest 时出现 `401` | 请阅读状态下方的消息：见 [Digest](#digest)。 |
 | [[ui:http.missed]] 大于 0 | 调高 [[ui:common.concurrency]]，或降低速率：服务器的应答比该速率所需的更慢。 |
 | 服务器有应答，但 [[ui:http.failed]] 很高 | 任何不在 200–299 范围内的状态都算失败，404 和 500 也包括在内。 |
+| [[ui:http.local]] 大于 0 | 此计算机的本地端口用尽了：服务器关闭每个连接，因此每个请求都需要一个新连接。请降低 [[ui:common.concurrency]] 或速率，或等一分钟让端口恢复。 |
 
 在服务器上，请求从服务器发出：`127.0.0.1` 就是服务器本身。见[服务器](../server/index.md)。
 

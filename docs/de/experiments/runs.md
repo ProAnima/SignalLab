@@ -67,6 +67,13 @@ im Tooltip. Ein Klick auf eine Zeile wählt ihren Knoten auf der Arbeitsfläche 
 
 Auf der Arbeitsfläche trägt jeder Knoten eine Plakette mit seinem neuesten Zustand.
 
+**Lange Durchläufe.** Ein Durchlauf zeigt seine ersten 5 000 Schritte einzeln. Darüber
+hinaus — ein Loop mit tausend Iterationen über einen langen Körper ergibt über
+hunderttausend — zeigt er einen Schritt pro Sekunde und jeden Fehler, und wenn er endet,
+seine letzten 500. Eine bernsteinfarbene Zeile sagt, wie viele zwischen zwei anderen
+weggelassen wurden, und die Zahl der eingeklappten Zeitleiste ist jeder Schritt, den der
+Durchlauf machte. Der Bericht behält dieselben Schritte.
+
 Der Kopf der Zeitleiste enthält:
 
 - das Ergebnis: [[ui:exp.running]], [[ui:exp.passed]], [[ui:exp.failed]] mit dem
@@ -124,7 +131,7 @@ geschrieben. Lässt sie sich nicht schreiben, sagt der Editor, warum.
 
 | Schlüssel | Was |
 | --- | --- |
-| `version` | das Format des Berichts, jetzt 5 |
+| `version` | das Format des Berichts, jetzt 6 |
 | `experiment` | der Name des Experiments |
 | `document_version` | die Version des Experiments, jetzt 9 |
 | `seed` | der Startwert, den der Durchlauf verwendete |
@@ -134,7 +141,7 @@ geschrieben. Lässt sie sich nicht schreiben, sagt der Editor, warum.
 | `started_ms`, `ended_ms` | Unix-Millisekunden |
 | `outcome` | `passed` oder `failed` |
 | `error` | der erste Fehler oder `null` |
-| `steps` | jedes Schrittereignis, in Reihenfolge (unten) |
+| `steps` | die Schrittereignisse, in Reihenfolge (unten): die ersten 5 000, dann einer pro Sekunde und jeder Fehler, dann die letzten 500 |
 | `emulators` | die Zahlen jedes Emulator-Knotens — vorhanden, wenn es einen gibt ([Emulatoren](faults.md#emulator)) |
 | `impairments` | die Zahlen und Phasen jedes Störungs-Knotens — vorhanden, wenn es einen gibt ([Phasen](faults.md#change-impairment)) |
 
@@ -151,13 +158,14 @@ Jedes Schrittereignis hat:
 | `error` | warum er fehlschlug: `code`, `params`, `node`, `field`, `detail` |
 | `frame` | der Inspector-Frame, den ein Warteknoten abglich, wenn der Mitschnitt an war |
 | `load` | was eine Last maß ([Messwerte](load.md#metrics)), bei ihrem letzten Ereignis |
+| `omitted` | wie viele Schritte unmittelbar vor diesem weggelassen wurden, falls welche |
 
 Geheimniswerte erscheinen nie in einem Bericht: Sie werden als `••••` maskiert
 ([Maskierung](data.md#masking)).
 
 Das Format des Berichts wuchs mit den Funktionen: Version 3 fügte die Zahlen der
 Emulatoren hinzu, Version 4 die Phasen der Störungen, Version 5 die Messungen einer
-Last.
+Last, Version 6 die Schritte langer Durchläufe als Stichprobe mit `omitted`.
 
 Die Berichte sind die Durchlauf-Historie: [[ui:exp.compare]] liest sie, und ebenso
 [`experiment_runs`](../api/commands.md#experiment_runs). Das `--report` der

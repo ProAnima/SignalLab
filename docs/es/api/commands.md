@@ -16,7 +16,8 @@ estados está en [la visión general de la API](index.md).
 - **Los nombres de los argumentos** están en camelCase (`jobId`, `nodeId`). Un
   argumento que un comando no conoce, o uno obligatorio que falta, se rechaza
   con `command.args_invalid`; todo comando que toma argumentos puede fallar con
-  este. Un comando sin argumentos no lee el cuerpo.
+  este. Un comando sin argumentos no toma cuerpo, o `null`, o `{}`; cualquier otra cosa se
+  rechaza también con `command.args_invalid`.
 - **Los objetos pasados como argumento** — `config`, `request`, `document`,
   `library`, `emulator`, `profile` — usan los nombres de campo del propio
   motor, casi siempre en snake_case (`timeout_ms`). Dentro de ellos, un campo
@@ -158,7 +159,8 @@ Las tareas en marcha, la más antigua primero. Sin argumentos.
 ### job_stop {#job_stop}
 
 Detiene una tarea al instante: sus sockets se cierran, su relé, servidor o
-conexión desaparece. Una tarea detenida no envía
+conexión desaparece. La respuesta llega cuando ya lo han hecho: un inicio justo después enlaza el
+mismo puerto. Una tarea detenida no envía
 [`job://ended`](events.md#event-job-ended); una ejecución detenida no guarda
 ningún informe.
 
@@ -171,8 +173,9 @@ caso contrario.
 
 ### jobs_stop_all {#jobs_stop_all}
 
-Detiene todas las tareas en marcha, quienquiera que las iniciara. Sin
-argumentos.
+Detiene todas las tareas en marcha, quienquiera que las iniciara, y responde cuando han soltado
+sus puertos, como [`job_stop`](#job_stop). Una tarea que aún está arrancando (una ejecución que
+abre sus puertos) se detiene al arrancar. Sin argumentos.
 
 **Resultado**: null.
 
@@ -560,7 +563,8 @@ respuesta lo dice en `error` y `cause`.
 
 **Resultado**: [`HttpResponse`](#type-httpresponse).
 
-**Errores**: `http.client_failed` (la solicitud ni siquiera se pudo preparar).
+**Errores**: `node.method_invalid` (campo `method`: no es un token HTTP, como `BAD METHOD`),
+`http.client_failed` (la solicitud ni siquiera se pudo preparar).
 
 ### http_burst_start {#http_burst_start}
 
@@ -589,7 +593,7 @@ Sin `total` ni `duration_s`, la ráfaga se ejecuta hasta que se detenga.
 
 **Resultado**: [`JobInfo`](#type-jobinfo).
 
-**Errores**: `http.rate_invalid`, `http.duration_invalid`, `http.client_failed`.
+**Errores**: `http.rate_invalid`, `http.duration_invalid`, `node.method_invalid`, `http.client_failed`.
 
 ### http_cookies {#http_cookies}
 
@@ -725,7 +729,12 @@ desuscripciones QoS 1/2 completadas, como
 `dns`, `timeout` tras 6 s), `mqtt.no_answer` (sin CONNACK en 6 s),
 `mqtt.protocol`, `mqtt.refused_protocol`, `mqtt.refused_client_id`,
 `mqtt.refused_unavailable`, `mqtt.refused_credentials`,
-`mqtt.refused_not_authorized`, `mqtt.refused`.
+`mqtt.refused_not_authorized`, `mqtt.refused`; antes de marcar,
+`node.topic_filter` (un filtro de `subscribe` que 3.1.1 prohíbe), `node.too_long`
+(un nombre de usuario, contraseña, ID de cliente o will de más de los 65 535 bytes de MQTT) y
+`node.topic_wildcard` / `mqtt.topic_invalid` (un will en un tema en el que no se
+podría publicar). Una conexión cuyo bróker no dice nada, ni siquiera a sus pings,
+durante 1,5 × `keep_alive_s` termina con `transport.timeout` en `job://ended`.
 
 ### mqtt_publish {#mqtt_publish}
 
@@ -742,9 +751,10 @@ Publica en una conexión abierta.
 **Resultado**: null. Una publicación QoS 1 o 2 se confirma más tarde con
 [`mqtt://ack`](events.md#event-mqtt-ack).
 
-**Errores**: `node.topic_wildcard` (campo `topic`) y `mqtt.topic_required`
-(campo `topic`), igual que para [`mqtt_publish_once`](#mqtt_publish_once) — el
-comando los rechaza antes de buscar la conexión; `mqtt.not_connected`.
+**Errores**: `node.topic_wildcard`, `mqtt.topic_required`, `mqtt.topic_invalid`
+(un NUL en él) y `node.too_long` (más de 65 535 bytes), todos con el campo `topic`,
+igual que para [`mqtt_publish_once`](#mqtt_publish_once) — el comando los
+rechaza antes de buscar la conexión; `mqtt.not_connected`.
 
 ### mqtt_subscribe {#mqtt_subscribe}
 
@@ -758,7 +768,9 @@ Suscribe una conexión abierta a filtros. Lo que concede el bróker llega como
 
 **Resultado**: null.
 
-**Errores**: `mqtt.filter_required`, `mqtt.not_connected`.
+**Errores**: `mqtt.filter_required`, `node.topic_filter` (campo `topic`: un filtro
+que 3.1.1 prohíbe, como `a/#/b` o `a+` — los bróker cierran la conexión por uno),
+`mqtt.not_connected`.
 
 ### mqtt_unsubscribe {#mqtt_unsubscribe}
 
@@ -772,7 +784,7 @@ Desuscribe una conexión abierta de unos filtros.
 **Resultado**: null. La respuesta del bróker llega como
 [`mqtt://ack`](events.md#event-mqtt-ack) con `kind: "unsubscribed"`.
 
-**Errores**: `mqtt.filter_required`, `mqtt.not_connected`.
+**Errores**: `mqtt.filter_required`, `node.topic_filter` (campo `topic`), `mqtt.not_connected`.
 
 ### mqtt_publish_once {#mqtt_publish_once}
 
@@ -990,13 +1002,16 @@ recuentos llegan como [`storm://stat`](events.md#event-storm-stat) cada 250 ms.
 | `target` | string | — | `IP:port` o `host:port`; un nombre se resuelve una vez, cuando empieza la tarea |
 | `protocol` | string | — | `udp`: datagramas; `tcp`: una conexión por unidad que escribe la carga útil y se cierra (cada conexión puede tardar 500 ms) |
 | `size` | number | — | Bytes de carga útil, mantenidos entre 1 y 65 507 |
-| `rate` | number | — | Unidades por segundo, según una planificación: la unidad *n* toca *n* / `rate` segundos después del inicio, y cada despertar envía lo que toca (como máximo 256; una planificación más atrasada omite las unidades más antiguas); 0 envía tan rápido como puede |
-| `duration_s` | number | `0` | Parar tras estos segundos; 0: hasta que se detenga |
+| `rate` | number | — | Unidades por segundo, hasta 10 000 000, según una planificación: la unidad *n* toca *n* / `rate` segundos después del inicio, y cada despertar envía lo que toca (como máximo 256; una planificación más atrasada omite las unidades más antiguas); 0 envía tan rápido como puede |
+| `duration_s` | number | `0` | Parar tras estos segundos; 0 (o un número negativo): hasta que se detenga |
 
 **Resultado**: [`JobInfo`](#type-jobinfo).
 
-**Errores**: `transport.target_invalid`, `transport.dns`. Los envíos fallidos
-se cuentan en los eventos, no se informan como errores.
+**Errores**: `transport.target_invalid`, `transport.dns` y, en UDP, un fallo de
+enlace o de conexión (`transport.*`) cuando el socket no se puede abrir en
+absoluto. Los envíos que el destino rechaza se cuentan como `errors` en los
+eventos; lo que este equipo no pudo enviar (sin puertos, sockets o búferes) se
+cuenta como `local`, nunca como error del destino.
 
 ### scan_start {#scan_start}
 
@@ -1081,7 +1096,7 @@ en `data`, en base64; `txt` es para leer, con un volcado hex de cada trama.
 
 ### inspect_payload {#inspect_payload}
 
-Los bytes que guarda una trama, más allá de la vista previa de 1 KiB que
+Los bytes que guarda una trama, más allá de la vista previa de 256 bytes que
 llevaba su lote.
 
 | Argumento | Tipo | Obligatorio | Significado |
@@ -1113,8 +1128,9 @@ Consulta [señales](../tools/signals.md) y
 Lee la biblioteca. Cuando el archivo no existe, se escribe primero el conjunto
 inicial. Sin argumentos.
 
-**Resultado**: `{ "path": string, "library": library, "seeded": boolean }` —
-`seeded` es true cuando se acaba de escribir el conjunto inicial. La biblioteca
+**Resultado**: `{ "path": string, "library": library, "seeded": boolean, "stamp": string }` —
+`seeded` es true cuando se acaba de escribir el conjunto inicial; `stamp` nombra lo que
+contenía el archivo, para el `base` del siguiente guardado. La biblioteca
 es `{ "version", "signals": [...], "folders": [...] }`: `version` 2 (un archivo
 de versión 1 se devuelve tal cual), `folders` se omite cuando no hay ninguna.
 Cada señal tiene `id`, `name`, `group` (su carpeta, `"A/B"`; vacío para
@@ -1127,17 +1143,22 @@ nunca se sustituye), `file.io`.
 
 Sustituye todo el archivo de la biblioteca, a través de un archivo temporal en
 la misma carpeta. Un archivo que existe y no se lee como biblioteca se deja
-como está.
+como está. Con `base`, un archivo que cambió desde que se leyó — por otra página de un
+servidor, o por una persona en un editor — también se deja como está, y el guardado se
+rechaza, para que su cambio no se pierda bajo una lista que nunca lo vio.
 
 | Argumento | Tipo | Obligatorio | Significado |
 | --- | --- | --- | --- |
 | `library` | object | sí | `{ version, signals, folders }` tal como lo devuelve `signals_load` |
+| `base` | string | no | El `stamp` con el que se leyó la biblioteca (o el que devolvió el último guardado); `""` cuando no había archivo |
 
-**Resultado**: string, la ruta escrita.
+**Resultado**: string, la ruta escrita; con `base`, `{ "path", "stamp" }` — el
+stamp de lo que contiene ahora el archivo, el `base` del siguiente guardado.
 
 **Errores**: `signals.json_invalid` (el archivo que hay ahora en el disco no se
-lee, con `path`, `line`, `column`; no se escribe nada), `signals.encode`,
-`file.io`.
+lee, con `path`, `line`, `column`; no se escribe nada), `file.changed` (con `path`: el
+archivo ya no contiene `base`; no se escribe nada — léelo de nuevo),
+`signals.encode`, `file.io`.
 
 El `body` de una señal según su `transport`:
 
@@ -1165,22 +1186,28 @@ carpeta de datos.
 Lee la biblioteca de emuladores. Cuando el archivo no existe, se escribe primero
 el conjunto inicial. Sin argumentos.
 
-**Resultado**: `{ "path", "library": { "version": 1, "emulators": [{ "id", "note", "emulator" }] }, "seeded" }`.
+**Resultado**: `{ "path", "library": { "version": 1, "emulators": [{ "id", "note", "emulator" }] }, "seeded", "stamp" }` —
+`stamp` nombra lo que contenía el archivo, para el `base` del siguiente guardado.
 
 **Errores**: `emulators.json_invalid` (con `path`, `line`, `column`; nunca se
 sustituye), `file.io`.
 
 ### emulators_save {#emulators_save}
 
-Sustituye toda la biblioteca de emuladores, a través de un archivo temporal.
+Sustituye toda la biblioteca de emuladores, a través de un archivo temporal. Un archivo que
+existe y no se lee como biblioteca se deja como está; con `base`, también uno que
+cambió desde que se leyó, como con [`signals_save`](#signals_save).
 
 | Argumento | Tipo | Obligatorio | Significado |
 | --- | --- | --- | --- |
 | `library` | object | sí | `{ version, emulators }` tal como lo devuelve `emulators_load` |
+| `base` | string | no | El `stamp` con el que se leyó la biblioteca (o el que devolvió el último guardado); `""` cuando no había archivo |
 
-**Resultado**: string, la ruta escrita.
+**Resultado**: string, la ruta escrita; con `base`, `{ "path", "stamp" }`.
 
-**Errores**: `emulators.encode`, `file.io`.
+**Errores**: `emulators.json_invalid` (el archivo que hay ahora en el disco no se lee;
+no se escribe nada), `file.changed` (el archivo ya no contiene `base`; no se escribe
+nada), `emulators.encode`, `file.io`.
 
 ### emulator_check {#emulator_check}
 
@@ -1238,7 +1265,7 @@ intercambios.
 | --- | --- | --- |
 | `job_id` | number | La tarea |
 | `name`, `protocol`, `local` | string | El emulador, su protocolo y la dirección en la que escucha |
-| `counts` | object | `total`, `unmatched` (ninguna regla lo tomó), `failed`, `down` (llegó mientras estaba caído: su outage o [`emulator_down`](#emulator_down)), `hits` (por regla), y `missed` (MQTT: mensajes que un cliente demasiado atrasado no recibió; se omite mientras es 0) |
+| `counts` | object | `total`, `unmatched` (ninguna regla lo tomó), `failed`, `down` (llegó mientras estaba caído: su outage o [`emulator_down`](#emulator_down)), `hits` (por regla), `missed` (MQTT: mensajes que un cliente demasiado atrasado no recibió; se omite mientras es 0) y `refused` (HTTP, TCP, MQTT: conexiones cerradas al llegar, por encima del límite; se omite mientras es 0) |
 | `forced` | string | `unavailable`, `reset` o `timeout` mientras está caído a propósito; se omite en caso contrario |
 | `exchanges` | object[] | Cada uno: `seq`, `ts`, `from`, `request`, `rule` (basado en 1; se omite cuando ninguna lo tomó), `reply`, `status`, `fault`, `ms`, `error`, `frame`, `down`, y `data` (la solicitud como la leen las plantillas) |
 
@@ -1289,6 +1316,15 @@ Un argumento OSC, su tipo y su valor:
 | `bool` | `true` o `false` | `T` o `F` |
 | `blob` | matriz de bytes, `[222, 173]` | `b` |
 | `nil` | ninguno: `{ "type": "nil" }` | `N` |
+| `time` | una etiqueta de tiempo, sus 64 bits como texto decimal: `"1"` es «inmediatamente» | `t` |
+| `char` | un carácter, `"A"` | `c` |
+| `color` | `[red, green, blue, alpha]` | `r` |
+| `midi` | `[port, status, data1, data2]` | `m` |
+| `impulse` | ninguno | `I` |
+| `array` | un array de OscArg | `[` … `]` |
+
+Los seis últimos son lo que llevan los mensajes recibidos (el `osc://message` del monitor OSC);
+un comando también puede enviarlos.
 
 ### HttpRequest {#type-httprequest}
 
@@ -1298,7 +1334,7 @@ Un argumento OSC, su tipo y su valor:
 | `url` | string | — | `http://` o `https://` |
 | `headers` | `[name, value][]` | `[]` | Encabezados de la solicitud |
 | `body` | string o null | null | El cuerpo |
-| `timeout_ms` | number | `10000` | Para todo el intercambio |
+| `timeout_ms` | number | `10000` | Para todo el intercambio, cuerpo incluido: de 1 a 120 000; fuera de ese rango el comando falla con `node.range` (campo `timeout_ms`) |
 | `auth` | object | ninguno | `{ "scheme": "basic", "username", "password" }`, `{ "scheme": "digest", "username", "password" }` o `{ "scheme": "bearer", "token" }` |
 
 Se siguen hasta 10 redirecciones. Las credenciales y cookies escritas para un
@@ -1309,15 +1345,15 @@ servidor y envía de nuevo.
 
 | Campo | Tipo | Significado |
 | --- | --- | --- |
-| `ok` | boolean | Un estado 2xx |
+| `ok` | boolean | Un estado 2xx, y llegó todo el cuerpo |
 | `status`, `status_text` | number, string | El estado; 0 y vacío sin respuesta |
 | `latency_ms` | number | Hasta que llegó todo el cuerpo |
 | `headers` | `[name, value][]` | Encabezados de la respuesta |
 | `body` | string | El cuerpo como texto, como máximo 256 KiB |
 | `body_bytes` | number | El tamaño completo del cuerpo |
 | `truncated` | boolean | `body` se cortó a 256 KiB |
-| `error` | string o null | Por qué no hubo respuesta, cada capa de la causa |
-| `cause` | string o null | Qué tipo de fallo: `refused`, `timeout`, `dns`, `unreachable`, `reset`, `address_in_use`, `address_unavailable`, `denied`, `tls`, `target_invalid`, `failed` — los mismos que los códigos `transport.*` |
+| `error` | string o null | Por qué no hubo respuesta, o por qué el cuerpo se detuvo antes de tiempo (entonces `status`, `headers` y el cuerpo hasta ese punto también están), cada capa de la causa |
+| `cause` | string o null | Qué tipo de fallo: `refused`, `timeout`, `dns`, `unreachable`, `reset`, `address_in_use`, `address_unavailable`, `denied`, `tls`, `target_invalid`, `exhausted` (este equipo se quedó sin sockets o puertos locales), `failed` — los mismos que los códigos `transport.*` |
 | `digest` | object | Una solicitud Digest que solo encontró un 401; se omite en caso contrario. `challenged`: el desafío se respondió y la solicitud se envió de nuevo. `error`: por qué no pudo ser, un `EngineError` (`http.digest_not_offered`, `http.digest_unsupported`, `http.digest_invalid`, `http.digest_other_origin`) o null |
 
 ### Payload {#type-payload}
@@ -1388,7 +1424,7 @@ Una `Frame` es un paquete, una solicitud o un mensaje capturado:
 | `bytes` | Su tamaño |
 | `summary` | Una línea |
 | `detail` | Una decodificación de varias líneas, o null |
-| `hex` | Un volcado hex de los primeros 1 KiB, o null |
+| `hex` | Un volcado hex de los primeros 256 bytes, o null |
 | `verdict` | Qué fue de ella — `dropped`, `sampled`, un estado — o null |
 | `kept` | De `bytes`, cuántos se guardan (hasta 256 KiB); 0 cuando solo se registró el tamaño |
 | `publish` | Solo una publicación MQTT: `{ broker, topic, qos, retain, text }` — el bróker como `host:port`, y si los bytes guardados, que son la carga útil del mensaje, son texto UTF-8. Ausente en cualquier otra trama |

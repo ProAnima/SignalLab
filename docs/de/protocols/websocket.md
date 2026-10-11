@@ -28,7 +28,7 @@ skripten.
 | --- | --- | --- |
 | [[ui:field.url]] | `ws://` oder `wss://`, ein Host, ein optionaler Port (80 für `ws`, 443 für `wss`) und ein Pfad | `ws://127.0.0.1:9001/` |
 | [[ui:exp.wsProtocols]] | Anzubietende Subprotokolle, durch Kommas getrennt, in der Reihenfolge der Vorliebe; der Server wählt eines. Ein Name hat keine Leerzeichen, Kommas oder Schrägstriche. | keine |
-| [[ui:http.headers]] | Zusätzliche Header für die Upgrade-Anfrage; [[ui:http.addHeader]] fügt eine Zeile hinzu. Eine Zeile ohne Namen entfällt. | keine |
+| [[ui:http.headers]] | Zusätzliche Header für die Upgrade-Anfrage; [[ui:http.addHeader]] fügt eine Zeile hinzu. Eine Zeile ohne Namen entfällt. Ein `Host` (oder ein anderer Header, den das Upgrade selbst schreibt, etwa `Sec-WebSocket-Version`) ersetzt den, den das Upgrade senden würde. | keine |
 
 Das Verbinden — das Auflösen des Namens, die TCP-Verbindung, TLS für `wss://`
 und das Upgrade — dauert höchstens 10 Sekunden. Die URL bleibt erhalten, wenn
@@ -89,11 +89,14 @@ Nachrichtenfeld, um sie erneut zu senden oder zu ändern. Eine sehr lange
 Nachricht wird teilweise gezeigt — Text bis 64 KiB, Binärdaten bis 4096 Bytes —
 und kann dann nicht kopiert werden, da sie abgeschnitten gesendet würde.
 
-Die Ansicht behält die neuesten 2000 Nachrichten; [[ui:common.clear]] leert die
-Liste. Sendet ein Dienst schneller, als die Ansicht aufnehmen kann — mehr als
-2000 in einer Zehntelsekunde —, werden die ältesten davon aus der Liste
-weggelassen und als „nicht angezeigt" gezählt. Der Inspektor hat sie trotzdem,
-solange der Mitschnitt läuft.
+Die Ansicht behält die neuesten 2000 Nachrichten, weniger, wenn sie lang sind (8
+Millionen Zeichen insgesamt); [[ui:common.clear]] leert die Liste. Die Zahlen für
+empfangene und gesendete Nachrichten darüber sind die der Verbindung selbst, jede
+Nachricht eingeschlossen. Sendet ein Dienst schneller, als die Ansicht aufnehmen kann —
+mehr als 2000 Nachrichten oder 1 MB Text in einer Zehntelsekunde —, werden die ältesten
+davon aus der Liste weggelassen und als „nicht angezeigt" gezählt. Der Inspektor hat sie
+trotzdem, solange der Mitschnitt läuft. Wie schnell ein Dienst auch flutet, [[ui:ws.disconnect]]
+und ein Stopp wirken sofort.
 
 ## Schließen {#close}
 
@@ -173,7 +176,7 @@ endet mit 1, wenn die Antwort nicht kommt oder die Verbindung fehlschlägt. Sieh
 | Was Sie sehen | Übliche Ursache |
 | --- | --- |
 | `… is not a WebSocket address` | Die URL beginnt nicht mit `ws://` oder `wss://` oder hat keinen Host. |
-| `… answered HTTP n instead of switching to WebSocket` | Der Server hat das Upgrade abgelehnt: ein falscher Pfad (404), ein fehlender oder falscher Token (401, 403). Der Anfang seiner Antwort steht unter den technischen Details. |
+| `… answered HTTP n instead of switching to WebSocket` | Der Server hat das Upgrade abgelehnt: ein falscher Pfad (404), ein fehlender oder falscher Token (401, 403). Der Anfang des Bodys seiner Antwort (über `ws://` das, was innerhalb von 0,3 s eintrifft) steht unter den technischen Details. |
 | `… did not take any of the subprotocols offered` | Sie haben Subprotokolle angeboten, und der Server hat keines gewählt, oder er hat mit einem geantwortet, das Sie nicht angeboten haben. |
 | `… is not a subprotocol name` | Ein Name mit einem Leerzeichen, einem Komma oder einem Schrägstrich. |
 | `The header … cannot be sent with the upgrade` | Ein Header-Name oder -Wert mit Zeichen, die HTTP nicht erlaubt. |

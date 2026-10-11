@@ -37,8 +37,12 @@ Ohne Token gestartet, empfängt der Server auf `127.0.0.1:1430` und braucht kein
 Anmeldung: Er ist ein Werkzeug für die Person an diesem Rechner. Damit eine Webseite in
 einem beliebigen Browser auf diesem Rechner ihn nicht über einen Namen erreicht, der zu
 `127.0.0.1` aufgelöst wird (DNS-Rebinding), antwortet er nur auf Anfragen, deren `Host` ein
-Loopback-Name ist — `localhost`, ein Name mit der Endung `.localhost`, `127.x.x.x` oder
-`[::1]` — oder ein Name, den Sie mit `--allowed-host` zulassen.
+Loopback-Name ist — `localhost`, ein Name mit der Endung `.localhost`, eine als solche
+geschriebene Loopback-Adresse (`127.x.x.x`, `[::1]`) — oder ein Name, den Sie mit
+`--allowed-host` zulassen. Ein DNS-Name, der nur wie eine Adresse beginnt
+(`127.0.0.1.example.com`), ist keine: Jeder kann ihn auf `127.0.0.1` zeigen lassen. Eine
+Anfrage mit zwei `Host`-Headern oder einem, der kein `host[:port]` ist, wird ebenfalls
+abgelehnt.
 
 Soll er ohne Token auf einer anderen Adresse empfangen, startet er nicht: Er
 sagt, warum, und beendet sich mit dem Code `2`.
@@ -131,8 +135,21 @@ dem Server und lässt sich nicht von einer anderen Seite einbetten.
 ## Dateien und Größen {#files}
 
 - Ein Download (`GET /api/files?path=…`) wird nur aus dem Datenordner heraus
-  ausgeliefert, höchstens 256 MiB; alles andere ergibt `404`.
+  ausgeliefert, höchstens 256 MiB; alles andere ergibt `404`. Der Pfad wird nach seinem
+  Namen beurteilt, bevor etwas geöffnet wird: Ein Pfad mit `..`, ein anderes Laufwerk, eine
+  Freigabe auf einem anderen Rechner (`\\host\share`), ein Gerät oder eine benannte Pipe
+  wird abgelehnt, ohne berührt zu werden.
 - Ein Anfrage-Body ist höchstens 24 MiB groß.
+
+## Langsame und ruhende Clients {#connections}
+
+- Ein Client muss den Kopf einer Anfrage innerhalb von 30 Sekunden senden; einer, der die
+  Hälfte sendet und aufhört, wird getrennt, ebenso eine Verbindung, die so lange ruht.
+- Höchstens 1024 Verbindungen werden gleichzeitig bedient; weitere werden geschlossen, sobald
+  sie eintreffen.
+- Hält der Server an, haben laufende Anfragen 5 Sekunden, um zu enden (ein abgewarteter
+  Durchlauf antwortet, dass er gestoppt wurde); ein Client, der ihn länger festhielte, wird
+  abgetrennt.
 
 ## Geheimnisse {#secrets}
 

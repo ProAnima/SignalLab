@@ -49,7 +49,7 @@ Sie die App neu starten; Anmeldedaten nicht.
 | [[ui:field.auth]] | Wie sich die Anfrage authentifiziert ([unten](#auth)) | [[ui:http.auth.none]] |
 | [[ui:http.keepCookies]] | Die Cookies zurücksenden, die Server setzen ([unten](#cookies)) | an |
 | [[ui:http.body]] | Genau so gesendet, wie geschrieben; kein `Content-Type` wird hinzugefügt, fügen Sie also den passenden Header hinzu. Ein leerer Body wird nicht gesendet. Das Feld wird für GET und HEAD nicht angezeigt, und dann trägt die Anfrage überhaupt keinen Body — nicht im Senden, nicht in einem gespeicherten Signal, nicht in [[ui:common.toExperiment]] —, auch wenn Sie unter einer anderen Methode einen eingegeben haben. | leer |
-| [[ui:common.timeoutMs]] | Wie lange der ganze Austausch dauern darf, Antwort und Body eingeschlossen | 10.000 |
+| [[ui:common.timeoutMs]] | Wie lange der ganze Austausch dauern darf, Antwort und Body eingeschlossen: 1 ms bis 120.000 (zwei Minuten), wie im HTTP-Schritt | 10.000 |
 
 ## Authentifizierung {#auth}
 
@@ -127,6 +127,11 @@ ohne Ablauf) und [[ui:http.cookieFlags]] (`Secure`, `HttpOnly`, `SameSite`).
 Abgelaufene Cookies werden nicht aufgelistet. [[ui:common.clear]] leert den
 Speicher.
 
+Der Speicher hält höchstens 3000 Cookies, etwa so viele wie ein Browser. Ein Server,
+der mit jeder Antwort ein neues Cookie setzt, füllt ihn bis dahin und nicht weiter:
+darüber hinaus wird ein neues Cookie nicht behalten, während eines, das der Speicher
+hält, weiter aktualisiert oder entfernt wird.
+
 Der Speicher lebt so lange wie die App: Ein Neustart beginnt mit einem leeren.
 Auf einem [Server](../server/index.md) gibt es einen Speicher für jede an ihm
 angemeldete Seite. Ein Durchlauf eines Experiments hat einen eigenen Speicher
@@ -141,7 +146,14 @@ verwendet keinen.
 | [[ui:http.latency]] | Vom Senden bis zum letzten Byte des Bodys, in Millisekunden |
 | [[ui:http.size]] | Die Größe des Bodys |
 | Antwort-Header | Klicken Sie auf die Zeile mit ihrer Anzahl, um sie ein- oder auszublenden |
-| Body | Formatiert, wenn er JSON ist; [[ui:http.rawBody]] und [[ui:http.formatJson]] schalten um. Bis 256 KiB werden gezeigt, danach `… (truncated)`. |
+| Body | Formatiert, wenn er JSON ist; [[ui:http.rawBody]] und [[ui:http.formatJson]] schalten um. Bis 256 KiB werden gezeigt, danach `… (truncated)`; [[ui:http.size]] ist weiterhin die des ganzen Bodys. |
+
+Der Body wird gelesen, während er eintrifft, und nur seine ersten 256 KiB werden
+behalten; ein Body von Gigabytes — oder einer, der nie endet — kostet also nicht mehr
+Speicher als das und endet beim Timeout. Ein Body, der auf halbem Weg abbricht (der
+Timeout oder ein Server, der auflegt), ist ein Fehlschlag, mit denselben Worten gesagt
+wie jeder andere, wobei der Status und das, was ankam, weiterhin gezeigt werden: ein
+`200` mit halbem Body ist kein Erfolg.
 
 Gibt es keine Antwort, sagt der Bereich, warum, mit denselben Worten wie überall
 in Signal Lab: abgelehnt, keine rechtzeitige Antwort, der Name lässt sich nicht
@@ -202,8 +214,9 @@ Es gibt zwei Arten zu senden:
 | Zahl | Was |
 | --- | --- |
 | [[ui:http.sent]] | Anfragen, die eine Antwort hatten oder fehlschlugen |
-| [[ui:http.ok]] | Mit einem 2xx-Status beantwortet |
-| [[ui:http.failed]] | Keine Antwort oder jeder Status außerhalb von 200–299 |
+| [[ui:http.ok]] | Mit einem 2xx-Status und dem ganzen Body beantwortet |
+| [[ui:http.failed]] | Keine Antwort, ein abgebrochener Body oder jeder Status außerhalb von 200–299 |
+| [[ui:http.local]] | Anfragen, die dieser Computer nicht senden konnte: ihm gingen Sockets oder lokale Ports aus (jede geschlossene Verbindung hält unter Windows bis zu zwei Minuten einen). Der Server sah sie nie, daher stehen sie in [[ui:http.sent]], aber nicht in [[ui:http.failed]] oder den Latenzen. Nur angezeigt, wenn es welche gibt. |
 | [[ui:http.missed]] | Übersprungen, wie oben (nur mit einer Rate) |
 | [[ui:http.rps]] | Anfragen pro Sekunde über die letzten Zehntelsekunden; ist der Burst beendet, über den ganzen Burst. Mit einer Rate nennt die Beschriftung die geforderte Rate. |
 | [[ui:http.p50]], [[ui:http.p90]], [[ui:http.p95]], [[ui:http.p99]] | Die Zeit, innerhalb derer dieser Anteil der Anfragen fertig wurde, Fehlschläge eingeschlossen; auf 0,5 % genau |
@@ -315,6 +328,7 @@ behält keine Cookies. Siehe
 | Der Server sagt, der Body fehle oder habe den falschen Typ | Kein `Content-Type`-Header, der zum Body passt, oder ein leerer Body. |
 | `401` mit Digest | Lesen Sie die Meldung unter dem Status: siehe [Digest](#digest). |
 | [[ui:http.missed]] über 0 | Erhöhen Sie [[ui:common.concurrency]], oder senken Sie die Rate: Der Server antwortet langsamer, als die Rate benötigt. |
+| [[ui:http.local]] über 0 | Diesem Computer gingen die lokalen Ports aus: Der Server schließt jede Verbindung, daher braucht jede Anfrage eine neue. Senken Sie [[ui:common.concurrency]] oder die Rate, oder warten Sie eine Minute, bis die Ports zurück sind. |
 | [[ui:http.failed]] hoch, obwohl der Server antwortet | Jeder Status außerhalb von 200–299 zählt als fehlgeschlagen, 404 und 500 eingeschlossen. |
 
 Auf einem Server gehen die Anfragen vom Server aus: `127.0.0.1` ist der Server

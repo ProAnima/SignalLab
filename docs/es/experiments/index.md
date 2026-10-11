@@ -338,7 +338,8 @@ El editor comprueba el experimento mientras lo editas, y una vez más cuando pul
 Un experimento se ejecuta cuando, entre otras cosas:
 
 - tiene un nombre, exactamente un [[ui:exp.node.start]] y un
-  [[ui:exp.node.end]], y como máximo 64 nodos;
+  [[ui:exp.node.end]], y como máximo 64 nodos — el editor no añade, pega ni duplica nada
+  más allá, y lo dice;
 - todos los nodos son alcanzables desde [[ui:exp.node.start]] y cada salida obligatoria tiene un cable;
 - los únicos ciclos son los cuerpos de los nodos [[ui:exp.node.loop]] que vuelven a
   ellos;

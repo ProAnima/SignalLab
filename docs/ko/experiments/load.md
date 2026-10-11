@@ -114,12 +114,13 @@ n번째 요청은 프로필의 누적 요청 수가 n에 도달하는 순간에 
 | 측정값 | 내용 |
 | --- | --- |
 | planned | 프로필이 합산한 요청 수([[ui:exp.loadShape.poisson]]: 평균) |
-| sent | 응답을 받았거나 실패한 요청 |
+| sent | 응답을 받았거나 실패한 요청, 그리고 local로 센 요청 |
 | ok | 2xx 상태로 응답받은 요청 |
 | failed | 그 밖의 상태이거나 아예 응답이 없는 요청 |
 | missed | 모든 자리가 차 있을 때 차례가 되어 건너뛴 요청 |
-| rps | 초당 보낸 요청: sent ÷ 프로필의 지속 시간. 마지막 요청이 나간 시각이 그보다 늦으면 ÷ 그 시각까지의 시간 |
-| error_rate | sent 대비 failed의 비율(%) |
+| local | 이 컴퓨터가 보내지 못한 요청 — 소켓이나 로컬 포트가 바닥났음 — 그래서 서버는 보지 못했음. failed, rps, error_rate, 지연 시간에는 들어가지 않음 |
+| rps | 서버에 닿은 초당 요청: sent에서 local을 뺀 값 ÷ 프로필의 지속 시간. 마지막 요청이 나간 시각이 그보다 늦으면 ÷ 그 시각까지의 시간 |
+| error_rate | 서버에 닿은 요청 대비 failed의 비율(%) |
 | min, mean, max | 가장 빠른 요청, 평균, 가장 느린 요청, ms |
 | p50, p90, p95, p99 | 요청의 50, 90, 95, 99%가 그 이하였던 지연 시간, ms |
 | received_bytes | 받은 본문 바이트의 합계 |
@@ -167,7 +168,8 @@ n번째 요청은 프로필의 누적 요청 수가 n에 도달하는 순간에 
 [[ui:exp.loadResult]] 항목이 표시됩니다.
 
 - 각 임계값과 측정값, ✓ [[ui:exp.thresholdHeld]] 또는 ✕ [[ui:exp.thresholdBroken]];
-- [[ui:http.sent]], [[ui:exp.loadRps]], 비율과 함께 [[ui:exp.loadErrors]], [[ui:http.missed]];
+- [[ui:http.sent]], [[ui:exp.loadRps]], 비율과 함께 [[ui:exp.loadErrors]],
+  [[ui:http.missed]], 그리고 이 컴퓨터의 포트가 바닥났을 때 [[ui:http.local]];
 - [[ui:http.p50]], [[ui:http.p90]], [[ui:http.p95]], [[ui:http.p99]],
   [[ui:http.avg]], [[ui:http.max]];
 - [[ui:exp.loadPerSecond]]: 초마다의 요청(실패한 요청은 빨간색)과 평균 지연 시간을 나타내는 선;

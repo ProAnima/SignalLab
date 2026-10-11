@@ -9,7 +9,7 @@ Chaque échec signalé par Signal Lab a un code ; le message de chacun est dans
 [messages d’erreur](errors.md). Les échecs réseau sont les codes
 [`transport`](errors.md#transport) : `refused`, `timeout`, `dns`,
 `unreachable`, `reset`, `address_in_use`, `address_unavailable`, `denied`,
-`tls`, `target_invalid`, `failed`. Les problèmes ci-dessous sont les plus courants.
+`tls`, `target_invalid`, `exhausted`, `failed`. Les problèmes ci-dessous sont les plus courants.
 
 ## Rien n’arrive {#nothing-arrives}
 

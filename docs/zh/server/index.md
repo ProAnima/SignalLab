@@ -56,7 +56,7 @@ curl -fsSL https://raw.githubusercontent.com/ProAnima/SignalLab/main/deploy/inst
 
 它需要 Docker 的 Compose 插件（`docker-compose-plugin` 包），Docker 的安装程序会带来它。镜像为 x86_64 和 arm64 构建。
 
-**再次运行即可更新：**同一条命令会拉取最新的镜像（或您指定的 `--version`）并重启服务器；数据和令牌保留。使用 `--name` 时，请再次给出相同的名称。
+**再次运行即可更新**：同一条命令会拉取最新的镜像（或您指定的 `--version`）并重启服务器；数据和令牌保留。使用 `--name` 时，请再次给出相同的名称。
 
 **您自己的设置**——实验机密、`SIGNALLAB_ALLOWED_HOSTS`、HTTPS 之后的 `SIGNALLAB_SECURE_COOKIE`——放在 compose 文件旁边的 `compose.override.yaml` 中。Docker Compose 会把它合并进来，脚本每次运行都会重写 `compose.yaml`，但从不改动 override。不是它写的 `compose.yaml` 会保留为 `compose.yaml.before-install`。
 
@@ -211,7 +211,7 @@ cargo run --release -p signal-lab-server
 | `signal-lab-server --version` | 输出版本。 |
 | `signal-lab-server --help` | 输出每个选项。 |
 
-**退出代码：**由 <kbd>Ctrl</kbd>+<kbd>C</kbd> 或 `SIGTERM` 停止时为 `0`；设置被拒绝时为 `2`（在可到达的地址上没有令牌、令牌太短、令牌给出了两次、无法读取令牌文件、`--generate-token` 没有数据文件夹）；无法在该地址上监听，或无法写入数据文件夹时为 `1`。原因会输出到 stderr。
+**退出代码**：由 <kbd>Ctrl</kbd>+<kbd>C</kbd> 或 `SIGTERM` 停止时为 `0`；设置被拒绝时为 `2`（在可到达的地址上没有令牌、令牌太短、令牌给出了两次、无法读取令牌文件、`--generate-token` 没有数据文件夹）；无法在该地址上监听，或无法写入数据文件夹时为 `1`。原因会输出到 stderr。
 
 ## 访问令牌 {#token}
 

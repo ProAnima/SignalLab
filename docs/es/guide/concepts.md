@@ -77,7 +77,7 @@ experimentos — entrega cada trama que envía o recibe a una **captura**, y el
   mientras está desactivada. Sigue activada, estés en la pantalla que estés, hasta que la
   desactives.
 - Guarda hasta 8192 tramas y 64 MiB de sus bytes; las tramas más antiguas dejan sitio a las
-  nuevas. Cada trama guarda hasta 256 KiB de sus bytes, y la lista muestra su primer KiB.
+  nuevas. Cada trama guarda hasta 256 KiB de sus bytes, y la lista muestra sus primeros 256 bytes.
 - [[ui:ins.pause]] impide que la lista se mueva para que puedas leerla; la captura continúa
   por debajo.
 - Los valores secretos que usa una ejecución se enmascaran en cada trama.

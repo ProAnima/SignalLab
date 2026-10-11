@@ -1,8 +1,8 @@
 ---
-title: "reference/changelog"
-draft: true
+title: سجل التغييرات
+description: ما تغيّر في كل إصدار من Signal Lab.
 ---
 
-# reference/changelog
+تُكتب ملاحظات الإصدارات بالإنجليزية؛ وملاحظات كل إصدار موجودة أيضًا على GitHub، مع تنزيلاته: <https://github.com/ProAnima/SignalLab/releases>.
 
-To be written.
+<!--@include: ../../../CHANGELOG.md-->

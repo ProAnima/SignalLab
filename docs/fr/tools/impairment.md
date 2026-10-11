@@ -153,11 +153,12 @@ Sur UDP :
 | [[ui:ns.received]] | Datagrammes parvenus au relais. |
 | [[ui:ns.forwarded]] | Datagrammes transmis ; un datagramme dupliqué compte deux fois. |
 | [[ui:ns.dropped]] | Perdus exprès : hors ligne, une rafale, ou une perte. |
-| [[ui:ns.throttled]] | Abandonnés par la limite de bande passante, ou parce que 10 000 étaient déjà en route. |
+| [[ui:ns.throttled]] | Abandonnés par la limite de bande passante, ou parce que 10 000 — ou 64 Mo — étaient déjà en route. |
 | [[ui:ns.duplicated]] | Datagrammes envoyés deux fois. |
 | [[ui:ns.corrupted]] | Copies avec un bit inversé. |
 | [[ui:ns.reordered]] | Copies retenues pour que de plus récentes les dépassent. |
 | [[ui:common.volume]] | Octets transmis. |
+| [[ui:ns.notRelayed]] | Affiché dès qu’il y en a : les datagrammes que le système n’a pas voulu renvoyer. Jamais le fait du profil. |
 
 Sur TCP :
 
@@ -166,10 +167,18 @@ Sur TCP :
 | [[ui:ns.connections]] | Connexions ouvertes par des clients vers le relais. |
 | [[ui:ns.received]] | Blocs lus par le relais, dans les deux sens. |
 | [[ui:ns.forwarded]] | Blocs qu’il a écrits. |
+| [[ui:ns.refused]] | Les connexions que la cible a refusées ou auxquelles elle n’a pas répondu ; le client a reçu une réinitialisation. |
 | [[ui:ns.resets]] | Connexions réinitialisées. |
 | [[ui:ns.stalled]] | Connexions laissées à demi ouvertes. |
-| [[ui:ns.held]] | Combien de fois un flux a attendu la limite de bande passante : l’émetteur a été ralenti, rien n’a été abandonné. |
+| [[ui:ns.held]] | Combien de fois un flux a attendu la limite de bande passante : l’émetteur a été ralenti, rien n’a été abandonné. Un relais ne retient aussi que 64 Mo en route, toutes connexions ensemble, et attend de la même façon au-delà. |
 | [[ui:common.volume]] | Octets écrits. |
+| [[ui:ns.notRelayed]] | Affiché dès qu’il y en a : les connexions que cet ordinateur n’a pas pu faire vers la cible — plus de port ni de socket local, même après deux secondes d’essais — et les connexions au-delà de 1 024 simultanées. Chacune a reçu une réinitialisation. Jamais la réponse de la cible. |
+
+Un relais qui ferme le premier son côté d’une connexion garde un port local pendant
+quelques minutes ensuite (le TIME_WAIT du système), comme tout programme. Plusieurs
+centaines de connexions courtes par seconde à travers un seul relais épuisent les ports de
+cet ordinateur ; le relais attend alors et réessaie, et ce qui ne peut toujours pas partir
+est compté dans [[ui:ns.notRelayed]], jamais présenté comme un refus de la cible.
 
 Avec la capture active, l’[Inspecteur](inspector.md) montre les datagrammes et
 blocs relayés — au plus un toutes les 25 ms, les deux sens réunis — chacun avec son

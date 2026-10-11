@@ -88,12 +88,13 @@ n 番目のリクエストは、プロファイルのカウントが n に達し
 | 計測値 | 内容 |
 | --- | --- |
 | planned | プロファイルの合計リクエスト数 ([[ui:exp.loadShape.poisson]] の場合は平均値) |
-| sent | 応答を受け取ったか失敗したリクエスト |
+| sent | 応答を受け取ったか失敗したリクエスト、および local に数えられたもの |
 | ok | 2xx のステータスで応答されたもの |
 | failed | それ以外のステータス、または応答がまったくないもの |
 | missed | すべての枠が使用中のときに予定時刻を迎え、スキップされたもの |
-| rps | 1 秒あたりに送信したリクエスト数: sent ÷ プロファイルの継続時間。最後のリクエストが送られた時刻のほうが遅い場合は、sent ÷ そこまでの時間 |
-| error_rate | sent に対する failed の割合 (%) |
+| local | このコンピューターが送信できなかったリクエスト。ソケットまたはローカルポートが足りなくなったため、サーバーには届いていません。failed、rps、error_rate、レイテンシには含まれません |
+| rps | 1 秒あたりにサーバーへ届いたリクエスト数: (sent − local) ÷ プロファイルの継続時間。最後のリクエストが送られた時刻のほうが遅い場合は、(sent − local) ÷ そこまでの時間 |
+| error_rate | サーバーに届いたリクエストに対する failed の割合 (%) |
 | min, mean, max | 最も速いリクエスト、平均、最も遅いリクエスト (ms) |
 | p50, p90, p95, p99 | リクエストの 50、90、95、99% がそれ以下に収まったレイテンシ (ms) |
 | received_bytes | 受信したボディの合計バイト数 |
@@ -133,7 +134,7 @@ n 番目のリクエストは、プロファイルのカウントが n に達し
 ステップが成功すると、タイムラインにその概要が表示されます。リクエスト数、レート、p95、失敗の割合です。ノードを選択すると、そのプロパティに [[ui:exp.loadResult]] が表示されます。
 
 - 各しきい値: ✓ [[ui:exp.thresholdHeld]] または ✕ [[ui:exp.thresholdBroken]] と、その計測値。
-- [[ui:http.sent]]、[[ui:exp.loadRps]]、[[ui:exp.loadErrors]] (その割合とともに)、[[ui:http.missed]]。
+- [[ui:http.sent]]、[[ui:exp.loadRps]]、[[ui:exp.loadErrors]] (その割合とともに)、[[ui:http.missed]]、そしてこのコンピューターのポートが足りなくなった場合は [[ui:http.local]]。
 - [[ui:http.p50]]、[[ui:http.p90]]、[[ui:http.p95]]、[[ui:http.p99]]、[[ui:http.avg]]、[[ui:http.max]]。
 - [[ui:exp.loadPerSecond]]: 各秒のリクエスト数 (失敗したものは赤) と、その平均レイテンシの線。
 - [[ui:exp.loadLatencies]]: どれだけの時間がかかったリクエストが何件あったか。

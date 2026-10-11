@@ -358,7 +358,8 @@ Der Editor prüft das Experiment während der Bearbeitung und noch einmal, wenn 
 Ein Experiment läuft, wenn unter anderem:
 
 - es einen Namen, genau eine [[ui:exp.node.start]] und eine [[ui:exp.node.end]] und
-  höchstens 64 Knoten hat;
+  höchstens 64 Knoten hat — der Editor fügt darüber hinaus nichts hinzu, ein und
+  dupliziert nichts und sagt es;
 - jeder Knoten von [[ui:exp.node.start]] aus erreichbar ist und jeder erforderliche
   Ausgang einen Draht hat;
 - die einzigen Zyklen die Rümpfe von [[ui:exp.node.loop]]-Knoten sind, die zu ihnen

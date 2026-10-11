@@ -5,7 +5,7 @@ description: Signal Lab 的常见问题及其解决方法——什么都收不�
 
 # 故障排除
 
-Signal Lab 报告的每个失败都有一个代码；每个代码的消息见[错误消息](errors.md)。网络失败是 [`transport`](errors.md#transport) 代码：`refused`、`timeout`、`dns`、`unreachable`、`reset`、`address_in_use`、`address_unavailable`、`denied`、`tls`、`target_invalid`、`failed`。下面是常见的问题。
+Signal Lab 报告的每个失败都有一个代码；每个代码的消息见[错误消息](errors.md)。网络失败是 [`transport`](errors.md#transport) 代码：`refused`、`timeout`、`dns`、`unreachable`、`reset`、`address_in_use`、`address_unavailable`、`denied`、`tls`、`target_invalid`、`exhausted`、`failed`。下面是常见的问题。
 
 ## 什么都收不到 {#nothing-arrives}
 

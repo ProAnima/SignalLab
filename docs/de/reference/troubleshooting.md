@@ -9,7 +9,7 @@ Jeder Fehlschlag, den Signal Lab meldet, hat einen Code; die Meldung zu jedem
 steht in [Fehlermeldungen](errors.md). Netzwerkfehlschläge sind die
 [`transport`](errors.md#transport)-Codes: `refused`, `timeout`, `dns`,
 `unreachable`, `reset`, `address_in_use`, `address_unavailable`, `denied`,
-`tls`, `target_invalid`, `failed`. Die Probleme unten sind die häufigen.
+`tls`, `target_invalid`, `exhausted`, `failed`. Die Probleme unten sind die häufigen.
 
 ## Nichts kommt an {#nothing-arrives}
 

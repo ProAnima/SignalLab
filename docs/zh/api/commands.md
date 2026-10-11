@@ -15,7 +15,7 @@ description: Signal Lab 引擎的每一条命令，以 POST /api/invoke/<command
 
 - **参数名**采用 camelCase（`jobId`、`nodeId`）。命令不认识的参数，或遗漏
   的必填参数，会以 `command.args_invalid` 被拒绝；每一条带参数的
-  命令都可能因此失败。没有参数的命令不读取请求体。
+  命令都可能因此失败。没有参数的命令不接受请求体、`null` 或 `{}`；其他任何内容同样会以 `command.args_invalid` 被拒绝。
 - **作为参数传入的对象**——`config`、`request`、`document`、
   `library`、`emulator`、`profile`——使用引擎自己的字段名，大多是
   snake_case（`timeout_ms`）。在它们内部，引擎不认识的字段会
@@ -152,7 +152,7 @@ invoke app_info
 ### job_stop {#job_stop}
 
 立即停止一个任务：它的套接字关闭，它的中继、服务器或连接随之消失。
-被停止的任务不发送 [`job://ended`](events.md#event-job-ended)；被停止的
+待它们关闭后才会应答——紧接着的一次启动可以绑定同一个端口。被停止的任务不发送 [`job://ended`](events.md#event-job-ended)；被停止的
 运行不保存报告。
 
 | 参数 | 类型 | 必填 | 含义 |
@@ -163,7 +163,7 @@ invoke app_info
 
 ### jobs_stop_all {#jobs_stop_all}
 
-停止每一个正在运行的任务，无论由谁启动。没有参数。
+停止每一个正在运行的任务，无论由谁启动，并在它们释放了端口之后才应答，与 [`job_stop`](#job_stop) 相同。仍在启动中的任务（运行正在打开其端口）会在启动时被停止。没有参数。
 
 **结果**：null。
 
@@ -526,7 +526,7 @@ invoke osc_monitor_start '{"bind":"0.0.0.0:9000"}'
 
 **结果**：[`HttpResponse`](#type-httpresponse)。
 
-**错误**：`http.client_failed`（请求甚至无法准备）。
+**错误**：`node.method_invalid`（字段 `method`：不是 HTTP 令牌，例如 `BAD METHOD`）、`http.client_failed`（请求甚至无法准备）。
 
 ### http_burst_start {#http_burst_start}
 
@@ -554,7 +554,7 @@ invoke osc_monitor_start '{"bind":"0.0.0.0:9000"}'
 
 **结果**：[`JobInfo`](#type-jobinfo)。
 
-**错误**：`http.rate_invalid`、`http.duration_invalid`、`http.client_failed`。
+**错误**：`http.rate_invalid`、`http.duration_invalid`、`node.method_invalid`、`http.client_failed`。
 
 ### http_cookies {#http_cookies}
 
@@ -683,7 +683,12 @@ invoke ws_exchange '{"config":{"url":"ws://127.0.0.1:9001/"},"message":{"text":"
 `dns`、6 s 后 `timeout`）、`mqtt.no_answer`（6 s 内没有 CONNACK）、
 `mqtt.protocol`、`mqtt.refused_protocol`、`mqtt.refused_client_id`、
 `mqtt.refused_unavailable`、`mqtt.refused_credentials`、
-`mqtt.refused_not_authorized`、`mqtt.refused`。
+`mqtt.refused_not_authorized`、`mqtt.refused`；在拨号之前，还有
+`node.topic_filter`（3.1.1 禁止的 `subscribe` 过滤器）、`node.too_long`
+（用户名、密码、客户端 id 或遗嘱超过 MQTT 的 65 535 字节）以及
+`node.topic_wildcard` / `mqtt.topic_invalid`（遗嘱所在的主题无法用于发布）。代理在
+1.5 × `keep_alive_s` 的时间内没有任何响应、对它的 ping 也没有的连接，
+会以 `job://ended` 中的 `transport.timeout` 结束。
 
 ### mqtt_publish {#mqtt_publish}
 
@@ -700,9 +705,10 @@ invoke ws_exchange '{"config":{"url":"ws://127.0.0.1:9001/"},"message":{"text":"
 **结果**：null。QoS 1 或 2 的发布稍后由
 [`mqtt://ack`](events.md#event-mqtt-ack) 确认。
 
-**错误**：`node.topic_wildcard`（字段 `topic`）和 `mqtt.topic_required`
-（字段 `topic`），与 [`mqtt_publish_once`](#mqtt_publish_once) 相同——命令
-在查找连接之前就会拒绝它们；`mqtt.not_connected`。
+**错误**：`node.topic_wildcard`、`mqtt.topic_required`、`mqtt.topic_invalid`
+（其中含有 NUL）和 `node.too_long`（超过 65 535 字节），全部带有字段 `topic`，
+与 [`mqtt_publish_once`](#mqtt_publish_once) 相同——命令在查找连接之前就会拒绝它们；
+`mqtt.not_connected`。
 
 ### mqtt_subscribe {#mqtt_subscribe}
 
@@ -717,7 +723,9 @@ invoke ws_exchange '{"config":{"url":"ws://127.0.0.1:9001/"},"message":{"text":"
 
 **结果**：null。
 
-**错误**：`mqtt.filter_required`、`mqtt.not_connected`。
+**错误**：`mqtt.filter_required`、`node.topic_filter`（字段 `topic`：3.1.1
+禁止的过滤器，例如 `a/#/b` 或 `a+`——代理会因此关闭连接）、
+`mqtt.not_connected`。
 
 ### mqtt_unsubscribe {#mqtt_unsubscribe}
 
@@ -731,7 +739,7 @@ invoke ws_exchange '{"config":{"url":"ws://127.0.0.1:9001/"},"message":{"text":"
 **结果**：null。代理的应答作为 [`mqtt://ack`](events.md#event-mqtt-ack)
 到达，带有 `kind: "unsubscribed"`。
 
-**错误**：`mqtt.filter_required`、`mqtt.not_connected`。
+**错误**：`mqtt.filter_required`、`node.topic_filter`（字段 `topic`）、`mqtt.not_connected`。
 
 ### mqtt_publish_once {#mqtt_publish_once}
 
@@ -943,13 +951,12 @@ invoke netsim_start '{"config":{"listen":"127.0.0.1:9010","target":"127.0.0.1:90
 | `target` | string | — | `IP:port` 或 `host:port`；名称在任务启动时解析一次 |
 | `protocol` | string | — | `udp`：数据报；`tcp`：每个单位一个连接，写入载荷后关闭（每次连接可能耗时 500 ms） |
 | `size` | number | — | 载荷字节数，保持在 1 到 65 507 之间 |
-| `rate` | number | — | 每秒的单位数，按时间表：第 *n* 个单位在启动后 *n* / `rate` 秒到期，每次唤醒发送到期的内容（最多 256 个；时间表落后更多时会跳过较旧的单位）；0 表示能发多快就发多快 |
-| `duration_s` | number | `0` | 这么多秒后停止；0：直到被停止 |
+| `rate` | number | — | 每秒的单位数，上限 10,000,000，按时间表：第 *n* 个单位在启动后 *n* / `rate` 秒到期，每次唤醒发送到期的内容（最多 256 个；时间表落后更多时会跳过较旧的单位）；0 表示能发多快就发多快 |
+| `duration_s` | number | `0` | 这么多秒后停止；0（或负数）：直到被停止 |
 
 **结果**：[`JobInfo`](#type-jobinfo)。
 
-**错误**：`transport.target_invalid`、`transport.dns`。失败的发送会在
-事件中计数，而不作为错误报告。
+**错误**：`transport.target_invalid`、`transport.dns`，以及对于 UDP，在套接字根本无法打开时的绑定或连接失败（`transport.*`）。目标拒绝的发送在事件中计为 `errors`；此计算机未能发出的（端口、套接字或缓冲区用尽）计为 `local`，绝不算作目标的错误。
 
 ### scan_start {#scan_start}
 
@@ -1032,7 +1039,7 @@ invoke scan_start '{"config":{"host":"127.0.0.1","port_start":8000,"port_end":91
 
 ### inspect_payload {#inspect_payload}
 
-一帧所保留的字节，超出其批次携带的 1 KiB 预览部分。
+一帧所保留的字节，超出其批次携带的 256 字节预览部分。
 
 | 参数 | 类型 | 必填 | 含义 |
 | --- | --- | --- | --- |
@@ -1061,8 +1068,8 @@ invoke inspect_snapshot '{"limit":20}' | jq '.[] | {seq, proto, dir, summary}'
 
 读取库。文件不存在时，会先写入初始信号集。没有参数。
 
-**结果**：`{ "path": string, "library": library, "seeded": boolean }`——
-刚写入初始信号集时 `seeded` 为 true。库为
+**结果**：`{ "path": string, "library": library, "seeded": boolean, "stamp": string }`——
+刚写入初始信号集时 `seeded` 为 true；`stamp` 说明文件当时的内容，供下一次保存的 `base` 使用。库为
 `{ "version", "signals": [...], "folders": [...] }`：`version` 2（版本 1 的
 文件原样返回），没有文件夹时省略 `folders`。每个信号有 `id`、`name`、
 `group`（其文件夹，`"A/B"`；没有则为空）、`note` 和 `body`。
@@ -1073,16 +1080,19 @@ invoke inspect_snapshot '{"limit":20}' | jq '.[] | {seq, proto, dir, summary}'
 ### signals_save {#signals_save}
 
 通过同一文件夹中的临时文件替换整个库文件。已存在但无法读作库的文件会
-保持原样。
+保持原样。带有 `base` 时，自读取以来已发生变化的文件——被服务器的另一个页面或编辑器中的某个人改动——同样会保持原样，且这次保存被拒绝，这样他们的更改就不会丢失在一份从未见过它的列表之下。
 
 | 参数 | 类型 | 必填 | 含义 |
 | --- | --- | --- | --- |
 | `library` | object | 是 | `{ version, signals, folders }`，与 `signals_load` 返回的相同 |
+| `base` | string | 否 | 读取库时所用的 `stamp`（或上一次保存返回的）；没有文件时为 `""` |
 
-**结果**：字符串，写入的路径。
+**结果**：字符串，写入的路径；带有 `base` 时为 `{ "path", "stamp" }`——文件现在内容的 stamp，即下一次保存的 `base`。
 
 **错误**：`signals.json_invalid`（磁盘上当前的文件无法读取，带有
-`path`、`line`、`column`；什么都不会写入）、`signals.encode`、`file.io`。
+`path`、`line`、`column`；什么都不会写入）、`file.changed`（带有 `path`：文件
+不再是 `base`；什么都不会写入——请重新读取）、
+`signals.encode`、`file.io`。
 
 一个信号的 `body` 按其 `transport` 为：
 
@@ -1108,22 +1118,24 @@ MQTT 代理。它的文档——`name`、`bind`、`protocol`、协议规则以�
 
 读取模拟器库。文件不存在时，会先写入初始集合。没有参数。
 
-**结果**：`{ "path", "library": { "version": 1, "emulators": [{ "id", "note", "emulator" }] }, "seeded" }`。
+**结果**：`{ "path", "library": { "version": 1, "emulators": [{ "id", "note", "emulator" }] }, "seeded", "stamp" }`——
+`stamp` 说明文件当时的内容，供下一次保存的 `base` 使用。
 
 **错误**：`emulators.json_invalid`（带有 `path`、`line`、`column`；绝不
 被替换）、`file.io`。
 
 ### emulators_save {#emulators_save}
 
-通过临时文件替换整个模拟器库。
+通过临时文件替换整个模拟器库。已存在但无法读作库的文件会保持原样；带有 `base` 时，自读取以来已发生变化的文件同样如此，与 [`signals_save`](#signals_save) 相同。
 
 | 参数 | 类型 | 必填 | 含义 |
 | --- | --- | --- | --- |
 | `library` | object | 是 | `{ version, emulators }`，与 `emulators_load` 返回的相同 |
+| `base` | string | 否 | 读取库时所用的 `stamp`（或上一次保存返回的）；没有文件时为 `""` |
 
-**结果**：字符串，写入的路径。
+**结果**：字符串，写入的路径；带有 `base` 时为 `{ "path", "stamp" }`。
 
-**错误**：`emulators.encode`、`file.io`。
+**错误**：`emulators.json_invalid`（磁盘上当前的文件无法读取；什么都不会写入）、`file.changed`（文件不再是 `base`；什么都不会写入）、`emulators.encode`、`file.io`。
 
 ### emulator_check {#emulator_check}
 
@@ -1180,7 +1192,7 @@ MQTT 代理。它的文档——`name`、`bind`、`protocol`、协议规则以�
 | --- | --- | --- |
 | `job_id` | number | 任务 |
 | `name`, `protocol`, `local` | string | 模拟器、其协议以及它监听的地址 |
-| `counts` | object | `total`、`unmatched`（没有规则接收）、`failed`、`down`（它停机期间到达：其停机计划或 [`emulator_down`](#emulator_down)）、`hits`（按规则）以及 `missed`（MQTT：太落后的客户端没有收到的消息；为 0 时省略） |
+| `counts` | object | `total`、`unmatched`（没有规则接收）、`failed`、`down`（它停机期间到达：其停机计划或 [`emulator_down`](#emulator_down)）、`hits`（按规则）`missed`（MQTT：太落后的客户端没有收到的消息；为 0 时省略）以及 `refused`（HTTP、TCP、MQTT：因超出上限而在到达时就被关闭的连接；为 0 时省略） |
 | `forced` | string | 它被停机期间为 `unavailable`、`reset` 或 `timeout`；否则省略 |
 | `exchanges` | object[] | 每一项：`seq`、`ts`、`from`、`request`、`rule`（从 1 开始；没有规则接收时省略）、`reply`、`status`、`fault`、`ms`、`error`、`frame`、`down`，以及 `data`（模板读取到的请求内容） |
 
@@ -1228,6 +1240,14 @@ invoke emulator_exchanges '{"jobId":5,"after":0}' | jq '.counts, (.exchanges[] |
 | `bool` | `true` 或 `false` | `T` 或 `F` |
 | `blob` | 字节数组，`[222, 173]` | `b` |
 | `nil` | 无：`{ "type": "nil" }` | `N` |
+| `time` | 时间标签，其 64 位以十进制文本表示：`"1"` 即“立即” | `t` |
+| `char` | 一个字符，`"A"` | `c` |
+| `color` | `[red, green, blue, alpha]` | `r` |
+| `midi` | `[port, status, data1, data2]` | `m` |
+| `impulse` | 无 | `I` |
+| `array` | OscArg 的数组 | `[` … `]` |
+
+最后六种是收到的消息所携带的（OSC 监视器的 `osc://message`）；命令也可以发送它们。
 
 ### HttpRequest {#type-httprequest}
 
@@ -1237,7 +1257,7 @@ invoke emulator_exchanges '{"jobId":5,"after":0}' | jq '.counts, (.exchanges[] |
 | `url` | string | — | `http://` 或 `https://` |
 | `headers` | `[name, value][]` | `[]` | 请求标头 |
 | `body` | string or null | null | 正文 |
-| `timeout_ms` | number | `10000` | 用于整个交互 |
+| `timeout_ms` | number | `10000` | 用于整个交互，包括正文：1 到 120 000；超出时命令以 `node.range`（字段 `timeout_ms`）失败 |
 | `auth` | object | 无 | `{ "scheme": "basic", "username", "password" }`、`{ "scheme": "digest", "username", "password" }` 或 `{ "scheme": "bearer", "token" }` |
 
 最多跟随 10 次重定向。为一个主机输入的凭据和 Cookie 绝不会发往另一个
@@ -1247,15 +1267,15 @@ invoke emulator_exchanges '{"jobId":5,"after":0}' | jq '.counts, (.exchanges[] |
 
 | 字段 | 类型 | 含义 |
 | --- | --- | --- |
-| `ok` | boolean | 状态为 2xx |
+| `ok` | boolean | 状态为 2xx，且整个正文都已到达 |
 | `status`, `status_text` | number, string | 状态；没有响应时为 0 和空 |
 | `latency_ms` | number | 直到整个正文到达 |
 | `headers` | `[name, value][]` | 响应标头 |
 | `body` | string | 正文的文本，最多 256 KiB |
 | `body_bytes` | number | 正文的完整大小 |
 | `truncated` | boolean | `body` 在 256 KiB 处被截断 |
-| `error` | string or null | 为何没有响应，原因的所有层次 |
-| `cause` | string or null | 失败的类别：`refused`、`timeout`、`dns`、`unreachable`、`reset`、`address_in_use`、`address_unavailable`、`denied`、`tls`、`target_invalid`、`failed`——与 `transport.*` 代码相同 |
+| `error` | string or null | 为何没有响应，或为何其正文中途停止（此时 `status`、`headers` 和已到达的正文也会给出），原因的所有层次 |
+| `cause` | string or null | 失败的类别：`refused`、`timeout`、`dns`、`unreachable`、`reset`、`address_in_use`、`address_unavailable`、`denied`、`tls`、`target_invalid`、`exhausted`（此计算机的套接字或本地端口用尽）、`failed`——与 `transport.*` 代码相同 |
 | `digest` | object | 仅当 Digest 请求遇到了 401；否则省略。`challenged`：质询已被应答并再次发送请求。`error`：为何未能如此，一个 `EngineError`（`http.digest_not_offered`、`http.digest_unsupported`、`http.digest_invalid`、`http.digest_other_origin`）或 null |
 
 ### Payload {#type-payload}
@@ -1325,7 +1345,7 @@ invoke emulator_exchanges '{"jobId":5,"after":0}' | jq '.counts, (.exchanges[] |
 | `bytes` | 它的大小 |
 | `summary` | 一行 |
 | `detail` | 跨多行的解码，或 null |
-| `hex` | 前 1 KiB 的十六进制转储，或 null |
+| `hex` | 前 256 字节的十六进制转储，或 null |
 | `verdict` | 它的结局——`dropped`、`sampled`、一个状态——或 null |
 | `kept` | 在 `bytes` 中保留了多少（最多 256 KiB）；只记录了大小时为 0 |
 | `publish` | 仅 MQTT 发布：`{ broker, topic, qos, retain, text }`——代理为 `host:port`，以及保留的字节（即消息的载荷）是否为 UTF-8 文本。其他所有帧都不含此项 |

@@ -153,7 +153,7 @@ marcada como destrutiva.
 funcionam, para executar ou adaptar.
 
 `validate_experiment` e `run_experiment` recebem o experimento de uma de três formas — exatamente
-uma delas:
+um dos três primeiros argumentos — e os demais ajustam a execução:
 
 | Argumento | O que é |
 | --- | --- |

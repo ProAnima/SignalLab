@@ -53,7 +53,9 @@ Windows에서 앱은 Windows가 문서를 다른 곳(OneDrive)에 보관하더�
 
 모두 UTF-8 JSON이며, 잘 읽히고 비교되도록 들여쓰기와 함께 쓰입니다. 각 파일에는 `version`이
 있습니다. 이전 버전의 파일은 열 때 읽혀 마이그레이션되고, 다음 저장 때 현재 버전으로 다시
-쓰입니다. 그 뒤에는 이전 Signal Lab이 열 수 없습니다.
+쓰입니다. 그 뒤에는 이전 Signal Lab이 열 수 없습니다. 이 Signal Lab이 아는 것보다 새 버전의
+파일은 거부되고(`doc.version_unsupported`) 그대로 남습니다. 그래도 읽으면 새 버전이 더한 것이
+다음 저장 때 사라지기 때문입니다. 이는 실험과 두 라이브러리 모두에 해당합니다.
 
 ### experiment.json {#experiment-json}
 
@@ -141,13 +143,13 @@ Windows에서 앱은 Windows가 문서를 다른 곳(OneDrive)에 보관하더�
 
 ### 실행 보고서 {#run-reports}
 
-`runs/run-<started ms>-<job>.json`, 보고서 버전 5: 통과하거나 실패한 실행마다 파일 하나, 절대
+`runs/run-<started ms>-<job>.json`, 보고서 버전 6: 통과하거나 실패한 실행마다 파일 하나, 절대
 덮어쓰지 않습니다(같은 이름의 두 번째 실행은 `-2`, `-3`…이 붙습니다). 중지된 실행은 아무것도
 저장하지 않습니다.
 
 | 필드 | 무엇인지 |
 | --- | --- |
-| `version` | 5 |
+| `version` | 6 |
 | `experiment` | 실험의 이름 |
 | `document_version` | 실행된 문서의 버전 |
 | `seed`, `profile` | 실행에 사용된 값 |
@@ -156,7 +158,7 @@ Windows에서 앱은 Windows가 문서를 다른 곳(OneDrive)에 보관하더�
 | `started_ms`, `ended_ms` | 1970년 이후 밀리초 |
 | `outcome` | `passed` 또는 `failed` |
 | `error` | 첫 실패, 또는 null |
-| `steps` | 모든 단계, [`experiment://step`](../api/events.md#event-experiment-step) 형식 |
+| `steps` | 단계, [`experiment://step`](../api/events.md#event-experiment-step) 형식: 처음 5 000개 뒤로는 초당 하나와 마지막 500개이며, 빠진 구간은 `omitted`로 셈(버전 6부터) |
 | `emulators` | 각 [[ui:exp.node.emulator]] 노드가 받고 응답한 것(버전 3부터). 없으면 생략 |
 | `impairments` | 각 [[ui:exp.node.impairment]] 노드의 릴레이가 단계별로 한 일(버전 4부터). 없으면 생략 |
 
@@ -209,9 +211,11 @@ Signal Lab은 로그 파일을 쓰지 않습니다. [문제 해결](troubleshoot
   들어 있지 않으므로 새 머신에서 다시 설정하십시오.
 - **편집**은 Signal Lab을 닫은 상태에서(또는 서버에서는 아무 페이지도 열려 있지 않을 때)
   `signals.json`, `emulators.json`, `experiment.json`을 손으로 하십시오. 앱은 자신이 가진
-  것으로 파일 전체를 쓰므로, 실행 중에 한 변경은 다음 저장에 덮어써집니다. 실수는 파일을
-  다음에 읽을 때 줄과 열과 함께 보고되며, 조용히 교체되지 않습니다 — `signals.json`은 앱이
-  거기에 저장할 때도 마찬가지입니다. 그 저장은 거부되고 파일은 남겨 둔 그대로 남습니다.
+  것으로 파일 전체를 씁니다. `signals.json`과 `emulators.json`은 앱이 읽은 뒤에 바뀐 파일 위에
+  저장하면 거부되고(`file.changed`) 변경은 그대로 보존됩니다 — 다시 읽기를 눌러 읽으십시오.
+  `experiment.json`은 편집기의 다음 저장에 덮어써집니다. 실수는 파일을 다음에 읽을 때 줄과 열과
+  함께 보고되며, 조용히 교체되지 않습니다 — `signals.json`과 `emulators.json`은 앱이 거기에
+  저장할 때도 마찬가지입니다. 그 저장은 거부되고 파일은 남겨 둔 그대로 남습니다.
 - **삭제**는 `runs/`, `exports/`, `capture-*` 파일을 언제든 하십시오. `signals.json`이나
   `emulators.json`을 삭제하면 스타터 세트가, `experiment.json`을 삭제하면 스타터 실험이
   돌아옵니다.

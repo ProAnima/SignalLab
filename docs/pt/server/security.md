@@ -35,7 +35,11 @@ Iniciado sem token, o servidor escuta em `127.0.0.1:1430` e não exige entrada: 
 para quem está diante desta máquina. Para impedir que uma página web em qualquer navegador desta
 máquina o alcance por meio de um nome que resolve para `127.0.0.1` (DNS rebinding), ele só responde
 a requisições cujo `Host` seja um nome de loopback — `localhost`, um nome terminado em
-`.localhost`, `127.x.x.x` ou `[::1]` — ou um nome que você permita com `--allowed-host`.
+`.localhost`, um endereço de loopback escrito como tal (`127.x.x.x`, `[::1]`) — ou um nome que
+você permita com `--allowed-host`. Um nome DNS que apenas começa como um endereço
+(`127.0.0.1.example.com`) não é um: qualquer um pode apontá-lo para `127.0.0.1`. Uma
+requisição com dois cabeçalhos `Host`, ou com um que não seja `host[:port]`, também é
+recusada.
 
 Se lhe pedirem para escutar em qualquer outro endereço sem token, ele não inicia: diz por quê e
 sai com o código `2`.
@@ -122,8 +126,19 @@ em um frame por outra página.
 ## Arquivos e tamanhos {#files}
 
 - Um download (`GET /api/files?path=…`) só é servido de dentro da pasta de dados, com no máximo
-  256 MiB; qualquer outra coisa é `404`.
+  256 MiB; qualquer outra coisa é `404`. O caminho é julgado pelo nome antes de qualquer coisa
+  ser aberta: um caminho com `..`, outra unidade, um compartilhamento em outra máquina
+  (`\\host\share`), um dispositivo ou um pipe nomeado é recusado sem ser tocado.
 - O corpo de uma requisição tem no máximo 24 MiB.
+
+## Clientes lentos e ociosos {#connections}
+
+- Um cliente deve enviar o cabeçalho de uma requisição em 30 segundos; o que envia metade dele e
+  para é desconectado, assim como uma conexão ociosa por esse tempo.
+- No máximo 1024 conexões são atendidas ao mesmo tempo; as demais são fechadas ao chegar.
+- Quando o servidor para, as requisições em andamento têm 5 segundos para terminar (uma
+  execução aguardada responde que foi parada); um cliente que o seguraria por mais tempo é
+  cortado.
 
 ## Segredos {#secrets}
 

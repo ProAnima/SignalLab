@@ -19,7 +19,8 @@ déclencher la détection d’intrusion et est souvent contraire aux règles.
 
 ## Analyser un hôte {#scan}
 
-1. Saisissez l’[[ui:sc.host]] : un seul hôte, une adresse IP ou un nom.
+1. Saisissez l’[[ui:sc.host]] : un seul hôte, une adresse IP ou un nom. Un nom est résolu une seule fois, au
+   démarrage de l’analyse ; un nom qui ne se résout pas l’arrête là, avec la raison.
 2. Réglez [[ui:sc.fromPort]] et [[ui:sc.toPort]], ou choisissez un [[ui:sc.preset]].
 3. Ajustez [[ui:common.concurrency]] et [[ui:common.timeoutMs]] si besoin.
 4. Laissez [[ui:sc.grabBanner]] actif pour lire ce que chaque service dit en premier.
@@ -34,7 +35,7 @@ essayés. Les champs sont fixés tant qu’elle tourne.
 | Champ | Quoi | Par défaut |
 | --- | --- | --- |
 | [[ui:sc.host]] | L’hôte à analyser. | `127.0.0.1` |
-| [[ui:sc.fromPort]], [[ui:sc.toPort]] | La plage, les deux bornes comprises, 1–65 535. Quand la première est plus grande, elles sont échangées. | 1–1024 |
+| [[ui:sc.fromPort]], [[ui:sc.toPort]] | La plage, les deux bornes comprises, 1–65 535 : un nombre saisi au-delà d’une borne s’y arrête. Quand la première est plus grande, elles sont échangées. | 1–1024 |
 | [[ui:common.concurrency]] | Combien de tentatives de connexion sont ouvertes en même temps, 1–1024. | 400 |
 | [[ui:common.timeoutMs]] | Combien de temps attendre chaque connexion, 50–10 000 ms. | 500 |
 | [[ui:sc.grabBanner]] | Après la connexion, attendre jusqu’à 400 ms que le service envoie quelque chose, et conserver ses 256 premiers octets. | on |
@@ -56,7 +57,9 @@ ramené dedans au démarrage de l’analyse.
 Un port qui accepte répond aussitôt. Un port qui n’accepte pas peut coûter jusqu’au
 délai d’attente entier : un pare-feu qui abandonne les tentatives de connexion ne
 répond jamais, et sous Windows, même un refus peut prendre plus que le délai par
-défaut. Ainsi une analyse d’un hôte qui ne répond rien prend environ :
+défaut. Ainsi une analyse d’un hôte qui ne répond rien prend environ (sous Windows, un port
+refusé prend environ 2 s, car Windows réessaie, si bien que c’est alors le délai d’attente
+qui décide) :
 
 ```text
 ports ÷ concurrency × timeout
@@ -78,16 +81,30 @@ ports :
 | [[ui:sc.banner]] | Ce que le service a envoyé en premier, les sauts de ligne changés en espaces, ou `—`. |
 
 Un port qui a refusé, et un port qui n’a pas répondu dans le délai, sont tous deux
-laissés de côté : le scanner ne distingue pas fermé de filtré. La liste conserve
-jusqu’à 2000 ports ouverts.
+laissés de côté : le scanner ne distingue pas fermé de filtré. La liste conserve tous
+les ports ouverts, quel qu’en soit le nombre.
+
+Peu de ports ouverts est le résultat habituel : un PC Windows écoute typiquement sur 135 et
+445 (et 139 sur son adresse réseau) parmi les mille premiers ports, et la plupart des
+appareils sur une poignée. Pour comparer, listez ce que cet ordinateur écoute avec
+`netstat -an` (ou `Get-NetTCPConnection -State Listen` dans PowerShell).
+
+### Ports non vérifiés {#unchecked}
+
+Chaque connexion prend un des ports de cet ordinateur. Quand il n’en a plus — ou plus de
+sockets —, une tentative échoue ici, avant d’atteindre l’hôte ; le scanner attend et
+réessaie, et un port qu’il ne peut toujours pas essayer est compté comme *non vérifié*,
+affiché en ambre à côté du nombre d’ouverts, jamais comme fermé. Si vous le voyez,
+relancez l’analyse avec un [[ui:common.concurrency]] plus bas.
 
 Seuls les services qui parlent en premier ont une bannière — SSH, SMTP, FTP, beaucoup
 de protocoles de commande d’appareils. Un serveur web attend une requête, si bien
 que son port affiche `—`. La capture des bannières rallonge chaque port ouvert de
 400 ms au plus.
 
-Une connexion que le scanner ouvre est refermée aussitôt. Le scanner n’envoie rien
-dessus.
+Une connexion que le scanner ouvre est refermée aussitôt, par une réinitialisation, de
+sorte qu’elle ne retient pas le port de cet ordinateur pendant des minutes. Le scanner
+n’envoie rien dessus.
 
 Avec la capture active, chaque port ouvert est aussi dans
 l’[Inspecteur](inspector.md), avec sa bannière et le verdict `open`.

@@ -73,11 +73,11 @@ OSC 的 `true` 是标签 `T`，而不是文本 `"true"`。等待 bool 的设备�
 | [[ui:common.time]] | 到达的时刻，精确到毫秒 |
 | [[ui:osc.from]] | 发送方的 `IP:port` |
 | [[ui:osc.address]] | OSC 地址，或者当数据包不是有效 OSC 时为 [[ui:osc.decodeError]] |
-| [[ui:osc.args]] | 参数值；blob 显示为 `blob[n]`，`nil` 显示为 `nil`。对于无法解码的数据包，显示原因。 |
+| [[ui:osc.args]] | 参数值；blob 显示为 `blob[n]`，`nil` 显示为 `nil`，时间标签显示为 `t:` 及其自 1900 年起的秒数（OSC 的“立即”为 `t:immediate`），字符显示为 `'A'`，颜色显示为 `#rrggbbaa`，MIDI 消息显示为 `midi[01 90 3c 7f]`，数组放在 `[ ]` 中。对于无法解码的数据包，显示原因。 |
 
 一个消息包会为其中的每条消息各给出一行。列表保留最新的 300 行；[[ui:common.clear]] 清空它。按 [[ui:common.stop]] 关闭端口。监视器也是控制台任务条中的一个任务，因此也可以从那里停止。
 
-监视器读取最大 64 KiB 的数据包。它解码标签 `i f s S b h d T F N I`（`S` 按文本读取，`I` 按 nil 读取）；带有任何其他标签或被截断的数据包会显示为解码错误，而不是被丢弃。
+监视器读取最大 64 KiB 的数据包。它解码 OSC 1.0 的每一种类型标签——`i f s S b h d T F N I t c r m` 以及数组 `[ ]`（`S` 按文本读取，`I` 按 `impulse` 读取）。来自旧实现、不带类型标签字符串的消息，按规范的要求读作没有参数的消息。带有任何其他标签、被截断，或地址不以 `/` 开头的数据包，会显示为解码错误，而不是被丢弃。等待和模拟器读取同样的类型：在回复值中，时间标签是其 64 位数字的文本，颜色是 `#rrggbbaa`，MIDI 消息是它的四个字节，数组是一个列表。
 
 ### 把一条消息变成等待 {#wait-for-this}
 
@@ -136,8 +136,8 @@ OSC 的 `true` 是标签 `T`，而不是文本 `"true"`。等待 bool 的设备�
 
 ## 保存与复用 {#library}
 
-- **保存为信号。**按钮下方的 [[ui:sig.saveNew]] 会把这条消息——目标、地址和参数——保存到信号库中您选择的文件夹里。从那时起，发送器就与该信号关联：[[ui:sig.save]]（或发送器中的 <kbd>Ctrl</kbd>+<kbd>S</kbd>）会更新它，[[ui:sig.saveAs]] 会复制一份，旁边的标签会在 [[ui:nav.signals]] 中打开它。以后从 [[ui:nav.signals]] 或在任意界面按 <kbd>Ctrl</kbd>+<kbd>K</kbd> 发送它。见[信号](../tools/signals.md)。
-- **添加到实验。**[[ui:common.toExperiment]] 会把一个目标、地址和参数都相同的 [OSC 消息](../experiments/nodes.md#node-osc)步骤添加到打开的实验——紧挨着 End 之前，或所选步骤之后——并打开它。实验运行期间不能添加任何内容；控制台会说明这一点。
+- **保存为信号**。按钮下方的 [[ui:sig.saveNew]] 会把这条消息——目标、地址和参数——保存到信号库中您选择的文件夹里。从那时起，发送器就与该信号关联：[[ui:sig.save]]（或发送器中的 <kbd>Ctrl</kbd>+<kbd>S</kbd>）会更新它，[[ui:sig.saveAs]] 会复制一份，旁边的标签会在 [[ui:nav.signals]] 中打开它。以后从 [[ui:nav.signals]] 或在任意界面按 <kbd>Ctrl</kbd>+<kbd>K</kbd> 发送它。见[信号](../tools/signals.md)。
+- **添加到实验**。[[ui:common.toExperiment]] 会把一个目标、地址和参数都相同的 [OSC 消息](../experiments/nodes.md#node-osc)步骤添加到打开的实验——紧挨着 End 之前，或所选步骤之后——并打开它。实验运行期间不能添加任何内容；控制台会说明这一点。
 
 ## 在实验中 {#experiments}
 

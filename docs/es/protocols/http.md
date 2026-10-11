@@ -45,7 +45,7 @@ la aplicación; las credenciales no.
 | [[ui:field.auth]] | Cómo se autentica la solicitud ([abajo](#auth)) | [[ui:http.auth.none]] |
 | [[ui:http.keepCookies]] | Devolver las cookies que definen los servidores ([abajo](#cookies)) | activado |
 | [[ui:http.body]] | Se envía exactamente como se escribe; no se añade ningún `Content-Type`, así que añade el encabezado que corresponda. Un cuerpo vacío no se envía. El campo no se muestra para GET y HEAD, y entonces la solicitud no lleva ningún cuerpo — ni en el envío, ni en una señal guardada, ni en [[ui:common.toExperiment]] — aunque hayas escrito uno con otro método. | vacío |
-| [[ui:common.timeoutMs]] | Cuánto puede durar todo el intercambio, respuesta y cuerpo incluidos | 10 000 |
+| [[ui:common.timeoutMs]] | Cuánto puede durar todo el intercambio, respuesta y cuerpo incluidos: de 1 ms a 120 000 (dos minutos), como en el paso HTTP | 10 000 |
 
 ## Autenticación {#auth}
 
@@ -116,6 +116,11 @@ El panel de cookies bajo la solicitud y la respuesta lista lo que contiene el al
 caducidad) y [[ui:http.cookieFlags]] (`Secure`, `HttpOnly`, `SameSite`).
 Las cookies caducadas no se listan. [[ui:common.clear]] vacía el almacén.
 
+El almacén guarda como máximo 3000 cookies, más o menos lo que guarda un navegador. Un
+servidor que define una cookie nueva con cada respuesta lo llena hasta ahí y no más: pasado
+ese punto una cookie nueva no se guarda, mientras que una que el almacén ya tiene se sigue
+actualizando o eliminando.
+
 El almacén vive mientras vive la aplicación: un reinicio empieza con uno vacío. En un
 [servidor](../server/index.md), hay un almacén por cada página que haya iniciado sesión en él.
 Una ejecución de experimento tiene un almacén propio (consulta [Experimentos](../experiments/index.md)),
@@ -129,7 +134,13 @@ y `signallab send http` no usa ninguno.
 | [[ui:http.latency]] | Desde el envío hasta el último byte del cuerpo, en milisegundos |
 | [[ui:http.size]] | El tamaño del cuerpo |
 | Encabezados de respuesta | Haz clic en la línea con su recuento para mostrarlos u ocultarlos |
-| Cuerpo | Formateado cuando es JSON; [[ui:http.rawBody]] y [[ui:http.formatJson]] alternan. Se muestran hasta 256 KiB, luego `… (truncated)`. |
+| Cuerpo | Formateado cuando es JSON; [[ui:http.rawBody]] y [[ui:http.formatJson]] alternan. Se muestran hasta 256 KiB, luego `… (truncated)`; [[ui:http.size]] sigue siendo el del cuerpo entero. |
+
+El cuerpo se lee según llega y solo se conservan sus primeros 256 KiB, así que un cuerpo de
+gigabytes — o uno que no termina nunca — no cuesta más memoria que eso; termina con el
+tiempo de espera. Un cuerpo que se detiene a medias (el tiempo de espera, o un servidor que
+cuelga) es un fallo, dicho con las mismas palabras que cualquier otro, y con el estado y lo
+que sí llegó a la vista: un `200` con medio cuerpo no es un éxito.
 
 Cuando no hay respuesta, el panel dice por qué, con las mismas palabras que en todas partes
 de Signal Lab: rechazada, sin respuesta a tiempo, el nombre no resuelve, un
@@ -187,8 +198,9 @@ Hay dos formas de enviar:
 | Número | Qué |
 | --- | --- |
 | [[ui:http.sent]] | Solicitudes que han tenido respuesta o han fallado |
-| [[ui:http.ok]] | Respondidas con un estado 2xx |
-| [[ui:http.failed]] | Sin respuesta, o cualquier estado fuera de 200–299 |
+| [[ui:http.ok]] | Respondidas con un estado 2xx y el cuerpo completo |
+| [[ui:http.failed]] | Sin respuesta, un cuerpo cortado, o cualquier estado fuera de 200–299 |
+| [[ui:http.local]] | Solicitudes que este equipo no pudo enviar: se quedó sin sockets o puertos locales (en Windows, cada conexión cerrada retiene uno hasta dos minutos). El servidor nunca las vio, así que están en [[ui:http.sent]] pero no en [[ui:http.failed]] ni en las latencias. Se muestra solo cuando hay alguna. |
 | [[ui:http.missed]] | Omitidas, como arriba (solo con una tasa) |
 | [[ui:http.rps]] | Solicitudes por segundo durante la última décima de segundo; cuando la ráfaga ha terminado, durante toda la ráfaga. Con una tasa, la etiqueta nombra la tasa pedida. |
 | [[ui:http.p50]], [[ui:http.p90]], [[ui:http.p95]], [[ui:http.p99]] | El tiempo dentro del cual terminó esa proporción de las solicitudes, fallos incluidos; preciso hasta un 0,5 % |
@@ -293,6 +305,7 @@ responder, y 2 cuando una opción no es válida. No conserva ninguna cookie. Con
 | `401` con Digest | Lee el mensaje bajo el estado: consulta [Digest](#digest). |
 | [[ui:http.missed]] por encima de 0 | Sube [[ui:common.concurrency]], o baja la tasa: el servidor responde más despacio de lo que la tasa necesita. |
 | [[ui:http.failed]] alto aunque el servidor responda | Todo estado fuera de 200–299 cuenta como fallido, 404 y 500 incluidos. |
+| [[ui:http.local]] por encima de 0 | Este equipo se quedó sin puertos locales: el servidor cierra cada conexión, así que cada solicitud necesita una nueva. Baja [[ui:common.concurrency]] o la tasa, o espera un minuto a que los puertos vuelvan. |
 
 En un servidor, las solicitudes salen del servidor: `127.0.0.1` es el servidor mismo.
 Consulta [Servidor](../server/index.md).

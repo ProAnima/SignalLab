@@ -86,7 +86,7 @@ Zeitleiste.
   sind, bis Sie ihn beenden.
 - Er behält bis zu 8192 Frames und 64 MiB ihrer Bytes; die ältesten Frames machen
   neuen Platz. Jeder Frame behält bis zu 256 KiB seiner Bytes, und die Liste
-  zeigt sein erstes KiB.
+  zeigt seine ersten 256 Bytes.
 - [[ui:ins.pause]] hält die Liste an, damit Sie sie lesen können; der Mitschnitt
   läuft darunter weiter.
 - Von einem Durchlauf verwendete Geheimniswerte werden in jedem Frame maskiert.

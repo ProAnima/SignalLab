@@ -90,13 +90,20 @@ le fermer.
 - Au-dessus de l'arbre figurent le nombre de topics, combien détiennent une valeur retenue et,
   une fois connecté, le broker sur lequel vous écoutez.
 - Les charges utiles sont affichées en texte ; les octets qui ne sont pas de l'UTF-8 apparaissent en caractères
-  de remplacement.
+  de remplacement. D’une charge utile de plus de 4 Ko, le début est affiché, avec sa taille
+  entière ; elle ne peut pas être copiée dans [[ui:mq.publish]] ni enregistrée comme signal,
+  puisqu’elle serait envoyée coupée.
 - [[ui:common.clear]] vide l'arbre. Rien d'autre ne le fait : il reste tel quel
   quand vous changez d'écran ou vous vous déconnectez, jusqu'à la fermeture de l'application.
 
-Les messages atteignent l'écran par lots, dix fois par seconde. Quand un broker envoie
-plus de 4000 messages en un dixième de seconde, les plus anciens de ce lot sont
-laissés hors de l'arbre et comptés comme « non affichés » au-dessus de lui.
+Les messages atteignent l'écran par lots, dix fois par seconde, chacun avec le dernier
+message de chaque topic qui en a eu un et combien il en a eu : un flot sur quelques topics
+ne perd rien, et chaque compte est juste. Quand un lot est plein — 4000 topics, ou 2 Mo
+de charges utiles, comme le font les valeurs retenues d'un broker quand on s'abonne à `#` —
+la connexion ne lit plus qu'une fois le lot parti, si bien que c'est le broker qui attend
+plutôt qu'un topic envoyé une seule fois soit manqué. L'arbre contient jusqu'à 100 000
+topics ; les messages sur des topics au-delà sont comptés comme « non affichés »
+au-dessus de lui.
 
 ### Le volet d'un topic {#topic}
 

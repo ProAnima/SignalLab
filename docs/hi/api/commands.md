@@ -16,7 +16,8 @@ description: Signal Lab के इंजन की हर कमांड, ज�
   नहीं जानती, या जो ज़रूरी आर्ग्युमेंट छूट गया हो, उसे
   `command.args_invalid` के साथ अस्वीकार कर दिया जाता है; आर्ग्युमेंट लेने वाली हर कमांड
   इसके साथ विफल हो सकती है।
-  बिना आर्ग्युमेंट वाली कमांड बॉडी नहीं पढ़ती।
+  बिना आर्ग्युमेंट वाली कमांड कोई बॉडी नहीं लेती, `null` या `{}` लेती है; इसके अलावा कुछ भी
+  `command.args_invalid` के साथ अस्वीकार कर दिया जाता है।
 - **आर्ग्युमेंट के रूप में दिए गए ऑब्जेक्ट** — `config`, `request`, `document`,
   `library`, `emulator`, `profile` — इंजन के अपने फ़ील्ड नाम उपयोग करते हैं, ज़्यादातर
   snake_case (`timeout_ms`)। इनके भीतर जिस फ़ील्ड को इंजन नहीं जानता वह
@@ -154,7 +155,7 @@ invoke app_info
 ### job_stop {#job_stop}
 
 एक जॉब को तुरंत रोकता है: उसके सॉकेट बंद हो जाते हैं, उसका रिले, सर्वर या कनेक्शन चला जाता है।
-रुका हुआ जॉब कोई [`job://ended`](events.md#event-job-ended) नहीं भेजता; रुका हुआ
+जवाब तब आता है जब वे जा चुके हों — इसके ठीक बाद की शुरुआत वही पोर्ट बाँध लेती है। रुका हुआ जॉब कोई [`job://ended`](events.md#event-job-ended) नहीं भेजता; रुका हुआ
 रन कोई रिपोर्ट नहीं सहेजता।
 
 | आर्ग्युमेंट | प्रकार | आवश्यक | अर्थ |
@@ -165,7 +166,9 @@ invoke app_info
 
 ### jobs_stop_all {#jobs_stop_all}
 
-हर चल रहे जॉब को रोकता है, चाहे उसे किसी ने भी शुरू किया हो। कोई आर्ग्युमेंट नहीं।
+हर चल रहे जॉब को रोकता है, चाहे उसे किसी ने भी शुरू किया हो, और तब जवाब देता है जब वे अपने पोर्ट छोड़
+चुके हों, जैसे [`job_stop`](#job_stop) करता है। जो जॉब अभी शुरू हो रहा है (कोई रन जो अपने पोर्ट खोल रहा
+है) उसे शुरू होते ही रोक दिया जाता है। कोई आर्ग्युमेंट नहीं।
 
 **नतीजा**: null।
 
@@ -538,7 +541,8 @@ invoke osc_monitor_start '{"bind":"0.0.0.0:9000"}'
 
 **नतीजा**: [`HttpResponse`](#type-httpresponse)।
 
-**त्रुटियाँ**: `http.client_failed` (रिक्वेस्ट तैयार भी नहीं हो सकी)।
+**त्रुटियाँ**: `node.method_invalid` (फ़ील्ड `method`: HTTP टोकन नहीं, जैसे
+`BAD METHOD`), `http.client_failed` (रिक्वेस्ट तैयार भी नहीं हो सकी)।
 
 ### http_burst_start {#http_burst_start}
 
@@ -566,7 +570,7 @@ paced होने पर `params.rate`)।
 
 **नतीजा**: [`JobInfo`](#type-jobinfo)।
 
-**त्रुटियाँ**: `http.rate_invalid`, `http.duration_invalid`, `http.client_failed`।
+**त्रुटियाँ**: `http.rate_invalid`, `http.duration_invalid`, `node.method_invalid`, `http.client_failed`।
 
 ### http_cookies {#http_cookies}
 
@@ -697,7 +701,12 @@ publishes और unsubscribes [`mqtt://ack`](events.md#event-mqtt-ack) के �
 `dns`, 6 s बाद `timeout`), `mqtt.no_answer` (6 s के भीतर कोई CONNACK नहीं),
 `mqtt.protocol`, `mqtt.refused_protocol`, `mqtt.refused_client_id`,
 `mqtt.refused_unavailable`, `mqtt.refused_credentials`,
-`mqtt.refused_not_authorized`, `mqtt.refused`।
+`mqtt.refused_not_authorized`, `mqtt.refused`; डायल करने से पहले,
+`node.topic_filter` (`subscribe` का वह filter जिसे 3.1.1 मना करता है), `node.too_long`
+(यूज़र नाम, पासवर्ड, client ID या will जो MQTT के 65 535 बाइट से ऊपर हो) और
+`node.topic_wildcard` / `mqtt.topic_invalid` (किसी ऐसे टॉपिक पर will जिस पर पब्लिश नहीं किया जा सकता)।
+जिस कनेक्शन का ब्रोकर कुछ न कहे, अपने ping पर भी नहीं, 1.5 × `keep_alive_s` तक, वह
+`job://ended` में `transport.timeout` के साथ ख़त्म होता है।
 
 ### mqtt_publish {#mqtt_publish}
 
@@ -714,9 +723,10 @@ publishes और unsubscribes [`mqtt://ack`](events.md#event-mqtt-ack) के �
 **नतीजा**: null। QoS 1 या 2 publish की पुष्टि बाद में
 [`mqtt://ack`](events.md#event-mqtt-ack) से होती है।
 
-**त्रुटियाँ**: `node.topic_wildcard` (फ़ील्ड `topic`) और `mqtt.topic_required`
-(फ़ील्ड `topic`), जैसे [`mqtt_publish_once`](#mqtt_publish_once) के लिए — कमांड
-कनेक्शन खोजने से पहले इन्हें अस्वीकार कर देती है; `mqtt.not_connected`।
+**त्रुटियाँ**: `node.topic_wildcard`, `mqtt.topic_required`, `mqtt.topic_invalid`
+(उसमें NUL हो) और `node.too_long` (65 535 बाइट से ऊपर), सब फ़ील्ड `topic` के साथ,
+जैसे [`mqtt_publish_once`](#mqtt_publish_once) के लिए — कमांड कनेक्शन खोजने से पहले
+इन्हें अस्वीकार कर देती है; `mqtt.not_connected`।
 
 ### mqtt_subscribe {#mqtt_subscribe}
 
@@ -730,7 +740,9 @@ publishes और unsubscribes [`mqtt://ack`](events.md#event-mqtt-ack) के �
 
 **नतीजा**: null।
 
-**त्रुटियाँ**: `mqtt.filter_required`, `mqtt.not_connected`।
+**त्रुटियाँ**: `mqtt.filter_required`, `node.topic_filter` (फ़ील्ड `topic`: वह filter जिसे
+3.1.1 मना करता है, जैसे `a/#/b` या `a+` — ब्रोकर ऐसे एक पर कनेक्शन बंद कर देते हैं),
+`mqtt.not_connected`।
 
 ### mqtt_unsubscribe {#mqtt_unsubscribe}
 
@@ -744,7 +756,7 @@ publishes और unsubscribes [`mqtt://ack`](events.md#event-mqtt-ack) के �
 **नतीजा**: null। ब्रोकर का जवाब
 [`mqtt://ack`](events.md#event-mqtt-ack) के रूप में `kind: "unsubscribed"` के साथ आता है।
 
-**त्रुटियाँ**: `mqtt.filter_required`, `mqtt.not_connected`।
+**त्रुटियाँ**: `mqtt.filter_required`, `node.topic_filter` (फ़ील्ड `topic`), `mqtt.not_connected`।
 
 ### mqtt_publish_once {#mqtt_publish_once}
 
@@ -961,13 +973,15 @@ invoke netsim_start '{"config":{"listen":"127.0.0.1:9010","target":"127.0.0.1:90
 | `target` | स्ट्रिंग | — | `IP:port` या `host:port`; नाम एक बार खोजा जाता है, जब जॉब शुरू होता है |
 | `protocol` | स्ट्रिंग | — | `udp`: डेटाग्राम; `tcp`: प्रति यूनिट एक कनेक्शन जो पेलोड लिखता है और बंद कर देता है (हर connect में 500 ms लग सकते हैं) |
 | `size` | संख्या | — | पेलोड बाइट, 1 और 65 507 के बीच रखा गया |
-| `rate` | संख्या | — | प्रति सेकंड यूनिट, एक शेड्यूल पर: यूनिट *n* शुरू से *n* / `rate` सेकंड पर देय है, और हर wake जो देय है वह भेजता है (अधिकतम 256; इससे पीछे का शेड्यूल पुरानी यूनिट छोड़ देता है); 0 जितनी तेज़ हो सके भेजता है |
-| `duration_s` | संख्या | `0` | इतने सेकंड बाद रोकें; 0: रोके जाने तक |
+| `rate` | संख्या | — | प्रति सेकंड यूनिट, 10 000 000 तक सीमित, एक शेड्यूल पर: यूनिट *n* शुरू से *n* / `rate` सेकंड पर देय है, और हर wake जो देय है वह भेजता है (अधिकतम 256; इससे पीछे का शेड्यूल पुरानी यूनिट छोड़ देता है); 0 जितनी तेज़ हो सके भेजता है |
+| `duration_s` | संख्या | `0` | इतने सेकंड बाद रोकें; 0 (या ऋणात्मक संख्या) रोके जाने तक |
 
 **नतीजा**: [`JobInfo`](#type-jobinfo)।
 
-**त्रुटियाँ**: `transport.target_invalid`, `transport.dns`। विफल भेजे गए इवेंट में
-गिने जाते हैं, त्रुटियों के रूप में नहीं बताए जाते।
+**त्रुटियाँ**: `transport.target_invalid`, `transport.dns`, और UDP के लिए bind या
+connect की विफलता (`transport.*`) जब सॉकेट खुल ही न सके। जो भेजे लक्ष्य अस्वीकार करता है वे इवेंट में
+`errors` के रूप में गिने जाते हैं; जो यह मशीन भेज न सकी (पोर्ट, सॉकेट या बफ़र ख़त्म) वह `local` के रूप में गिना
+जाता है, लक्ष्य की त्रुटि के रूप में कभी नहीं।
 
 ### scan_start {#scan_start}
 
@@ -1052,7 +1066,7 @@ invoke scan_start '{"config":{"host":"127.0.0.1","port_start":8000,"port_end":91
 
 ### inspect_payload {#inspect_payload}
 
-एक फ़्रेम जो बाइट रखता है, उसके batch द्वारा लाए गए 1 KiB preview के आगे।
+एक फ़्रेम जो बाइट रखता है, उसके batch द्वारा लाए गए 256-बाइट preview के आगे।
 
 | आर्ग्युमेंट | प्रकार | आवश्यक | अर्थ |
 | --- | --- | --- | --- |
@@ -1081,8 +1095,9 @@ invoke inspect_snapshot '{"limit":20}' | jq '.[] | {seq, proto, dir, summary}'
 
 लाइब्रेरी पढ़ता है। जब फ़ाइल नहीं होती, तो पहले शुरुआती सेट लिखा जाता है। कोई आर्ग्युमेंट नहीं।
 
-**नतीजा**: `{ "path": string, "library": library, "seeded": boolean }` —
-`seeded` true होता है जब शुरुआती सेट अभी लिखा गया। लाइब्रेरी
+**नतीजा**: `{ "path": string, "library": library, "seeded": boolean, "stamp": string }` —
+`seeded` true होता है जब शुरुआती सेट अभी लिखा गया; `stamp` बताता है कि फ़ाइल में क्या था, अगले सेव
+के `base` के लिए। लाइब्रेरी
 `{ "version", "signals": [...], "folders": [...] }` है: `version` 2 (एक वर्शन 1
 फ़ाइल जैसी है वैसी लौटती है), `folders` कोई न हो तो छोड़ दिया जाता है। हर सिग्नल
 में `id`, `name`, `group` (इसका फ़ोल्डर, `"A/B"`; कोई नहीं तो ख़ाली), `note` और
@@ -1095,15 +1110,22 @@ invoke inspect_snapshot '{"limit":20}' | jq '.[] | {seq, proto, dir, summary}'
 
 पूरी लाइब्रेरी फ़ाइल को बदल देता है, उसी फ़ोल्डर में एक अस्थायी फ़ाइल के ज़रिए।
 जो फ़ाइल मौजूद है पर लाइब्रेरी के रूप में नहीं पढ़ी जाती, उसे जैसी है वैसी छोड़ दिया जाता है।
+`base` के साथ, पढ़े जाने के बाद बदल गई फ़ाइल — किसी सर्वर के दूसरे पेज या एडिटर में किसी व्यक्ति के
+बदलाव से — भी जैसी है वैसी छोड़ दी जाती है, और सेव अस्वीकार हो जाता है, ताकि उनका बदलाव ऐसी सूची के नीचे
+न खो जाए जिसने उसे देखा ही नहीं।
 
 | आर्ग्युमेंट | प्रकार | आवश्यक | अर्थ |
 | --- | --- | --- | --- |
 | `library` | ऑब्जेक्ट | हाँ | `{ version, signals, folders }` जैसा `signals_load` लौटाता है |
+| `base` | स्ट्रिंग | नहीं | वह `stamp` जिसके साथ लाइब्रेरी पढ़ी गई (या पिछले सेव ने लौटाया); फ़ाइल न होने पर `""` |
 
-**नतीजा**: स्ट्रिंग, लिखा गया पथ।
+**नतीजा**: स्ट्रिंग, लिखा गया पथ; `base` के साथ, `{ "path", "stamp" }` — अब फ़ाइल में जो है उसका
+stamp, अगले सेव का `base`।
 
 **त्रुटियाँ**: `signals.json_invalid` (अब डिस्क पर मौजूद फ़ाइल नहीं पढ़ी जाती,
-`path`, `line`, `column` के साथ; कुछ लिखा नहीं जाता), `signals.encode`, `file.io`।
+`path`, `line`, `column` के साथ; कुछ लिखा नहीं जाता), `file.changed` (`path` के साथ:
+फ़ाइल में अब `base` नहीं है; कुछ लिखा नहीं जाता — उसे फिर पढ़ें),
+`signals.encode`, `file.io`।
 
 एक सिग्नल का `body`, उसके `transport` के अनुसार:
 
@@ -1130,22 +1152,28 @@ TCP डिवाइस, एक MQTT ब्रोकर। इसका दस्
 एमुलेटर लाइब्रेरी पढ़ता है। जब फ़ाइल नहीं होती, तो पहले शुरुआती सेट
 लिखा जाता है। कोई आर्ग्युमेंट नहीं।
 
-**नतीजा**: `{ "path", "library": { "version": 1, "emulators": [{ "id", "note", "emulator" }] }, "seeded" }`।
+**नतीजा**: `{ "path", "library": { "version": 1, "emulators": [{ "id", "note", "emulator" }] }, "seeded", "stamp" }` —
+`stamp` बताता है कि फ़ाइल में क्या था, अगले सेव के `base` के लिए।
 
 **त्रुटियाँ**: `emulators.json_invalid` (`path`, `line`, `column` के साथ; कभी
 बदली नहीं जाती), `file.io`।
 
 ### emulators_save {#emulators_save}
 
-पूरी एमुलेटर लाइब्रेरी को बदल देता है, एक अस्थायी फ़ाइल के ज़रिए।
+पूरी एमुलेटर लाइब्रेरी को बदल देता है, एक अस्थायी फ़ाइल के ज़रिए। जो फ़ाइल मौजूद है पर लाइब्रेरी के रूप में
+नहीं पढ़ी जाती, उसे जैसी है वैसी छोड़ दिया जाता है; `base` के साथ, पढ़े जाने के बाद बदल गई फ़ाइल भी, जैसा
+[`signals_save`](#signals_save) में।
 
 | आर्ग्युमेंट | प्रकार | आवश्यक | अर्थ |
 | --- | --- | --- | --- |
 | `library` | ऑब्जेक्ट | हाँ | `{ version, emulators }` जैसा `emulators_load` लौटाता है |
+| `base` | स्ट्रिंग | नहीं | वह `stamp` जिसके साथ लाइब्रेरी पढ़ी गई (या पिछले सेव ने लौटाया); फ़ाइल न होने पर `""` |
 
-**नतीजा**: स्ट्रिंग, लिखा गया पथ।
+**नतीजा**: स्ट्रिंग, लिखा गया पथ; `base` के साथ, `{ "path", "stamp" }`।
 
-**त्रुटियाँ**: `emulators.encode`, `file.io`।
+**त्रुटियाँ**: `emulators.json_invalid` (अब डिस्क पर मौजूद फ़ाइल नहीं पढ़ी जाती;
+कुछ लिखा नहीं जाता), `file.changed` (फ़ाइल में अब `base` नहीं है; कुछ लिखा नहीं
+जाता), `emulators.encode`, `file.io`।
 
 ### emulator_check {#emulator_check}
 
@@ -1203,7 +1231,7 @@ bind करने से पहले जाँचता है।
 | --- | --- | --- |
 | `job_id` | संख्या | जॉब |
 | `name`, `protocol`, `local` | स्ट्रिंग | एमुलेटर, इसका प्रोटोकॉल और वह पता जिस पर यह सुनता है |
-| `counts` | ऑब्जेक्ट | `total`, `unmatched` (किसी नियम ने नहीं लिया), `failed`, `down` (जब यह बंद था तब आया: इसका outage या [`emulator_down`](#emulator_down)), `hits` (प्रति नियम), और `missed` (MQTT: ऐसे संदेश जो बहुत पीछे वाले क्लाइंट को नहीं मिले; 0 रहते छोड़ दिया जाता है) |
+| `counts` | ऑब्जेक्ट | `total`, `unmatched` (किसी नियम ने नहीं लिया), `failed`, `down` (जब यह बंद था तब आया: इसका outage या [`emulator_down`](#emulator_down)), `hits` (प्रति नियम), `missed` (MQTT: ऐसे संदेश जो बहुत पीछे वाले क्लाइंट को नहीं मिले; 0 रहते छोड़ दिया जाता है), और `refused` (HTTP, TCP, MQTT: सीमा से ऊपर के वे कनेक्शन जो आते ही बंद कर दिए गए; 0 रहते छोड़ दिया जाता है) |
 | `forced` | स्ट्रिंग | जब यह नीचे रखा हो तो `unavailable`, `reset` या `timeout`; वरना छोड़ दिया जाता है |
 | `exchanges` | ऑब्जेक्ट[] | हर एक: `seq`, `ts`, `from`, `request`, `rule` (1-आधारित; किसी ने न लिया हो तो छोड़ा गया), `reply`, `status`, `fault`, `ms`, `error`, `frame`, `down`, और `data` (जिस रूप में टेम्पलेट इसे पढ़ते हैं वह request) |
 
@@ -1253,6 +1281,15 @@ invoke emulator_exchanges '{"jobId":5,"after":0}' | jq '.counts, (.exchanges[] |
 | `bool` | `true` या `false` | `T` या `F` |
 | `blob` | बाइट की सरणी, `[222, 173]` | `b` |
 | `nil` | कोई नहीं: `{ "type": "nil" }` | `N` |
+| `time` | time tag, उसके 64 बिट दशमलव टेक्स्ट के रूप में: `"1"` का अर्थ "तुरंत" है | `t` |
+| `char` | एक अक्षर, `"A"` | `c` |
+| `color` | `[red, green, blue, alpha]` | `r` |
+| `midi` | `[port, status, data1, data2]` | `m` |
+| `impulse` | कोई नहीं | `I` |
+| `array` | OscArg की एक सरणी | `[` … `]` |
+
+अंतिम छह वे हैं जो प्राप्त संदेश ले जाते हैं (OSC मॉनिटर का `osc://message`); कोई कमांड उन्हें भेज भी
+सकती है।
 
 ### HttpRequest {#type-httprequest}
 
@@ -1262,7 +1299,7 @@ invoke emulator_exchanges '{"jobId":5,"after":0}' | jq '.counts, (.exchanges[] |
 | `url` | स्ट्रिंग | — | `http://` या `https://` |
 | `headers` | `[name, value][]` | `[]` | रिक्वेस्ट हेडर |
 | `body` | स्ट्रिंग या null | null | बॉडी |
-| `timeout_ms` | संख्या | `10000` | पूरे आदान-प्रदान के लिए |
+| `timeout_ms` | संख्या | `10000` | पूरे आदान-प्रदान के लिए, बॉडी समेत: 1 से 120 000; उससे बाहर कमांड `node.range` (फ़ील्ड `timeout_ms`) के साथ विफल होती है |
 | `auth` | ऑब्जेक्ट | कोई नहीं | `{ "scheme": "basic", "username", "password" }`, `{ "scheme": "digest", "username", "password" }` या `{ "scheme": "bearer", "token" }` |
 
 10 redirects तक अनुसरण किए जाते हैं। एक होस्ट के लिए टाइप किए गए credentials और
@@ -1273,15 +1310,15 @@ invoke emulator_exchanges '{"jobId":5,"after":0}' | jq '.counts, (.exchanges[] |
 
 | फ़ील्ड | प्रकार | अर्थ |
 | --- | --- | --- |
-| `ok` | बूलियन | एक 2xx स्टेटस |
+| `ok` | बूलियन | एक 2xx स्टेटस, और पूरी बॉडी आ गई |
 | `status`, `status_text` | संख्या, स्ट्रिंग | स्टेटस; बिना रिस्पॉन्स 0 और ख़ाली |
 | `latency_ms` | संख्या | पूरी बॉडी आने तक |
 | `headers` | `[name, value][]` | रिस्पॉन्स हेडर |
 | `body` | स्ट्रिंग | बॉडी टेक्स्ट के रूप में, अधिकतम 256 KiB |
 | `body_bytes` | संख्या | बॉडी का पूरा आकार |
 | `truncated` | बूलियन | `body` 256 KiB पर काट दी गई |
-| `error` | स्ट्रिंग या null | रिस्पॉन्स क्यों नहीं था, कारण की हर परत |
-| `cause` | स्ट्रिंग या null | किस तरह की विफलता: `refused`, `timeout`, `dns`, `unreachable`, `reset`, `address_in_use`, `address_unavailable`, `denied`, `tls`, `target_invalid`, `failed` — `transport.*` कोड जैसे |
+| `error` | स्ट्रिंग या null | रिस्पॉन्स क्यों नहीं था, या उसकी बॉडी अधूरी क्यों रुकी (तब `status`, `headers` और अब तक की बॉडी भी होती हैं), कारण की हर परत |
+| `cause` | स्ट्रिंग या null | किस तरह की विफलता: `refused`, `timeout`, `dns`, `unreachable`, `reset`, `address_in_use`, `address_unavailable`, `denied`, `tls`, `target_invalid`, `exhausted` (इस मशीन के सॉकेट या लोकल पोर्ट ख़त्म हो गए), `failed` — `transport.*` कोड जैसे |
 | `digest` | ऑब्जेक्ट | केवल 401 से मिली एक Digest रिक्वेस्ट; वरना छोड़ दिया जाता है। `challenged`: challenge का जवाब दिया गया और रिक्वेस्ट फिर भेजी गई। `error`: ऐसा क्यों नहीं हो सका, एक `EngineError` (`http.digest_not_offered`, `http.digest_unsupported`, `http.digest_invalid`, `http.digest_other_origin`) या null |
 
 ### Payload {#type-payload}
@@ -1352,7 +1389,7 @@ invoke emulator_exchanges '{"jobId":5,"after":0}' | jq '.counts, (.exchanges[] |
 | `bytes` | इसका आकार |
 | `summary` | एक पंक्ति |
 | `detail` | कई पंक्तियों में एक डिकोड, या null |
-| `hex` | पहले 1 KiB का hex dump, या null |
+| `hex` | पहले 256 बाइट का hex dump, या null |
 | `verdict` | इसका क्या हुआ — `dropped`, `sampled`, एक स्टेटस — या null |
 | `kept` | `bytes` में से कितने रखे गए (अधिकतम 256 KiB); केवल आकार दर्ज होने पर 0 |
 | `publish` | केवल एक MQTT publish: `{ broker, topic, qos, retain, text }` — ब्रोकर `host:port` के रूप में, और क्या रखे गए बाइट, जो संदेश का पेलोड हैं, UTF-8 टेक्स्ट हैं। हर दूसरे फ़्रेम के लिए अनुपस्थित |

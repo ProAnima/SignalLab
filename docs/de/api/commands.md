@@ -15,7 +15,8 @@ authentifiziert und was die Statuscodes bedeuten, steht in [der API-Übersicht](
 - **Argumentnamen** sind camelCase (`jobId`, `nodeId`). Ein Argument, das ein Befehl
   nicht kennt, oder ein fehlendes erforderliches wird mit
   `command.args_invalid` abgelehnt; jeder Befehl, der Argumente nimmt, kann damit fehlschlagen.
-  Ein Befehl ohne Argumente liest den Body nicht.
+  Ein Befehl ohne Argumente nimmt keinen Body, `null` oder `{}`; alles andere wird ebenfalls
+  mit `command.args_invalid` abgelehnt.
 - **Als Argument übergebene Objekte** — `config`, `request`, `document`,
   `library`, `emulator`, `profile` — verwenden die Feldnamen der Engine, meist
   snake_case (`timeout_ms`). Darin wird ein Feld, das die Engine nicht kennt,
@@ -153,6 +154,7 @@ Die laufenden Jobs, älteste zuerst. Keine Argumente.
 ### job_stop {#job_stop}
 
 Stoppt einen Job sofort: Seine Sockets schließen, sein Relay, Server oder seine Verbindung geht.
+Die Antwort kommt, sobald sie das getan haben — ein Start gleich danach bindet denselben Port.
 Ein gestoppter Job sendet kein [`job://ended`](events.md#event-job-ended); ein gestoppter
 Durchlauf speichert keinen Bericht.
 
@@ -164,7 +166,9 @@ Durchlauf speichert keinen Bericht.
 
 ### jobs_stop_all {#jobs_stop_all}
 
-Stoppt jeden laufenden Job, wer immer ihn gestartet hat. Keine Argumente.
+Stoppt jeden laufenden Job, wer immer ihn gestartet hat, und antwortet, sobald sie ihre Ports
+freigegeben haben, wie es [`job_stop`](#job_stop) tut. Ein Job, der noch startet (ein Durchlauf,
+der seine Ports öffnet), wird beim Start gestoppt. Keine Argumente.
 
 **Ergebnis**: null.
 
@@ -536,7 +540,8 @@ es in `error` und `cause`.
 
 **Ergebnis**: [`HttpResponse`](#type-httpresponse).
 
-**Fehler**: `http.client_failed` (die Anfrage konnte nicht einmal vorbereitet werden).
+**Fehler**: `node.method_invalid` (Feld `method`: kein HTTP-Token, etwa `BAD METHOD`),
+`http.client_failed` (die Anfrage konnte nicht einmal vorbereitet werden).
 
 ### http_burst_start {#http_burst_start}
 
@@ -565,7 +570,7 @@ Mit weder `total` noch `duration_s` läuft der Burst, bis er gestoppt wird.
 
 **Ergebnis**: [`JobInfo`](#type-jobinfo).
 
-**Fehler**: `http.rate_invalid`, `http.duration_invalid`, `http.client_failed`.
+**Fehler**: `http.rate_invalid`, `http.duration_invalid`, `node.method_invalid`, `http.client_failed`.
 
 ### http_cookies {#http_cookies}
 
@@ -697,7 +702,12 @@ Veröffentlichungen und -Abmeldungen als [`mqtt://ack`](events.md#event-mqtt-ack
 `dns`, `timeout` nach 6 s), `mqtt.no_answer` (kein CONNACK innerhalb von 6 s),
 `mqtt.protocol`, `mqtt.refused_protocol`, `mqtt.refused_client_id`,
 `mqtt.refused_unavailable`, `mqtt.refused_credentials`,
-`mqtt.refused_not_authorized`, `mqtt.refused`.
+`mqtt.refused_not_authorized`, `mqtt.refused`; vor dem Verbinden
+`node.topic_filter` (ein Filter für `subscribe`, den 3.1.1 verbietet), `node.too_long`
+(ein Benutzername, ein Passwort, eine Client-ID oder ein Will über den 65 535 Bytes von MQTT) und
+`node.topic_wildcard` / `mqtt.topic_invalid` (ein Will auf einem Topic, auf das nicht
+veröffentlicht werden könnte). Eine Verbindung, deren Broker nichts sagt, nicht einmal auf ihre Pings,
+endet nach dem 1,5-Fachen von `keep_alive_s` mit `transport.timeout` in `job://ended`.
 
 ### mqtt_publish {#mqtt_publish}
 
@@ -714,9 +724,10 @@ Veröffentlicht auf einer offenen Verbindung.
 **Ergebnis**: null. Eine QoS-1- oder -2-Veröffentlichung wird später von
 [`mqtt://ack`](events.md#event-mqtt-ack) bestätigt.
 
-**Fehler**: `node.topic_wildcard` (Feld `topic`) und `mqtt.topic_required`
-(Feld `topic`), wie bei [`mqtt_publish_once`](#mqtt_publish_once) — der Befehl
-weist sie ab, bevor er nach der Verbindung sucht; `mqtt.not_connected`.
+**Fehler**: `node.topic_wildcard`, `mqtt.topic_required`, `mqtt.topic_invalid`
+(ein NUL darin) und `node.too_long` (über 65 535 Bytes), alle mit Feld `topic`,
+wie bei [`mqtt_publish_once`](#mqtt_publish_once) — der Befehl weist sie ab, bevor er nach
+der Verbindung sucht; `mqtt.not_connected`.
 
 ### mqtt_subscribe {#mqtt_subscribe}
 
@@ -730,7 +741,9 @@ Abonniert mit einer offenen Verbindung Filter. Was der Broker gewährt, trifft a
 
 **Ergebnis**: null.
 
-**Fehler**: `mqtt.filter_required`, `mqtt.not_connected`.
+**Fehler**: `mqtt.filter_required`, `node.topic_filter` (Feld `topic`: ein Filter, den
+3.1.1 verbietet, etwa `a/#/b` oder `a+` — Broker schließen die Verbindung deswegen),
+`mqtt.not_connected`.
 
 ### mqtt_unsubscribe {#mqtt_unsubscribe}
 
@@ -744,7 +757,7 @@ Meldet eine offene Verbindung von Filtern ab.
 **Ergebnis**: null. Die Antwort des Brokers trifft als
 [`mqtt://ack`](events.md#event-mqtt-ack) mit `kind: "unsubscribed"` ein.
 
-**Fehler**: `mqtt.filter_required`, `mqtt.not_connected`.
+**Fehler**: `mqtt.filter_required`, `node.topic_filter` (Feld `topic`), `mqtt.not_connected`.
 
 ### mqtt_publish_once {#mqtt_publish_once}
 
@@ -959,13 +972,16 @@ Zähler treffen als [`storm://stat`](events.md#event-storm-stat) alle 250 ms ein
 | `target` | string | — | `IP:port` oder `host:port`; ein Name wird einmal beim Start des Jobs aufgelöst |
 | `protocol` | string | — | `udp`: Datagramme; `tcp`: eine Verbindung pro Einheit, die den Payload schreibt und schließt (jedes Verbinden kann 500 ms dauern) |
 | `size` | number | — | Payload-Bytes, zwischen 1 und 65 507 gehalten |
-| `rate` | number | — | Einheiten pro Sekunde, nach einem Zeitplan: Einheit *n* ist *n* / `rate` Sekunden nach dem Start fällig, und jedes Aufwachen sendet, was fällig ist (höchstens 256; ein weiter zurückliegender Zeitplan überspringt die älteren Einheiten); 0 sendet so schnell es kann |
-| `duration_s` | number | `0` | Nach so vielen Sekunden stoppen; 0: bis zum Stoppen |
+| `rate` | number | — | Einheiten pro Sekunde, auf 10 000 000 begrenzt, nach einem Zeitplan: Einheit *n* ist *n* / `rate` Sekunden nach dem Start fällig, und jedes Aufwachen sendet, was fällig ist (höchstens 256; ein weiter zurückliegender Zeitplan überspringt die älteren Einheiten); 0 sendet so schnell es kann |
+| `duration_s` | number | `0` | Nach so vielen Sekunden stoppen; 0 (oder eine negative Zahl): bis zum Stoppen |
 
 **Ergebnis**: [`JobInfo`](#type-jobinfo).
 
-**Fehler**: `transport.target_invalid`, `transport.dns`. Gescheiterte Sendevorgänge werden
-in den Ereignissen gezählt, nicht als Fehler gemeldet.
+**Fehler**: `transport.target_invalid`, `transport.dns` und für UDP ein Bind- oder
+Verbindungsfehler (`transport.*`), wenn der Socket gar nicht geöffnet werden kann. Sendevorgänge,
+die das Ziel verweigert, werden in den Ereignissen als `errors` gezählt; was dieser Rechner
+nicht senden konnte (keine Ports, Sockets oder Puffer mehr), wird als `local` gezählt, nie
+als Fehler des Ziels.
 
 ### scan_start {#scan_start}
 
@@ -1050,7 +1066,7 @@ Datenordner. In `jsonl` ist jede Zeile ein Frame mit den Bytes, die er in
 
 ### inspect_payload {#inspect_payload}
 
-Die Bytes, die ein Frame behält, jenseits der 1-KiB-Vorschau, die sein Batch trug.
+Die Bytes, die ein Frame behält, jenseits der 256-Byte-Vorschau, die sein Batch trug.
 
 | Argument | Typ | Erforderlich | Bedeutung |
 | --- | --- | --- | --- |
@@ -1080,8 +1096,9 @@ wird mit dem Befehl seines Transports gesendet (`osc_send`, `broadcast_send`,
 Liest die Bibliothek. Existiert die Datei nicht, wird zuerst das Starterset
 geschrieben. Keine Argumente.
 
-**Ergebnis**: `{ "path": string, "library": library, "seeded": boolean }` —
-`seeded` ist true, wenn gerade das Starterset geschrieben wurde. Die Bibliothek ist
+**Ergebnis**: `{ "path": string, "library": library, "seeded": boolean, "stamp": string }` —
+`seeded` ist true, wenn gerade das Starterset geschrieben wurde; `stamp` benennt, was die
+Datei enthielt, für das `base` des nächsten Speicherns. Die Bibliothek ist
 `{ "version", "signals": [...], "folders": [...] }`: `version` 2 (eine Version-1-
 Datei kommt so zurück, wie sie ist), `folders` bleibt weg, wenn es keine gibt. Jedes Signal
 hat `id`, `name`, `group` (seinen Ordner, `"A/B"`; leer für keinen), `note` und
@@ -1093,16 +1110,23 @@ nie ersetzt), `file.io`.
 ### signals_save {#signals_save}
 
 Ersetzt die ganze Bibliotheksdatei, über eine temporäre Datei im selben Ordner.
-Eine Datei, die existiert und sich nicht als Bibliothek lesen lässt, bleibt, wie sie ist.
+Eine Datei, die existiert und sich nicht als Bibliothek lesen lässt, bleibt, wie sie ist. Mit
+`base` bleibt auch eine Datei, die sich seit dem Lesen geändert hat — durch eine andere Seite
+eines Servers oder eine Person in einem Editor —, wie sie ist, und das Speichern wird abgelehnt,
+sodass ihre Änderung nicht unter einer Liste verloren geht, die sie nie gesehen hat.
 
 | Argument | Typ | Erforderlich | Bedeutung |
 | --- | --- | --- | --- |
 | `library` | object | ja | `{ version, signals, folders }`, wie `signals_load` es zurückgibt |
+| `base` | string | nein | Der `stamp`, mit dem die Bibliothek gelesen wurde (oder den das letzte Speichern zurückgab); `""`, wenn es keine Datei gab |
 
-**Ergebnis**: string, der geschriebene Pfad.
+**Ergebnis**: string, der geschriebene Pfad; mit `base` `{ "path", "stamp" }` — der Stamp
+dessen, was die Datei jetzt enthält, das `base` des nächsten Speicherns.
 
 **Fehler**: `signals.json_invalid` (die nun auf der Platte liegende Datei liest sich nicht, mit
-`path`, `line`, `column`; es wird nichts geschrieben), `signals.encode`, `file.io`.
+`path`, `line`, `column`; es wird nichts geschrieben), `file.changed` (mit `path`: die
+Datei enthält `base` nicht mehr; es wird nichts geschrieben — lesen Sie sie erneut),
+`signals.encode`, `file.io`.
 
 Der `body` eines Signals nach seinem `transport`:
 
@@ -1130,22 +1154,28 @@ Datenordner.
 Liest die Emulatorbibliothek. Existiert die Datei nicht, wird das Starterset
 zuerst geschrieben. Keine Argumente.
 
-**Ergebnis**: `{ "path", "library": { "version": 1, "emulators": [{ "id", "note", "emulator" }] }, "seeded" }`.
+**Ergebnis**: `{ "path", "library": { "version": 1, "emulators": [{ "id", "note", "emulator" }] }, "seeded", "stamp" }` —
+`stamp` benennt, was die Datei enthielt, für das `base` des nächsten Speicherns.
 
 **Fehler**: `emulators.json_invalid` (mit `path`, `line`, `column`; nie
 ersetzt), `file.io`.
 
 ### emulators_save {#emulators_save}
 
-Ersetzt die ganze Emulatorbibliothek, über eine temporäre Datei.
+Ersetzt die ganze Emulatorbibliothek, über eine temporäre Datei. Eine Datei, die existiert und sich
+nicht als Bibliothek lesen lässt, bleibt, wie sie ist; mit `base` ebenso eine Datei, die sich seit
+dem Lesen geändert hat, wie bei [`signals_save`](#signals_save).
 
 | Argument | Typ | Erforderlich | Bedeutung |
 | --- | --- | --- | --- |
 | `library` | object | ja | `{ version, emulators }`, wie `emulators_load` es zurückgibt |
+| `base` | string | nein | Der `stamp`, mit dem die Bibliothek gelesen wurde (oder den das letzte Speichern zurückgab); `""`, wenn es keine Datei gab |
 
-**Ergebnis**: string, der geschriebene Pfad.
+**Ergebnis**: string, der geschriebene Pfad; mit `base` `{ "path", "stamp" }`.
 
-**Fehler**: `emulators.encode`, `file.io`.
+**Fehler**: `emulators.json_invalid` (die nun auf der Platte liegende Datei liest sich nicht;
+es wird nichts geschrieben), `file.changed` (die Datei enthält `base` nicht mehr; es wird nichts
+geschrieben), `emulators.encode`, `file.io`.
 
 ### emulator_check {#emulator_check}
 
@@ -1204,7 +1234,7 @@ Austausche.
 | --- | --- | --- |
 | `job_id` | number | Der Job |
 | `name`, `protocol`, `local` | string | Der Emulator, sein Protokoll und die Adresse, auf der er hört |
-| `counts` | object | `total`, `unmatched` (keine Regel nahm ihn), `failed`, `down` (traf ein, während er herunter war: sein Outage oder [`emulator_down`](#emulator_down)), `hits` (pro Regel) und `missed` (MQTT: Nachrichten, die ein zu weit zurückliegender Client nicht bekam; bleibt weg, solange 0) |
+| `counts` | object | `total`, `unmatched` (keine Regel nahm ihn), `failed`, `down` (traf ein, während er herunter war: sein Outage oder [`emulator_down`](#emulator_down)), `hits` (pro Regel), `missed` (MQTT: Nachrichten, die ein zu weit zurückliegender Client nicht bekam; bleibt weg, solange 0) und `refused` (HTTP, TCP, MQTT: Verbindungen, die beim Eintreffen geschlossen wurden, weil das Limit erreicht war; bleibt weg, solange 0) |
 | `forced` | string | `unavailable`, `reset` oder `timeout`, solange er heruntergenommen ist; sonst bleibt es weg |
 | `exchanges` | object[] | Jeder: `seq`, `ts`, `from`, `request`, `rule` (1-basiert; bleibt weg, wenn keine ihn nahm), `reply`, `status`, `fault`, `ms`, `error`, `frame`, `down` und `data` (die Anfrage, wie Vorlagen sie lesen) |
 
@@ -1254,6 +1284,15 @@ Ein OSC-Argument, sein Typ und sein Wert:
 | `bool` | `true` oder `false` | `T` oder `F` |
 | `blob` | Byte-Array, `[222, 173]` | `b` |
 | `nil` | keins: `{ "type": "nil" }` | `N` |
+| `time` | ein Zeit-Tag, seine 64 Bit als Dezimaltext: `"1"` heißt „sofort" | `t` |
+| `char` | ein Zeichen, `"A"` | `c` |
+| `color` | `[red, green, blue, alpha]` | `r` |
+| `midi` | `[port, status, data1, data2]` | `m` |
+| `impulse` | keins | `I` |
+| `array` | ein Array aus OscArg | `[` … `]` |
+
+Die letzten sechs sind das, was empfangene Nachrichten tragen (das `osc://message` des
+OSC-Monitors); ein Befehl darf sie auch senden.
 
 ### HttpRequest {#type-httprequest}
 
@@ -1263,7 +1302,7 @@ Ein OSC-Argument, sein Typ und sein Wert:
 | `url` | string | — | `http://` oder `https://` |
 | `headers` | `[name, value][]` | `[]` | Anfrage-Header |
 | `body` | string oder null | null | Der Body |
-| `timeout_ms` | number | `10000` | Für den ganzen Austausch |
+| `timeout_ms` | number | `10000` | Für den ganzen Austausch, den Body eingeschlossen: 1 bis 120 000; außerhalb schlägt der Befehl mit `node.range` fehl (Feld `timeout_ms`) |
 | `auth` | object | keins | `{ "scheme": "basic", "username", "password" }`, `{ "scheme": "digest", "username", "password" }` oder `{ "scheme": "bearer", "token" }` |
 
 Bis zu 10 Weiterleitungen werden verfolgt. Anmeldedaten und Cookies, die für einen Host
@@ -1274,15 +1313,15 @@ und sendet erneut.
 
 | Feld | Typ | Bedeutung |
 | --- | --- | --- |
-| `ok` | boolean | Ein 2xx-Status |
+| `ok` | boolean | Ein 2xx-Status, und der ganze Body kam an |
 | `status`, `status_text` | number, string | Der Status; 0 und leer ohne Antwort |
 | `latency_ms` | number | Bis der ganze Body da war |
 | `headers` | `[name, value][]` | Antwort-Header |
 | `body` | string | Der Body als Text, höchstens 256 KiB |
 | `body_bytes` | number | Die volle Größe des Bodys |
 | `truncated` | boolean | `body` wurde bei 256 KiB abgeschnitten |
-| `error` | string oder null | Warum es keine Antwort gab, jede Ebene der Ursache |
-| `cause` | string oder null | Welche Art von Fehler: `refused`, `timeout`, `dns`, `unreachable`, `reset`, `address_in_use`, `address_unavailable`, `denied`, `tls`, `target_invalid`, `failed` — dasselbe wie die `transport.*`-Codes |
+| `error` | string oder null | Warum es keine Antwort gab oder warum ihr Body vorzeitig abbrach (dann sind `status`, `headers` und der bisherige Body trotzdem da), jede Ebene der Ursache |
+| `cause` | string oder null | Welche Art von Fehler: `refused`, `timeout`, `dns`, `unreachable`, `reset`, `address_in_use`, `address_unavailable`, `denied`, `tls`, `target_invalid`, `exhausted` (diesem Rechner gingen Sockets oder lokale Ports aus), `failed` — dasselbe wie die `transport.*`-Codes |
 | `digest` | object | Nur eine Digest-Anfrage, die auf eine 401 traf; sonst bleibt es weg. `challenged`: die Challenge wurde beantwortet und die Anfrage erneut gesendet. `error`: warum es nicht ging, ein `EngineError` (`http.digest_not_offered`, `http.digest_unsupported`, `http.digest_invalid`, `http.digest_other_origin`) oder null |
 
 ### Payload {#type-payload}
@@ -1353,7 +1392,7 @@ Ein `Frame` ist ein aufgezeichnetes Paket, eine Anfrage oder Nachricht:
 | `bytes` | Seine Größe |
 | `summary` | Eine Zeile |
 | `detail` | Eine Dekodierung über mehrere Zeilen oder null |
-| `hex` | Ein Hex-Dump der ersten 1 KiB oder null |
+| `hex` | Ein Hex-Dump der ersten 256 Bytes oder null |
 | `verdict` | Was aus ihm wurde — `dropped`, `sampled`, ein Status — oder null |
 | `kept` | Von `bytes`, wie viele behalten werden (bis zu 256 KiB); 0, wenn nur die Größe aufgezeichnet wurde |
 | `publish` | Nur eine MQTT-Veröffentlichung: `{ broker, topic, qos, retain, text }` — der Broker als `host:port`, und ob die behaltenen Bytes, die der Payload der Nachricht sind, UTF-8-Text sind. Für jeden anderen Frame fehlt es |

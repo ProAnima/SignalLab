@@ -125,12 +125,13 @@ Ereignis der Zeitleiste und im [Bericht des Durchlaufs](runs.md#report):
 | Messwert | Was |
 | --- | --- |
 | planned | die Anfragen, die das Profil ergibt ([[ui:exp.loadShape.poisson]]: im Mittel) |
-| sent | Anfragen, die beantwortet wurden oder fehlschlugen |
+| sent | Anfragen, die beantwortet wurden oder fehlschlugen, und die in local gezählten |
 | ok | mit einem 2xx-Status beantwortet |
 | failed | jeder andere Status oder gar keine Antwort |
 | missed | fällig, während jeder Platz belegt war, und übersprungen |
-| rps | gesendete Anfragen pro Sekunde: sent ÷ Dauer des Profils — oder ÷ die Zeit bis zur letzten gesendeten Anfrage, wenn das später war |
-| error_rate | failed, in % von sent |
+| local | Anfragen, die dieser Computer nicht senden konnte — ihm gingen Sockets oder lokale Ports aus —, der Server sah sie also nie; nicht in failed, rps, error_rate oder den Latenzen |
+| rps | Anfragen, die den Server erreichten, pro Sekunde: sent abzüglich local ÷ Dauer des Profils — oder ÷ die Zeit bis zur letzten gesendeten Anfrage, wenn das später war |
+| error_rate | failed, in % der Anfragen, die den Server erreichten |
 | min, mean, max | die schnellste, die durchschnittliche und die langsamste Anfrage, ms |
 | p50, p90, p95, p99 | die Latenz, bei oder unter der 50, 90, 95 und 99 % der Anfragen lagen, ms |
 | received_bytes | insgesamt empfangene Body-Bytes |
@@ -184,7 +185,8 @@ und den Anteil der fehlgeschlagenen. Wählen Sie den Knoten aus: Seine Eigenscha
 - jeden Schwellenwert, ✓ [[ui:exp.thresholdHeld]] oder ✕ [[ui:exp.thresholdBroken]],
   mit dem gemessenen Wert;
 - [[ui:http.sent]], [[ui:exp.loadRps]], [[ui:exp.loadErrors]] mit ihrem Anteil,
-  [[ui:http.missed]];
+  [[ui:http.missed]] und [[ui:http.local]], wenn diesem Computer die Ports
+  ausgingen;
 - [[ui:http.p50]], [[ui:http.p90]], [[ui:http.p95]], [[ui:http.p99]],
   [[ui:http.avg]], [[ui:http.max]];
 - [[ui:exp.loadPerSecond]]: die Anfragen jeder Sekunde, die fehlgeschlagenen in

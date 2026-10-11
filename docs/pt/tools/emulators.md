@@ -95,6 +95,7 @@ Enquanto ele roda, o painel [[ui:emu.live]] conta:
 | [[ui:emu.failed]] | Trocas em que não foi possível montar ou enviar uma resposta. |
 | [[ui:emu.down]] | O que chegou enquanto o emulador estava fora do ar. Aparece quando ele tem uma queda programada ou quando algo o encontrou fora do ar. Nunca conta como [[ui:emu.unmatched]]. |
 | [[ui:emu.missed]] | Só MQTT, quando acontece: mensagens que um cliente estava atrasado demais para receber. |
+| [[ui:emu.refused]] | Quando acontece: conexões fechadas assim que chegaram porque o emulador já atendia tantas quanto pode (veja [Limites](#limits)). Não são requisições, então não entram em [[ui:emu.total]]. |
 
 O cabeçalho de cada regra mostra quantas vezes ela correspondeu desde o início.
 
@@ -392,11 +393,11 @@ sua `/`, uma expressão regular que não compila, um modelo de resposta que cita
 | Um corpo, uma resposta ou uma saudação, como escrito | 256 KiB | Recusado. |
 | Um atraso ou um jitter | 60.000 ms | Recusado. |
 | Corpo de requisição HTTP | 1 MiB | 413. |
-| Conexões HTTP simultâneas | 512 | As excedentes são fechadas assim que chegam. |
+| Conexões HTTP simultâneas | 512 | As excedentes são fechadas assim que chegam; contadas como [[ui:emu.refused]]. |
 | Cabeçalho de requisição HTTP | 30 s | Um cliente precisa enviá-lo dentro desse prazo. |
-| Conexões TCP simultâneas | 256 | As excedentes são fechadas assim que chegam. |
+| Conexões TCP simultâneas | 256 | As excedentes são fechadas assim que chegam; contadas como [[ui:emu.refused]]. |
 | Respostas OSC e UDP aguardando o atraso | 1.024 | As excedentes são descartadas e contadas como [[ui:emu.failed]]. |
-| Clientes MQTT simultâneos | 256 | Os excedentes são fechados assim que chegam. |
+| Clientes MQTT simultâneos | 256 | Os excedentes são fechados assim que chegam; contados como [[ui:emu.refused]]. |
 | Pacote MQTT | 256 KiB | A conexão do cliente termina. |
 | Assinaturas MQTT por cliente | 100 | As excedentes são recusadas. |
 | Tópicos retidos MQTT | 1.000 tópicos, 16 MiB | Uma nova mensagem retida é encaminhada, mas não retida. |
@@ -449,9 +450,12 @@ A biblioteca é o `emulators.json` na pasta de dados (veja [Arquivos](../referen
 passe o ponteiro sobre a contagem abaixo da lista para ver o caminho dele. Ele é gravado inteiro
 0,7 s depois da última alteração, por meio de um arquivo temporário, então uma gravação que falha
 deixa o anterior. Se o arquivo não puder ser lido, a lista mostra o erro com o caminho, a linha e
-a coluna, e o arquivo fica como está: corrija-o e pressione [[ui:emu.reload]]. Pressione
-[[ui:emu.reload]] também depois de editá-lo à mão. Sem arquivo, o conjunto inicial é gravado de
-novo.
+a coluna, e o arquivo fica como está — também quando ele quebra enquanto o aplicativo roda: o
+salvamento é recusado. Corrija-o e pressione [[ui:emu.reload]]. Pressione [[ui:emu.reload]]
+também depois de editá-lo à mão. Um salvamento sobre um arquivo que mudou desde que foi lido
+— à mão, ou por outra página do mesmo servidor — é recusado e o arquivo mantém essa alteração;
+a lista avisa e para de gravar até que [[ui:emu.reload]] o leia. Sem arquivo, o conjunto
+inicial é gravado de novo.
 
 ```json
 {

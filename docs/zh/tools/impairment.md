@@ -111,11 +111,12 @@ UDP 下：
 | [[ui:ns.received]] | 到达中继的数据报。 |
 | [[ui:ns.forwarded]] | 转发出去的数据报；重复的一个计两次。 |
 | [[ui:ns.dropped]] | 被故意丢失：离线、突发或丢包。 |
-| [[ui:ns.throttled]] | 被带宽限制丢弃，或因为已有 10 000 个在路上。 |
+| [[ui:ns.throttled]] | 被带宽限制丢弃，或因为已有 10 000 个——或 64 MB——在路上。 |
 | [[ui:ns.duplicated]] | 被发送两次的数据报。 |
 | [[ui:ns.corrupted]] | 有一位被翻转的副本。 |
 | [[ui:ns.reordered]] | 被扣住以致后续副本超过它们的副本。 |
 | [[ui:common.volume]] | 转发出去的字节数。 |
+| [[ui:ns.notRelayed]] | 出现后才显示：系统不肯继续发送的数据报。绝不是配置造成的。 |
 
 TCP 下：
 
@@ -124,10 +125,14 @@ TCP 下：
 | [[ui:ns.connections]] | 客户端与中继建立的连接。 |
 | [[ui:ns.received]] | 中继读取的数据块，两个方向。 |
 | [[ui:ns.forwarded]] | 它转发写出的数据块。 |
+| [[ui:ns.refused]] | 目标拒绝或没有应答的连接；客户端收到了一次重置。 |
 | [[ui:ns.resets]] | 被重置的连接。 |
 | [[ui:ns.stalled]] | 保持半开的连接。 |
-| [[ui:ns.held]] | 流等待带宽限制的次数：发送方被放慢，没有丢弃任何内容。 |
+| [[ui:ns.held]] | 流等待带宽限制的次数：发送方被放慢，没有丢弃任何内容。中继还最多同时保留 64 MB 在路上，所有连接合计，超过后同样等待。 |
 | [[ui:common.volume]] | 转发写出的字节数。 |
+| [[ui:ns.notRelayed]] | 出现后才显示：此计算机未能连到目标的连接——没有本地端口或套接字可用，尝试两秒后仍然如此——以及同时超过 1024 个的连接。每个都得到一次重置。绝不是目标的应答。 |
+
+先关闭自己这一侧连接的中继，之后会像任何程序一样把一个本地端口占用几分钟（系统的 TIME_WAIT）。每秒经由一个中继建立数百个短连接，会用光此计算机的端口；中继随后会等待并重试，仍然无法发出的计入 [[ui:ns.notRelayed]]，绝不会假装成目标拒绝了。
 
 捕获开启时，[检查器](inspector.md)会显示中继的数据报和数据块——两个方向合计每 25 ms 最多一个——每个都带有其命运：`forwarded +43ms`、`· corrupted`、`· reordered`、`· copy 2/2`、`dropped (loss)`、`dropped (burst)`、`dropped (offline)`、`throttled`，TCP 下还有 `reset` 和 `half-open`。→ 是客户端到目标，← 是目标到客户端。
 

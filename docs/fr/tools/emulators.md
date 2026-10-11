@@ -40,7 +40,7 @@ ce qu’il a reçu ([[ui:emu.live]]).
    Quand un autre émulateur de la bibliothèque utilise déjà ce port, le port libre suivant
    est pris.
 2. Donnez-lui un nom dans le champ [[ui:emu.name]] (120 caractères au plus).
-3. Réglez le champ [[ui:emu.bind]] : `IP:port`. `127.0.0.1` ne répond qu’à cet ordinateur ;
+3. Réglez le champ [[ui:emu.bind]]  `IP:port`. `127.0.0.1` ne répond qu’à cet ordinateur ;
    `0.0.0.0` répond aussi au réseau.
 4. Modifiez les règles (voir plus bas), et indiquez dans le champ [[ui:emu.note]] ce qu’il remplace.
 
@@ -73,7 +73,7 @@ avec les règles telles qu’elles sont maintenant. D’ici là, les compteurs d
 masqués, car ils appartiennent aux anciennes règles.
 
 Le bouton [[ui:emu.takeDown]] rend un émulateur en cours indisponible jusqu’à ce que vous appuyiez sur
-[[ui:emu.bringUp]] : une requête HTTP reçoit 503, un appareil TCP et un broker MQTT
+[[ui:emu.bringUp]]  une requête HTTP reçoit 503, un appareil TCP et un broker MQTT
 coupent leurs connexions et refusent les nouvelles, un appareil OSC ou UDP ne répond
 plus. Voir [Tomber en panne](#outage).
 
@@ -100,6 +100,7 @@ Pendant qu’il tourne, le panneau [[ui:emu.live]] compte :
 | [[ui:emu.failed]] | Les échanges pour lesquels une réponse n’a pas pu être construite ou envoyée. |
 | [[ui:emu.down]] | Ce qui est arrivé pendant que l’émulateur était en panne. Affiché quand une panne est programmée ou que quelque chose l’a trouvé en panne. Jamais compté comme [[ui:emu.unmatched]]. |
 | [[ui:emu.missed]] | MQTT uniquement, quand cela se produit : les messages qu’un client avait trop de retard pour recevoir. |
+| [[ui:emu.refused]] | Quand cela se produit : les connexions fermées dès leur arrivée parce que l’émulateur en servait déjà autant qu’il le peut (voir [Limites](#limits)). Pas des requêtes, donc pas dans [[ui:emu.total]]. |
 
 L’en-tête de chaque règle indique combien de fois elle a correspondu depuis le démarrage.
 
@@ -359,7 +360,7 @@ donnez.
 ## Tomber en panne {#outage}
 
 Pour tester ce que fait votre système quand une dépendance flanche par intermittence, cochez
-[[ui:emu.outage]] :
+[[ui:emu.outage]] 
 
 | Champ | Quoi | Par défaut |
 | --- | --- | --- |
@@ -372,7 +373,7 @@ en panne… Pendant la panne :
 
 | Émulateur | Ce qui se passe |
 | --- | --- |
-| HTTP | [[ui:emu.outageFault.unavailable]] : 503 avec `Retry-After` réglé sur le nombre de secondes avant son retour (au moins 1). [[ui:emu.outageFault.reset]] : la connexion se ferme sans réponse. [[ui:emu.outageFault.timeout]] : retenue jusqu’à 2 minutes, puis fermée. |
+| HTTP | [[ui:emu.outageFault.unavailable]]  503 avec `Retry-After` réglé sur le nombre de secondes avant son retour (au moins 1). [[ui:emu.outageFault.reset]]  la connexion se ferme sans réponse. [[ui:emu.outageFault.timeout]]  retenue jusqu’à 2 minutes, puis fermée. |
 | Appareil TCP | Les connexions ouvertes sont coupées en moins de 0,1 s ; les nouvelles sont fermées dès leur arrivée. |
 | Broker MQTT | Toutes les connexions sont coupées ; les nouvelles sont refusées (code de retour CONNACK 3, serveur indisponible). |
 | Appareil OSC, UDP | Rien ne reçoit de réponse. |
@@ -381,7 +382,7 @@ Ce qui arrive pendant la panne compte comme [[ui:emu.down]], pas comme
 [[ui:emu.unmatched]], et ses règles ne sont pas consultées.
 
 Le bouton [[ui:emu.takeDown]] fait la même chose à la demande, quoi que dise le calendrier, jusqu’à ce que
-vous appuyiez sur [[ui:emu.bringUp]] ; HTTP reçoit alors 503 sans `Retry-After`. Dans une
+vous appuyiez sur [[ui:emu.bringUp]]  HTTP reçoit alors 503 sans `Retry-After`. Dans une
 expérience, le nœud [[ui:exp.node.emulator_state]] le fait à une étape de
 l’exécution (voir [Nœuds](../experiments/nodes.md#node-emulator_state) et
 [Défaillances](../experiments/faults.md)).
@@ -408,11 +409,11 @@ les paramètres et les générateurs, une valeur hors limites. Le bouton [[ui:em
 | Un corps, une réponse ou un accueil tel qu’écrit | 256 Kio | Refusé. |
 | Un délai ou une gigue | 60 000 ms | Refusé. |
 | Corps de requête HTTP | 1 Mio | 413. |
-| Connexions HTTP simultanées | 512 | Les suivantes sont fermées dès leur arrivée. |
+| Connexions HTTP simultanées | 512 | Les suivantes sont fermées dès leur arrivée  comptées dans [[ui:emu.refused]]. |
 | En-tête de requête HTTP | 30 s | Un client doit l’envoyer dans ce délai. |
-| Connexions TCP simultanées | 256 | Les suivantes sont fermées dès leur arrivée. |
+| Connexions TCP simultanées | 256 | Les suivantes sont fermées dès leur arrivée  comptées dans [[ui:emu.refused]]. |
 | Réponses OSC et UDP en attente de leur délai | 1024 | Les suivantes sont abandonnées et comptées comme [[ui:emu.failed]]. |
-| Clients MQTT simultanés | 256 | Les suivants sont fermés dès leur arrivée. |
+| Clients MQTT simultanés | 256 | Les suivants sont fermés dès leur arrivée  comptés dans [[ui:emu.refused]]. |
 | Paquet MQTT | 256 Kio | La connexion du client prend fin. |
 | Abonnements MQTT par client | 100 | Les suivants sont refusés. |
 | Topics MQTT retenus | 1000 topics, 16 Mio | Un nouveau message retenu est acheminé, mais pas retenu. |
@@ -460,7 +461,7 @@ l’interface à ce moment-là.
 
 Le signal de départ [[ui:seed.http-reachable.name]] de la
 [bibliothèque de signaux](signals.md#starter-set) interroge `http://127.0.0.1:8080/`, l’adresse de
-l’émulateur [[ui:seed.emu.demo-api.name]] : celui-ci n’a pas de route pour `/`, il reçoit donc
+l’émulateur [[ui:seed.emu.demo-api.name]]  celui-ci n’a pas de route pour `/`, il reçoit donc
 404.
 
 ## Le fichier de la bibliothèque {#file}
@@ -470,8 +471,12 @@ La bibliothèque est `emulators.json` dans le dossier de données (voir
 chemin. Il est écrit en entier 0,7 s après la dernière modification, via un fichier
 temporaire : une écriture ratée laisse donc le précédent intact. Si le fichier ne peut pas être lu,
 la liste affiche l’erreur avec le chemin, la ligne et la colonne, et le fichier est laissé
-tel quel : corrigez-le et appuyez sur [[ui:emu.reload]]. Appuyez aussi sur [[ui:emu.reload]] après
-l’avoir modifié à la main. Sans fichier, le jeu de départ est réécrit.
+tel quel — aussi quand il se casse pendant que l’application tourne  l’enregistrement est refusé.
+Corrigez-le et appuyez sur [[ui:emu.reload]]. Appuyez aussi sur [[ui:emu.reload]] après
+l’avoir modifié à la main. Un enregistrement par-dessus un fichier qui a changé depuis sa lecture — à la
+main, ou par une autre page du même serveur — est refusé et le fichier garde ce changement 
+la liste le dit et cesse d’écrire jusqu’à ce que [[ui:emu.reload]] le relise. Sans fichier, le
+jeu de départ est réécrit.
 
 ```json
 {

@@ -45,7 +45,7 @@ l’application ; les identifiants ne le sont pas.
 | [[ui:field.auth]] | Comment la requête s’authentifie ([ci-dessous](#auth)) | [[ui:http.auth.none]] |
 | [[ui:http.keepCookies]] | Renvoyer les cookies que les serveurs définissent ([ci-dessous](#cookies)) | activé |
 | [[ui:http.body]] | Envoyé exactement tel qu’écrit ; aucun `Content-Type` n’est ajouté, donc ajoutez l’en-tête qui correspond. Un corps vide n’est pas envoyé. Le champ n’est pas affiché pour GET et HEAD, et la requête ne porte alors aucun corps — ni dans l’envoi, ni dans un signal enregistré, ni dans [[ui:common.toExperiment]] — même si vous en avez saisi un sous une autre méthode. | vide |
-| [[ui:common.timeoutMs]] | Combien de temps l’échange entier peut prendre, réponse et corps compris | 10 000 |
+| [[ui:common.timeoutMs]] | Combien de temps l’échange entier peut prendre, réponse et corps compris : de 1 ms à 120 000 (deux minutes), comme dans l’étape HTTP | 10 000 |
 
 ## Authentification {#auth}
 
@@ -116,6 +116,11 @@ Le panneau des cookies sous la requête et la réponse liste ce que la réserve 
 expiration) et [[ui:http.cookieFlags]] (`Secure`, `HttpOnly`, `SameSite`).
 Les cookies expirés ne sont pas listés. [[ui:common.clear]] vide la réserve.
 
+La réserve garde 3000 cookies au plus, à peu près ce que garde un navigateur. Un serveur
+qui pose un nouveau cookie à chaque réponse la remplit jusque-là et pas plus : au-delà, un
+nouveau cookie n’est pas gardé, tandis qu’un cookie que la réserve détient est toujours
+mis à jour ou supprimé.
+
 La réserve vit aussi longtemps que l’application : un redémarrage repart avec une réserve vide. Sur un
 [serveur](../server/index.md), il y a une réserve pour chaque page connectée.
 Une exécution d’expérience a sa propre réserve (voir [Expériences](../experiments/index.md)),
@@ -129,7 +134,14 @@ et `signallab send http` n’en utilise aucune.
 | [[ui:http.latency]] | De l’envoi au dernier octet du corps, en millisecondes |
 | [[ui:http.size]] | La taille du corps |
 | En-têtes de réponse | Cliquez sur la ligne avec leur nombre pour les afficher ou les masquer |
-| Corps | Formaté quand c’est du JSON ; [[ui:http.rawBody]] et [[ui:http.formatJson]] basculent. Jusqu’à 256 Kio est affiché, puis `… (truncated)`. |
+| Corps | Formaté quand c’est du JSON ; [[ui:http.rawBody]] et [[ui:http.formatJson]] basculent. Jusqu’à 256 Kio est affiché, puis `… (truncated)` ; [[ui:http.size]] reste celle du corps entier. |
+
+Le corps est lu à mesure qu’il arrive et seuls ses 256 premiers Kio sont gardés, si bien
+qu’un corps de plusieurs gigaoctets — ou qui ne finit jamais — ne coûte pas plus de
+mémoire que cela ; il s’arrête au délai d’attente. Un corps qui s’interrompt en route
+(le délai d’attente, ou un serveur qui raccroche) est un échec, dit dans les mêmes mots que
+tout autre, avec le statut et ce qui est arrivé toujours affichés : un `200` avec la moitié
+d’un corps n’est pas un succès.
 
 Quand il n’y a pas de réponse, le panneau indique pourquoi, dans les mêmes mots que partout
 dans Signal Lab : refusée, pas de réponse à temps, le nom ne se résout pas, un
@@ -187,8 +199,9 @@ Il y a deux façons d’envoyer :
 | Nombre | Quoi |
 | --- | --- |
 | [[ui:http.sent]] | Requêtes qui ont obtenu une réponse ou échoué |
-| [[ui:http.ok]] | Répondues avec un statut 2xx |
-| [[ui:http.failed]] | Aucune réponse, ou un statut hors de 200–299 |
+| [[ui:http.ok]] | Répondues avec un statut 2xx et le corps entier |
+| [[ui:http.failed]] | Aucune réponse, un corps coupé court, ou un statut hors de 200–299 |
+| [[ui:http.local]] | Les requêtes que cet ordinateur n’a pas pu envoyer : il a manqué de sockets ou de ports locaux (chaque connexion fermée en retient un jusqu’à deux minutes sous Windows). Le serveur ne les a jamais vues, elles sont donc dans [[ui:http.sent]] mais pas dans [[ui:http.failed]] ni dans les latences. Affiché seulement quand il y en a. |
 | [[ui:http.missed]] | Sautées, comme ci-dessus (seulement avec un débit) |
 | [[ui:http.rps]] | Requêtes par seconde sur le dernier dixième de seconde ; quand la rafale est terminée, sur toute la rafale. Avec un débit, l’étiquette nomme le débit demandé. |
 | [[ui:http.p50]], [[ui:http.p90]], [[ui:http.p95]], [[ui:http.p99]] | Le temps dans lequel cette part des requêtes s’est terminée, échecs compris ; précis à 0,5 % près |
@@ -293,6 +306,7 @@ aucune n’est venue, que le statut n’était pas celui attendu ou qu’un chal
 | `401` avec Digest | Lisez le message sous le statut : voir [Digest](#digest). |
 | [[ui:http.missed]] au-dessus de 0 | Augmentez [[ui:common.concurrency]], ou baissez le débit : le serveur répond plus lentement que le débit ne l’exige. |
 | [[ui:http.failed]] élevé alors que le serveur répond | Tout statut hors de 200–299 compte comme échoué, 404 et 500 compris. |
+| [[ui:http.local]] au-dessus de 0 | Cet ordinateur a manqué de ports locaux : le serveur ferme chaque connexion, si bien que chaque requête en demande une nouvelle. Baissez [[ui:common.concurrency]] ou le débit, ou attendez une minute que les ports reviennent. |
 
 Sur un serveur, les requêtes partent du serveur : `127.0.0.1` est le serveur lui-même.
 Voir [Serveur](../server/index.md).

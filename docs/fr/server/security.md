@@ -37,8 +37,12 @@ Démarré sans jeton, le serveur écoute sur `127.0.0.1:1430` et ne demande aucu
 connexion : c’est un outil pour la personne devant cette machine. Pour empêcher une page web ouverte dans
 n’importe quel navigateur de cette machine de l’atteindre par un nom qui se résout en
 `127.0.0.1` (DNS rebinding), il ne répond qu’aux requêtes dont le `Host` est un
-nom de boucle locale — `localhost`, un nom se terminant par `.localhost`, `127.x.x.x` ou
-`[::1]` — ou un nom que vous autorisez avec `--allowed-host`.
+nom de boucle locale — `localhost`, un nom se terminant par `.localhost`, une adresse de
+boucle locale écrite comme telle (`127.x.x.x`, `[::1]`) — ou un nom que vous autorisez avec
+`--allowed-host`. Un nom DNS qui ne fait que commencer comme une adresse
+(`127.0.0.1.example.com`) n’en est pas une  n’importe qui peut le faire pointer vers
+`127.0.0.1`. Une requête avec deux en-têtes `Host`, ou dont l’en-tête n’est pas de la forme
+`host[:port]`, est refusée elle aussi.
 
 Si on lui demande d’écouter sur une autre adresse sans jeton, il ne démarre pas : il
 indique pourquoi et se termine avec le code `2`.
@@ -130,10 +134,20 @@ serveur, et ne peut pas être intégrée dans le cadre d’une autre page.
 
 ## Fichiers et tailles {#files}
 
-- Un téléchargement (`GET /api/files?path=…`) n’est servi que depuis l’intérieur du dossier de
-  données, 256 Mio au plus ; tout le reste donne `404`.
+- Un téléchargement (`GET /api/files?path=…`) n’est servi que depuis l’intérieur du dossier de  données, 256 Mio au plus  tout le reste donne `404`. Le chemin est jugé sur son nom
+  avant que quoi que ce soit soit ouvert  un chemin avec `..`, un autre lecteur, un
+  partage sur une autre machine (`\\host\share`), un périphérique ou un tube nommé est
+  refusé sans y toucher.
 - Un corps de requête fait au plus 24 Mio.
 
+## Clients lents et inactifs {#connections}
+
+- Un client doit envoyer l’en-tête d’une requête en 30 secondes  celui qui en envoie la
+  moitié et s’arrête est déconnecté, comme une connexion inactive aussi longtemps.
+- 1024 connexions au plus sont servies à la fois  les suivantes sont fermées dès leur arrivée.
+- Quand le serveur s’arrête, les requêtes en cours ont 5 secondes pour finir (une exécution
+  attendue répond qu’elle a été arrêtée)  un client qui voudrait le retenir plus longtemps
+  est coupé.
 ## Secrets {#secrets}
 
 La valeur d’un secret ne quitte jamais le moteur :

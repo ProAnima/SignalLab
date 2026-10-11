@@ -89,15 +89,20 @@ Cada paquete se convierte en una fila, el más reciente arriba:
 | [[ui:common.time]] | Cuándo llegó, al milisegundo |
 | [[ui:osc.from]] | El `IP:port` del emisor |
 | [[ui:osc.address]] | La dirección OSC, o [[ui:osc.decodeError]] cuando el paquete no es OSC válido |
-| [[ui:osc.args]] | Los valores de los argumentos; un blob se muestra como `blob[n]`, `nil` como `nil`. Para un paquete que no se pudo decodificar, el motivo. |
+| [[ui:osc.args]] | Los valores de los argumentos; un blob se muestra como `blob[n]`, `nil` como `nil`, una etiqueta de tiempo como `t:` y sus segundos desde 1900 (`t:immediate` para el «ahora» de OSC), un carácter como `'A'`, un color como `#rrggbbaa`, un mensaje MIDI como `midi[01 90 3c 7f]`, un array entre `[ ]`. Para un paquete que no se pudo decodificar, el motivo. |
 
 Un bundle da una fila por mensaje. La lista conserva las 300 filas más recientes;
 [[ui:common.clear]] la vacía. Pulsa [[ui:common.stop]] para cerrar el puerto. El
 monitor es también una tarea en la franja de la consola, así que se puede detener desde ahí.
 
-El monitor lee paquetes de hasta 64 KiB. Decodifica las etiquetas `i f s S b h d T F N I`
-(`S` se lee como texto, `I` como nil); un paquete con cualquier otra etiqueta, o cortado,
-se muestra como un error de decodificación en lugar de descartarse.
+El monitor lee paquetes de hasta 64 KiB. Decodifica todas las etiquetas de tipo de OSC 1.0:
+`i f s S b h d T F N I t c r m` y los arrays `[ ]` (`S` se lee como texto, `I` como
+`impulse`). Un mensaje de una implementación antigua sin cadena de etiquetas de tipo
+se lee como un mensaje sin argumentos, como pide la especificación. Un paquete con
+cualquier otra etiqueta, cortado, o cuya dirección no empieza por `/`, se muestra como un
+error de decodificación en lugar de descartarse. Las esperas y los emuladores leen los
+mismos tipos: en el valor de una respuesta, una etiqueta de tiempo es su número de 64 bits
+como texto, un color `#rrggbbaa`, un mensaje MIDI sus cuatro bytes y un array una lista.
 
 ### Convertir un mensaje en una espera {#wait-for-this}
 

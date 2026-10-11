@@ -86,7 +86,10 @@ chemins alternatifs, reliez-les directement au nœud suivant.
 :::
 
 Un nœud qui n’est pas un Join, atteint par deux branches parallèles, s’exécute une fois pour
-chacune d’elles.
+chacune d’elles. Câblé couche après couche, cela double à chaque couche : une exécution
+ne démarre donc que 1 000 branches parallèles au total ; une de plus la fait échouer
+avec `run.too_many_branches` au nœud qui l’aurait démarrée. Réunissez ces branches
+avec un [[ui:exp.node.join]].
 
 ### Quand une étape échoue {#failure}
 

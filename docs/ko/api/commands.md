@@ -14,7 +14,8 @@ description: Signal Lab 엔진의 모든 명령으로, POST /api/invoke/<command
 
 - **인수 이름**은 camelCase입니다(`jobId`, `nodeId`). 명령이 모르는 인수나 빠뜨린 필수 인수는
   `command.args_invalid`와 함께 거부되며, 인수를 받는 모든 명령이 이 오류로 실패할 수 있습니다.
-  인수가 없는 명령은 본문을 읽지 않습니다.
+  인수가 없는 명령은 본문이 없거나 `null` 또는 `{}`을 받으며, 그 밖의 것은 마찬가지로
+  `command.args_invalid`로 거부됩니다.
 - **인수로 전달되는 객체** — `config`, `request`, `document`, `library`, `emulator`, `profile` — 는
   엔진 자체의 필드 이름을 쓰며, 대부분 snake_case입니다(`timeout_ms`). 그 안에서 엔진이 모르는
   필드는 **무시**되므로, 철자가 틀린 선택적 필드는 조용히 기본값을 유지합니다. `feedback_send`의
@@ -146,7 +147,8 @@ invoke app_info
 
 ### job_stop {#job_stop}
 
-작업 하나를 즉시 중지합니다: 소켓이 닫히고, 릴레이, 서버 또는 연결이 사라집니다. 중지된 작업은
+작업 하나를 즉시 중지합니다: 소켓이 닫히고, 릴레이, 서버 또는 연결이 사라집니다. 답은 그것들이
+사라진 뒤에 옵니다 — 바로 이어서 시작하면 같은 포트에 바인드됩니다. 중지된 작업은
 [`job://ended`](events.md#event-job-ended)를 보내지 않으며, 중지된 실행은 보고서를 저장하지
 않습니다.
 
@@ -158,7 +160,8 @@ invoke app_info
 
 ### jobs_stop_all {#jobs_stop_all}
 
-누가 시작했든 실행 중인 모든 작업을 중지합니다. 인수가 없습니다.
+누가 시작했든 실행 중인 모든 작업을 중지하고, [`job_stop`](#job_stop)처럼 그것들이 포트를 놓은
+뒤에 답합니다. 아직 시작 중인 작업(포트를 여는 실행)은 시작되는 대로 중지됩니다. 인수가 없습니다.
 
 **결과**: null.
 
@@ -511,7 +514,8 @@ HTTP 요청 하나를 보내고 응답을 돌려줍니다. 응답을 받지 못�
 
 **결과**: [`HttpResponse`](#type-httpresponse).
 
-**오류**: `http.client_failed`(요청을 준비조차 할 수 없었음).
+**오류**: `node.method_invalid`(필드 `method`: `BAD METHOD`처럼 HTTP 토큰이 아님),
+`http.client_failed`(요청을 준비조차 할 수 없었음).
 
 ### http_burst_start {#http_burst_start}
 
@@ -538,7 +542,7 @@ HTTP 요청 하나를 보내고 응답을 돌려줍니다. 응답을 받지 못�
 
 **결과**: [`JobInfo`](#type-jobinfo).
 
-**오류**: `http.rate_invalid`, `http.duration_invalid`, `http.client_failed`.
+**오류**: `http.rate_invalid`, `http.duration_invalid`, `node.method_invalid`, `http.client_failed`.
 
 ### http_cookies {#http_cookies}
 
@@ -661,7 +665,11 @@ invoke ws_exchange '{"config":{"url":"ws://127.0.0.1:9001/"},"message":{"text":"
 **오류**: `mqtt.client_id_required`, `transport.*`(거부, 도달 불가, `dns`, 6초 뒤
 `timeout`), `mqtt.no_answer`(6초 안에 CONNACK 없음), `mqtt.protocol`, `mqtt.refused_protocol`,
 `mqtt.refused_client_id`, `mqtt.refused_unavailable`, `mqtt.refused_credentials`,
-`mqtt.refused_not_authorized`, `mqtt.refused`.
+`mqtt.refused_not_authorized`, `mqtt.refused`. 다이얼하기 전에는 `node.topic_filter`(3.1.1이
+금지하는 `subscribe` 필터), `node.too_long`(MQTT의 65 535바이트를 넘는 사용자 이름, 비밀번호,
+클라이언트 ID 또는 유언), `node.topic_wildcard` / `mqtt.topic_invalid`(발행할 수 없는 토픽의
+유언)가 있습니다. 브로커가 핑에도 답하지 않은 채 1.5 × `keep_alive_s` 동안 아무 말도 하지
+않는 연결은 `job://ended`에 `transport.timeout`으로 끝납니다.
 
 ### mqtt_publish {#mqtt_publish}
 
@@ -678,7 +686,8 @@ invoke ws_exchange '{"config":{"url":"ws://127.0.0.1:9001/"},"message":{"text":"
 **결과**: null. QoS 1 또는 2 발행은 나중에 [`mqtt://ack`](events.md#event-mqtt-ack)로
 확인됩니다.
 
-**오류**: `node.topic_wildcard`(필드 `topic`)와 `mqtt.topic_required`(필드 `topic`),
+**오류**: `node.topic_wildcard`, `mqtt.topic_required`, `mqtt.topic_invalid`(토픽에 NUL이 있음),
+`node.too_long`(65 535바이트 초과), 모두 필드 `topic`과 함께,
 [`mqtt_publish_once`](#mqtt_publish_once)와 같으며, 이 명령은 연결을 찾기 전에 그것들을
 거부합니다. `mqtt.not_connected`.
 
@@ -694,7 +703,8 @@ invoke ws_exchange '{"config":{"url":"ws://127.0.0.1:9001/"},"message":{"text":"
 
 **결과**: null.
 
-**오류**: `mqtt.filter_required`, `mqtt.not_connected`.
+**오류**: `mqtt.filter_required`, `node.topic_filter`(필드 `topic`: `a/#/b`나 `a+`처럼 3.1.1이
+금지하는 필터 — 브로커는 그런 필터 하나 때문에 연결을 닫습니다), `mqtt.not_connected`.
 
 ### mqtt_unsubscribe {#mqtt_unsubscribe}
 
@@ -708,7 +718,7 @@ invoke ws_exchange '{"config":{"url":"ws://127.0.0.1:9001/"},"message":{"text":"
 **결과**: null. 브로커의 답은 `kind: "unsubscribed"`와 함께
 [`mqtt://ack`](events.md#event-mqtt-ack)로 도착합니다.
 
-**오류**: `mqtt.filter_required`, `mqtt.not_connected`.
+**오류**: `mqtt.filter_required`, `node.topic_filter`(필드 `topic`), `mqtt.not_connected`.
 
 ### mqtt_publish_once {#mqtt_publish_once}
 
@@ -913,13 +923,15 @@ invoke netsim_start '{"config":{"listen":"127.0.0.1:9010","target":"127.0.0.1:90
 | `target` | string | — | `IP:port` 또는 `host:port`. 이름은 작업이 시작될 때 한 번 조회합니다 |
 | `protocol` | string | — | `udp`: 데이터그램. `tcp`: 단위마다 연결 하나가 페이로드를 쓰고 닫음(연결마다 최대 500 ms) |
 | `size` | number | — | 페이로드 바이트, 1~65 507 사이로 유지됨 |
-| `rate` | number | — | 초당 단위, 일정에 따라: 단위 *n*은 시작 후 *n* / `rate`초에 예정되고, 깨어날 때마다 예정된 것을 보냅니다(최대 256. 일정이 더 뒤처지면 오래된 단위를 건너뜀). 0이면 최대한 빠르게 보냄 |
-| `duration_s` | number | `0` | 이 초 수 뒤에 중지. 0: 중지될 때까지 |
+| `rate` | number | — | 초당 단위, 최대 10 000 000으로 제한되며, 일정에 따라: 단위 *n*은 시작 후 *n* / `rate`초에 예정되고, 깨어날 때마다 예정된 것을 보냅니다(최대 256. 일정이 더 뒤처지면 오래된 단위를 건너뜀). 0이면 최대한 빠르게 보냄 |
+| `duration_s` | number | `0` | 이 초 수 뒤에 중지. 0(또는 음수): 중지될 때까지 |
 
 **결과**: [`JobInfo`](#type-jobinfo).
 
-**오류**: `transport.target_invalid`, `transport.dns`. 실패한 전송은 이벤트에서 세어지며 오류로
-보고되지 않습니다.
+**오류**: `transport.target_invalid`, `transport.dns`, 그리고 UDP에서는 소켓을 아예 열 수 없을 때
+바인드 또는 연결 실패(`transport.*`). 목적지가 거부한 전송은 이벤트에서 `errors`로 세어집니다.
+이 컴퓨터가 보내지 못한 것(포트, 소켓, 버퍼 부족)은 `local`로 세어지며, 목적지의 오류로는
+결코 세지 않습니다.
 
 ### scan_start {#scan_start}
 
@@ -1001,7 +1013,7 @@ invoke scan_start '{"config":{"host":"127.0.0.1","port_start":8000,"port_end":91
 
 ### inspect_payload {#inspect_payload}
 
-프레임이 보관한 바이트로, 배치가 실어 온 1 KiB 미리보기 이후의 것입니다.
+프레임이 보관한 바이트로, 배치가 실어 온 256바이트 미리보기 이후의 것입니다.
 
 | 인수 | 형식 | 필수 | 의미 |
 | --- | --- | --- | --- |
@@ -1030,8 +1042,9 @@ invoke inspect_snapshot '{"limit":20}' | jq '.[] | {seq, proto, dir, summary}'
 
 라이브러리를 읽습니다. 파일이 없으면 기본 제공 세트를 먼저 씁니다. 인수가 없습니다.
 
-**결과**: `{ "path": string, "library": library, "seeded": boolean }` — `seeded`는 기본 제공
-세트를 방금 썼을 때 true입니다. 라이브러리는
+**결과**: `{ "path": string, "library": library, "seeded": boolean, "stamp": string }` — `seeded`는
+기본 제공 세트를 방금 썼을 때 true이고, `stamp`는 파일에 들어 있던 것을 가리키며 다음 저장의
+`base`가 됩니다. 라이브러리는
 `{ "version", "signals": [...], "folders": [...] }`입니다: `version`은 2이고(버전 1 파일은
 그대로 돌아옴), `folders`는 없으면 빠집니다. 각 신호에는 `id`, `name`, `group`(그 폴더,
 `"A/B"`. 없으면 빈 값), `note`, `body`가 있습니다.
@@ -1042,16 +1055,21 @@ invoke inspect_snapshot '{"limit":20}' | jq '.[] | {seq, proto, dir, summary}'
 ### signals_save {#signals_save}
 
 같은 폴더의 임시 파일을 거쳐 라이브러리 파일 전체를 대체합니다. 존재하지만 라이브러리로 읽히지
-않는 파일은 그대로 둡니다.
+않는 파일은 그대로 둡니다. `base`가 있으면, 읽은 뒤에 바뀐 파일 — 서버의 다른 페이지나 편집기를
+쓰는 사람이 바꾼 것 — 도 그대로 두고 저장을 거부하므로, 그 변경이 그것을 본 적 없는 목록 아래에
+사라지지 않습니다.
 
 | 인수 | 형식 | 필수 | 의미 |
 | --- | --- | --- | --- |
 | `library` | object | 예 | `signals_load`가 돌려주는 대로의 `{ version, signals, folders }` |
+| `base` | string | 아니요 | 라이브러리를 읽을 때의(또는 마지막 저장이 돌려준) `stamp`. 파일이 없었으면 `""` |
 
-**결과**: string, 쓴 경로.
+**결과**: string, 쓴 경로. `base`가 있으면 `{ "path", "stamp" }` — 파일이 지금 담고 있는 것의
+stamp로, 다음 저장의 `base`입니다.
 
 **오류**: `signals.json_invalid`(디스크의 파일이 읽히지 않음, `path`, `line`, `column`과 함께.
-아무것도 쓰지 않음), `signals.encode`, `file.io`.
+아무것도 쓰지 않음), `file.changed`(`path`와 함께: 파일이 더 이상 `base`를 담고 있지 않음.
+아무것도 쓰지 않음 — 다시 읽으십시오), `signals.encode`, `file.io`.
 
 신호의 `body`는 `transport`에 따라:
 
@@ -1077,22 +1095,28 @@ invoke signals_load | jq '.library.signals[] | {name, transport: .body.transport
 
 에뮬레이터 라이브러리를 읽습니다. 파일이 없으면 기본 제공 세트를 먼저 씁니다. 인수가 없습니다.
 
-**결과**: `{ "path", "library": { "version": 1, "emulators": [{ "id", "note", "emulator" }] }, "seeded" }`.
+**결과**: `{ "path", "library": { "version": 1, "emulators": [{ "id", "note", "emulator" }] }, "seeded", "stamp" }` —
+`stamp`는 파일에 들어 있던 것을 가리키며 다음 저장의 `base`가 됩니다.
 
 **오류**: `emulators.json_invalid`(`path`, `line`, `column`과 함께. 결코 대체되지 않음),
 `file.io`.
 
 ### emulators_save {#emulators_save}
 
-임시 파일을 거쳐 에뮬레이터 라이브러리 전체를 대체합니다.
+임시 파일을 거쳐 에뮬레이터 라이브러리 전체를 대체합니다. 존재하지만 라이브러리로 읽히지 않는
+파일은 그대로 두며, `base`가 있으면 [`signals_save`](#signals_save)처럼 읽은 뒤에 바뀐 파일도
+그대로 둡니다.
 
 | 인수 | 형식 | 필수 | 의미 |
 | --- | --- | --- | --- |
 | `library` | object | 예 | `emulators_load`가 돌려주는 대로의 `{ version, emulators }` |
+| `base` | string | 아니요 | 라이브러리를 읽을 때의(또는 마지막 저장이 돌려준) `stamp`. 파일이 없었으면 `""` |
 
-**결과**: string, 쓴 경로.
+**결과**: string, 쓴 경로. `base`가 있으면 `{ "path", "stamp" }`.
 
-**오류**: `emulators.encode`, `file.io`.
+**오류**: `emulators.json_invalid`(디스크의 파일이 읽히지 않음. 아무것도 쓰지 않음),
+`file.changed`(파일이 더 이상 `base`를 담고 있지 않음. 아무것도 쓰지 않음), `emulators.encode`,
+`file.io`.
 
 ### emulator_check {#emulator_check}
 
@@ -1147,7 +1171,7 @@ invoke signals_load | jq '.library.signals[] | {name, transport: .body.transport
 | --- | --- | --- |
 | `job_id` | number | 작업 |
 | `name`, `protocol`, `local` | string | 에뮬레이터, 그 프로토콜, 수신 주소 |
-| `counts` | object | `total`, `unmatched`(규칙이 받지 않음), `failed`, `down`(다운 중 도착: 다운 일정 또는 [`emulator_down`](#emulator_down)), `hits`(규칙별), `missed`(MQTT: 너무 뒤처진 클라이언트가 받지 못한 메시지. 0이면 빠짐) |
+| `counts` | object | `total`, `unmatched`(규칙이 받지 않음), `failed`, `down`(다운 중 도착: 다운 일정 또는 [`emulator_down`](#emulator_down)), `hits`(규칙별), `missed`(MQTT: 너무 뒤처진 클라이언트가 받지 못한 메시지. 0이면 빠짐), `refused`(HTTP, TCP, MQTT: 한도를 넘어 도착하는 즉시 닫힌 연결. 0이면 빠짐) |
 | `forced` | string | 다운된 동안 `unavailable`, `reset` 또는 `timeout`. 아니면 빠짐 |
 | `exchanges` | object[] | 각각: `seq`, `ts`, `from`, `request`, `rule`(1부터. 받은 규칙이 없으면 빠짐), `reply`, `status`, `fault`, `ms`, `error`, `frame`, `down`, `data`(템플릿이 읽는 대로의 요청) |
 
@@ -1195,6 +1219,15 @@ OSC 인수 하나, 그 타입과 값:
 | `bool` | `true` 또는 `false` | `T` 또는 `F` |
 | `blob` | 바이트 배열, `[222, 173]` | `b` |
 | `nil` | 없음: `{ "type": "nil" }` | `N` |
+| `time` | 타임 태그, 64비트를 십진수 텍스트로: `"1"`은 "즉시" | `t` |
+| `char` | 문자 하나, `"A"` | `c` |
+| `color` | `[red, green, blue, alpha]` | `r` |
+| `midi` | `[port, status, data1, data2]` | `m` |
+| `impulse` | 없음 | `I` |
+| `array` | OscArg의 배열 | `[` … `]` |
+
+마지막 여섯 가지는 수신한 메시지가 싣는 것이며(OSC 모니터의 `osc://message`), 명령도 보낼 수
+있습니다.
 
 ### HttpRequest {#type-httprequest}
 
@@ -1204,7 +1237,7 @@ OSC 인수 하나, 그 타입과 값:
 | `url` | string | — | `http://` 또는 `https://` |
 | `headers` | `[name, value][]` | `[]` | 요청 헤더 |
 | `body` | string or null | null | 본문 |
-| `timeout_ms` | number | `10000` | 교환 전체에 |
+| `timeout_ms` | number | `10000` | 본문을 포함한 교환 전체에: 1~120 000. 범위를 벗어나면 명령이 `node.range`(필드 `timeout_ms`)로 실패함 |
 | `auth` | object | 없음 | `{ "scheme": "basic", "username", "password" }`, `{ "scheme": "digest", "username", "password" }` 또는 `{ "scheme": "bearer", "token" }` |
 
 최대 10번의 리다이렉트를 따릅니다. 한 호스트에 입력한 자격 증명과 쿠키는 다른 곳으로 결코
@@ -1214,15 +1247,15 @@ OSC 인수 하나, 그 타입과 값:
 
 | 필드 | 형식 | 의미 |
 | --- | --- | --- |
-| `ok` | boolean | 2xx 상태 |
+| `ok` | boolean | 2xx 상태이고 본문 전체가 도착함 |
 | `status`, `status_text` | number, string | 상태. 응답이 없으면 0과 빈 문자열 |
 | `latency_ms` | number | 본문 전체가 도착할 때까지 |
 | `headers` | `[name, value][]` | 응답 헤더 |
 | `body` | string | 본문을 텍스트로, 최대 256 KiB |
 | `body_bytes` | number | 본문의 전체 크기 |
 | `truncated` | boolean | `body`가 256 KiB에서 잘림 |
-| `error` | string or null | 응답이 없었던 이유, 원인의 모든 층 |
-| `cause` | string or null | 실패의 종류: `refused`, `timeout`, `dns`, `unreachable`, `reset`, `address_in_use`, `address_unavailable`, `denied`, `tls`, `target_invalid`, `failed` — `transport.*` 코드와 같음 |
+| `error` | string or null | 응답이 없었던 이유, 또는 본문이 중간에 멈춘 이유(이때는 `status`, `headers`, 그때까지의 본문도 있음), 원인의 모든 층 |
+| `cause` | string or null | 실패의 종류: `refused`, `timeout`, `dns`, `unreachable`, `reset`, `address_in_use`, `address_unavailable`, `denied`, `tls`, `target_invalid`, `exhausted`(이 컴퓨터의 소켓이나 로컬 포트가 바닥남), `failed` — `transport.*` 코드와 같음 |
 | `digest` | object | 401을 만난 Digest 요청에만. 아니면 빠짐. `challenged`: 챌린지에 답하고 요청을 다시 보냈음. `error`: 그럴 수 없었던 이유, `EngineError`(`http.digest_not_offered`, `http.digest_unsupported`, `http.digest_invalid`, `http.digest_other_origin`) 또는 null |
 
 ### Payload {#type-payload}
@@ -1292,7 +1325,7 @@ OSC 인수 하나, 그 타입과 값:
 | `bytes` | 크기 |
 | `summary` | 한 줄 |
 | `detail` | 여러 줄에 걸친 디코딩, 또는 null |
-| `hex` | 처음 1 KiB의 hex 덤프, 또는 null |
+| `hex` | 처음 256바이트의 hex 덤프, 또는 null |
 | `verdict` | 그것이 어떻게 되었는지 — `dropped`, `sampled`, 상태 — 또는 null |
 | `kept` | `bytes` 중 보관된 수(최대 256 KiB). 크기만 기록되면 0 |
 | `publish` | MQTT 발행에만: `{ broker, topic, qos, retain, text }` — 브로커는 `host:port`, 그리고 보관된 바이트(메시지의 페이로드)가 UTF-8 텍스트인지. 다른 모든 프레임에는 없음 |

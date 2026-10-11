@@ -257,6 +257,12 @@ Baum, um den ganzen Pfad zu sehen.
   Nachdem Sie sie bearbeitet oder durch eine von einem anderen Rechner ersetzt haben, drücken
   Sie [[ui:sig.reload]]. Ein Neuladen liest die Datei erneut und verwirft eine Änderung, die
   noch auf das Schreiben wartete.
+- **Anderswo geändert.** Jedes Speichern sagt, welche Datei es gelesen hat. Hat sich die Datei
+  seitdem geändert — Sie haben sie bearbeitet, oder eine andere Seite desselben Servers hat
+  ihre eigene Änderung gespeichert —, wird das Speichern abgelehnt, die Datei behält diese
+  Änderung, und der Baum zeigt den Fehler und hört auf zu schreiben, wie bei einer kaputten
+  Datei unten. Drücken Sie [[ui:sig.reload]], um zu sehen, was jetzt dort steht; die Änderung,
+  die diese Seite nicht speichern konnte, ist mit dem Neuladen weg, machen Sie sie also erneut.
 - **Niemals ersetzt, solange sie kaputt ist.** Ist die Datei kein gültiges JSON oder keine
   Signalbibliothek, zeigt der Baum den Fehler mit Pfad, Zeile und Spalte der Datei, und die
   Konsole sagt dasselbe. Die Datei bleibt, wie sie ist, und nichts schreibt die Bibliothek,
@@ -270,8 +276,8 @@ Baum, um den ganzen Pfad zu sehen.
   Unlesbares bearbeiten und die App dann eine Änderung speichert, wird das Speichern mit
   demselben Fehler abgelehnt, die Datei bleibt, wie Sie sie gemacht haben, und die App hört
   auf zu schreiben, bis Sie sie korrigieren und [[ui:sig.reload]] drücken. Eine Datei, die
-  Sie bearbeitet und gültig gelassen haben, wird bei ihrem nächsten Speichern durch die Liste
-  der App ersetzt, wie oben: zuerst neu laden.
+  Sie bearbeitet und gültig gelassen haben, wird ebenfalls nicht ersetzt: Das nächste
+  Speichern wird als anderswo geändert abgelehnt, und [[ui:sig.reload]] liest Ihre Änderung.
 
 Ein kurzes Beispiel der Datei:
 

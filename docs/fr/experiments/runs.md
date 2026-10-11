@@ -64,6 +64,12 @@ dans l’info-bulle. Un clic sur une ligne sélectionne son nœud sur le canevas
 
 Sur le canevas, chaque nœud porte une pastille avec son dernier état.
 
+**Longues exécutions.** Une exécution montre ses 5 000 premières étapes une à une. Au-delà —
+une Loop de mille itérations sur un long corps en fait plus de cent mille — elle montre
+une étape par seconde et chaque échec, et à sa fin ses 500 dernières. Une ligne ambre dit
+combien ont été omises entre deux autres, et le compte de la chronologie repliée est
+chaque étape que l’exécution a faite. Le rapport garde les mêmes étapes.
+
 L’en-tête de la chronologie contient :
 
 - le résultat : [[ui:exp.running]], [[ui:exp.passed]], [[ui:exp.failed]] avec la
@@ -119,7 +125,7 @@ un autre. S’il ne peut pas être écrit, l’éditeur en dit la raison.
 
 | Clé | Quoi |
 | --- | --- |
-| `version` | le format du rapport, désormais 5 |
+| `version` | le format du rapport, désormais 6 |
 | `experiment` | le nom de l’expérience |
 | `document_version` | la version de l’expérience, désormais 9 |
 | `seed` | la graine que l’exécution a utilisée |
@@ -129,7 +135,7 @@ un autre. S’il ne peut pas être écrit, l’éditeur en dit la raison.
 | `started_ms`, `ended_ms` | millisecondes Unix |
 | `outcome` | `passed` ou `failed` |
 | `error` | le premier échec, ou `null` |
-| `steps` | chaque événement d’étape, dans l’ordre (ci-dessous) |
+| `steps` | les événements d’étape, dans l’ordre (ci-dessous) : les 5 000 premiers, puis un par seconde et chaque échec, puis les 500 derniers |
 | `emulators` | les compteurs de chaque nœud Émulateur — présent quand il y en a un ([émulateurs](faults.md#emulator)) |
 | `impairments` | les compteurs et phases de chaque nœud Dégradation — présent quand il y en a un ([phases](faults.md#change-impairment)) |
 
@@ -146,12 +152,14 @@ Chaque événement d’étape a :
 | `error` | pourquoi elle a échoué : `code`, `params`, `node`, `field`, `detail` |
 | `frame` | la trame de l’Inspecteur qu’une attente a prise, si la capture était active |
 | `load` | ce qu’une charge a mesuré ([mesures](load.md#metrics)), sur son dernier événement |
+| `omitted` | combien d’étapes juste avant celle-ci ont été omises, quand il y en a |
 
 Les valeurs des secrets n’apparaissent jamais dans un rapport : elles sont masquées sous `••••`
 ([masquage](data.md#masking)).
 
 Le format du rapport a grandi avec les fonctionnalités : la version 3 a ajouté les compteurs des émulateurs,
-la version 4 les phases des dégradations, la version 5 les mesures d’une charge.
+la version 4 les phases des dégradations, la version 5 les mesures d’une charge, la version 6 les étapes des longues exécutions
+sous forme d’échantillon avec `omitted`.
 
 Les rapports sont l’historique des exécutions : [[ui:exp.compare]] les lit, et
 [`experiment_runs`](../api/commands.md#experiment_runs) aussi. Le `--report` de la ligne de commande

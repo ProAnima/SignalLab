@@ -63,6 +63,12 @@ en el lienzo.
 
 En el lienzo, cada nodo lleva una insignia con su último estado.
 
+**Ejecuciones largas.** Una ejecución muestra sus primeros 5 000 pasos uno por uno. Más
+allá — un Bucle de mil iteraciones sobre un cuerpo largo produce más de cien mil — muestra
+un paso por segundo y cada fallo, y cuando termina sus últimos 500. Una fila en ámbar dice
+cuántos se dejaron fuera entre otros dos, y el recuento de la línea de tiempo plegada es
+todos los pasos que dio la ejecución. El informe conserva los mismos pasos.
+
 La cabecera de la línea de tiempo contiene:
 
 - el resultado: [[ui:exp.running]], [[ui:exp.passed]], [[ui:exp.failed]] con el motivo, o
@@ -116,7 +122,7 @@ escribir, el editor dice por qué.
 
 | Clave | Qué |
 | --- | --- |
-| `version` | el formato del informe, ahora 5 |
+| `version` | el formato del informe, ahora 6 |
 | `experiment` | el nombre del experimento |
 | `document_version` | la versión del experimento, ahora 9 |
 | `seed` | la semilla que usó la ejecución |
@@ -126,7 +132,7 @@ escribir, el editor dice por qué.
 | `started_ms`, `ended_ms` | milisegundos Unix |
 | `outcome` | `passed` o `failed` |
 | `error` | el primer fallo, o `null` |
-| `steps` | cada evento de paso, en orden (más abajo) |
+| `steps` | los eventos de paso, en orden (más abajo): los primeros 5 000, luego uno por segundo y cada fallo, y por último los últimos 500 |
 | `emulators` | los recuentos de cada nodo Emulador — presente cuando hay uno ([emuladores](faults.md#emulator)) |
 | `impairments` | los recuentos y las fases de cada nodo de Degradación — presente cuando hay uno ([fases](faults.md#change-impairment)) |
 
@@ -143,12 +149,14 @@ Cada evento de paso tiene:
 | `error` | por qué falló: `code`, `params`, `node`, `field`, `detail` |
 | `frame` | la trama del Inspector con la que coincidió una espera, si la captura estaba activada |
 | `load` | lo que midió una carga ([mediciones](load.md#metrics)), en su último evento |
+| `omitted` | cuántos pasos justo antes de este se dejaron fuera, cuando se dejaron algunos |
 
 Los valores de los secretos nunca aparecen en un informe: se enmascaran como `••••`
 ([enmascaramiento](data.md#masking)).
 
 El formato del informe creció con las funciones: la versión 3 añadió los recuentos de los emuladores,
-la versión 4 las fases de las degradaciones, la versión 5 las mediciones de una carga.
+la versión 4 las fases de las degradaciones, la versión 5 las mediciones de una carga,
+la versión 6 los pasos de las ejecuciones largas como muestra con `omitted`.
 
 Los informes son el historial de ejecuciones: [[ui:exp.compare]] los lee, y
 [`experiment_runs`](../api/commands.md#experiment_runs) también. El `--report` de la línea de

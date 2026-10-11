@@ -80,7 +80,10 @@ directamente al siguiente nodo.
 :::
 
 Un nodo que no es una unión, alcanzado por dos ramas paralelas, se ejecuta una vez por cada una de
-ellas.
+ellas. Cableadas capa tras capa, eso se duplica con cada capa, así que una ejecución
+inicia como máximo 1 000 ramas paralelas en total; una más la hace fallar con
+`run.too_many_branches` en el nodo que la habría iniciado. Reúne esas ramas con una
+[[ui:exp.node.join]].
 
 ### Cuando falla un paso {#failure}
 

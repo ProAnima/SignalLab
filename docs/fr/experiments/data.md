@@ -5,7 +5,7 @@ description: "Paramètres et profils, le langage de modèles avec ses générate
 
 # Les données dans les expériences
 
-Des valeurs circulent dans une exécution : un paramètre choisit la cible, un champ d’une
+Des valeurs circulent dans une exécution  un paramètre choisit la cible, un champ d’une
 réponse devient un en-tête de la requête suivante, un identifiant généré part dans une
 commande et revient dans une vérification. Cette page explique d’où viennent ces valeurs
 et comment un champ les utilise.
@@ -13,7 +13,7 @@ et comment un champ les utilise.
 | Source | Écrit sous la forme | Défini où |
 | --- | --- | --- |
 | Paramètre | `{{api}}` ou `{{params.api}}` | volet [[ui:exp.params]], un profil, [[ui:exp.runWith]] |
-| Variable | `{{token}}` ou `{{vars.token}}` | un nœud pendant l’exécution : [[ui:exp.node.extract]], une attente, un envoi qui attend une réponse |
+| Variable | `{{token}}` ou `{{vars.token}}` | un nœud pendant l’exécution  [[ui:exp.node.extract]], une attente, un envoi qui attend une réponse |
 | Secret | `{{secret.API_TOKEN}}` | le magasin d’identifiants de l’ordinateur, ou l’environnement et les fichiers du serveur |
 | Valeur intégrée | `{{run.seed}}`, `{{now.iso}}`, `{{counter}}` | l’exécution elle-même |
 | Générateur | `{{uuid}}`, `{{random_int(1, 100)}}` | tiré de la graine de l’exécution |
@@ -32,7 +32,7 @@ nœud.
    `api` et `http://127.0.0.1:8080`.
 4. Dans le champ d’un nœud, écrivez `{{api}}/login`.
 
-Chaque changement dans le volet est une modification de l’expérience : il est enregistré avec elle
+Chaque changement dans le volet est une modification de l’expérience  il est enregistré avec elle
 et annulé avec <kbd>Ctrl</kbd>+<kbd>Z</kbd> comme n’importe quel autre.
 
 ### Règles {#parameter-rules}
@@ -43,29 +43,29 @@ et annulé avec <kbd>Ctrl</kbd>+<kbd>Z</kbd> comme n’importe quel autre.
 | Noms réservés | `vars`, `params`, `secret`, `run`, `node`, `now`, `uuid`, `counter`, `random_int`, `random_float`, `pick` |
 | Paramètres par expérience | 64 |
 | Taille d’une valeur | 64 Kio |
-| Noms | uniques ; une variable ne peut pas avoir le nom d’un paramètre |
+| Noms | uniques  une variable ne peut pas avoir le nom d’un paramètre |
 
-Une valeur est du texte brut et est insérée telle qu’écrite : `{{…}}` à l’intérieur d’une valeur n’est
+Une valeur est du texte brut et est insérée telle qu’écrite  `{{…}}` à l’intérieur d’une valeur n’est
 pas résolu. Quand un champ demande une partie d’un paramètre
-(`{{config.ports[0]}}`), la valeur est lue comme du JSON ; une valeur qui n’est pas du JSON
+(`{{config.ports[0]}}`), la valeur est lue comme du JSON  une valeur qui n’est pas du JSON
 n’a pas de parties.
 
 Un paramètre dont le nom est invalide, réservé ou pris deux fois n’empêche pas
-l’expérience d’être enregistrée, pour que vous puissiez continuer à saisir ; l’expérience ne s’exécute pas
+l’expérience d’être enregistrée, pour que vous puissiez continuer à saisir  l’expérience ne s’exécute pas
 tant que le nom n’est pas corrigé.
 
 ## Profils {#profiles}
 
 Un profil est un ensemble nommé de valeurs de paramètres — *Portable*, *Scène*, *Salle* —, pour que
 changer de cible soit un choix, et non une modification de chaque nœud. Un profil
-change certains paramètres ; les autres gardent leur valeur par défaut.
+change certains paramètres  les autres gardent leur valeur par défaut.
 
 ### Créer un profil {#make-profile}
 
 1. Ouvrez [[ui:exp.params]] et appuyez sur [[ui:exp.addProfile]]. Un nouvel onglet s’ouvre.
 2. Renommez-le dans [[ui:exp.profileName]].
 3. Pour chaque paramètre que le profil change, saisissez sa valeur. Un champ vide garde
-   la valeur par défaut, affichée en gris dans le champ ; [[ui:exp.resetToDefault]] (↺) efface
+   la valeur par défaut, affichée en gris dans le champ  [[ui:exp.resetToDefault]] (↺) efface
    une valeur.
 4. Appuyez sur [[ui:exp.makeActive]] pour exécuter avec lui. L’onglet du profil actif porte
    ● [[ui:exp.activeProfile]]. [[ui:exp.makeActive]] sur l’onglet
@@ -80,16 +80,16 @@ avec les mêmes cibles. [[ui:exp.removeProfile]] supprime le profil affiché.
 | --- | --- |
 | Profils par expérience | 32 |
 | Nom | 1–64 caractères, unique (les espaces aux extrémités ne comptent pas) |
-| Valeurs | uniquement des paramètres qui existent ; 64 au plus |
+| Valeurs | uniquement des paramètres qui existent  64 au plus |
 
 Renommer ou supprimer un paramètre le change dans tous les profils à la fois.
 
 ### Quelle valeur une exécution utilise {#precedence}
 
-La dernière gagne :
+La dernière gagne 
 
-1. la valeur par défaut du paramètre, dans l’onglet [[ui:exp.noProfile]] ;
-2. la valeur du profil actif, s’il en définit une ;
+1. la valeur par défaut du paramètre, dans l’onglet [[ui:exp.noProfile]] 
+2. la valeur du profil actif, s’il en définit une 
 3. une valeur saisie dans [[ui:exp.runWith]] pour cette exécution seulement — voir
    [exécuter avec d’autres valeurs](runs.md#run-with).
 
@@ -105,7 +105,7 @@ en dit la raison. Il n’empêche pas les exécutions avec le profil utilisé.
 
 ## Modèles {#templates}
 
-Le texte à l’intérieur de `{{ }}` est une expression ; tout le reste dans un champ est conservé
+Le texte à l’intérieur de `{{ }}` est une expression  tout le reste dans un champ est conservé
 exactement tel qu’écrit.
 
 ```text
@@ -113,11 +113,11 @@ exactement tel qu’écrit.
 Bearer {{secret.API_TOKEN}}
 ```
 
-- Les espaces à l’intérieur des accolades n’ont pas d’importance : `{{ token }}` est `{{token}}`.
+- Les espaces à l’intérieur des accolades n’ont pas d’importance  `{{ token }}` est `{{token}}`.
 - `\{{` écrit un `{{` littéral.
 - Un `}}` seul est du texte brut.
 - Une valeur est insérée telle quelle, sans guillemets. Dans un corps JSON, écrivez les
-  guillemets vous-même : `"id": "{{uuid}}"`.
+  guillemets vous-même  `"id": "{{uuid}}"`.
 
 ### Noms {#names}
 
@@ -131,7 +131,7 @@ Bearer {{secret.API_TOKEN}}
 | `{{name[0]}}` | un élément d’un tableau JSON |
 | `{{name["a b"]}}`, `{{name['a b']}}` | un champ dont le nom a d’autres caractères |
 
-Un nom de champ après `.` peut contenir des lettres, des chiffres, `_` et `-`. Les étapes s’enchaînent :
+Un nom de champ après `.` peut contenir des lettres, des chiffres, `_` et `-`. Les étapes s’enchaînent 
 `{{reply.args[0]}}`, `{{order.items[2].sku}}`.
 
 ### Comment les valeurs sont écrites {#value-text}
@@ -139,38 +139,42 @@ Un nom de champ après `.` peut contenir des lettres, des chiffres, `_` et `-`. 
 | Valeur | Écrite sous la forme |
 | --- | --- |
 | texte | le texte |
-| nombre | sa forme la plus courte : `42`, `0.5` |
+| nombre | sa forme la plus courte  `42`, `0.5` |
 | `true`, `false` | `true`, `false` |
 | `null` | `null` |
-| objet, tableau | JSON compact : `["x","y"]` |
+| objet, tableau | JSON compact  `["x","y"]` |
+
+Un champ, une fois ses valeurs écrites dedans, fait au plus 16 Mio  au-delà, l’étape
+échoue avec `template.too_large` — une grande valeur utilisée encore et encore ne peut pas
+en produire un sans limite.
 
 ### Valeurs intégrées {#built-ins}
 
 | Expression | Valeur |
 | --- | --- |
-| `{{run.id}}` | le numéro de tâche de l’exécution ; `0` dans l’aperçu et dans [[ui:exp.sendNow]] |
+| `{{run.id}}` | le numéro de tâche de l’exécution  `0` dans l’aperçu et dans [[ui:exp.sendNow]] |
 | `{{run.seed}}` | la graine de cette exécution |
 | `{{node.id}}` | l’identifiant du nœud en cours d’exécution |
 | `{{now}}` | l’heure actuelle, en millisecondes Unix |
-| `{{now.iso}}` | l’heure actuelle en UTC, ISO 8601 avec millisecondes : `2026-09-30T12:34:56.789Z` |
+| `{{now.iso}}` | l’heure actuelle en UTC, ISO 8601 avec millisecondes  `2026-09-30T12:34:56.789Z` |
 | `{{counter}}` | combien de fois ce nœud s’est exécuté dans cette exécution, cette fois comprise, à partir de 1 |
 
-`{{counter}}` compte par nœud : dans le corps d’une [Boucle](flow.md#loop) c’est le
+`{{counter}}` compte par nœud  dans le corps d’une [Boucle](flow.md#loop) c’est le
 numéro de l’itération, dans un nœud qui [répète](flow.md#repeat) le numéro de l’envoi.
-`run`, `node` et `now` n’ont que les champs listés ; tout autre est une erreur.
+`run`, `node` et `now` n’ont que les champs listés  tout autre est une erreur.
 
 ### Générateurs {#generators}
 
 | Expression | Valeur |
 | --- | --- |
 | `{{uuid}}` ou `{{uuid()}}` | un UUID de version 4 |
-| `{{random_int(min, max)}}` | un nombre entier de `min` à `max`, tous deux compris ; arguments entiers, `min` ≤ `max` |
-| `{{random_float(min, max)}}` | un nombre de `min` jusqu’à `max` exclu, avec 3 décimales ; `min` < `max` |
+| `{{random_int(min, max)}}` | un nombre entier de `min` à `max`, tous deux compris  arguments entiers, `min` ≤ `max` |
+| `{{random_float(min, max)}}` | un nombre de `min` jusqu’à `max` exclu, avec 3 décimales  `min` < `max` |
 | `{{random_float(min, max, digits)}}` | le même avec `digits` décimales, 0–9 |
 | `{{pick(a, b, c)}}` | l’un des arguments, au moins un |
 
 Les arguments sont séparés par des virgules. Un argument entre guillemets (`"dark blue"` ou `'a, b'`)
-peut contenir n’importe quoi sauf son propre guillemet ; un argument sans guillemets peut contenir des lettres,
+peut contenir n’importe quoi sauf son propre guillemet  un argument sans guillemets peut contenir des lettres,
 des chiffres et `_ - . : / +`. Un argument vide est une erreur.
 
 Chaque générateur tire de la graine de l’exécution. Les valeurs d’une exécution d’un
@@ -183,7 +187,7 @@ l’ordre de ses champs. `{{now}}` et `{{run.id}}` ne sont pas reproductibles. V
 ### Suggestions {#suggestions}
 
 Saisir `{{` dans un champ modélisable, ou appuyer sur <kbd>Ctrl</kbd>+<kbd>Space</kbd>,
-ouvre une liste en quatre groupes : [[ui:exp.suggest.params]] avec leurs valeurs,
+ouvre une liste en quatre groupes  [[ui:exp.suggest.params]] avec leurs valeurs,
 [[ui:exp.suggest.vars]] définies en amont de ce nœud avec le nœud qui les définit
 (les champs d’une réponse aussi, comme `reply.args[0]`), [[ui:exp.suggest.secrets]] et
 [[ui:exp.suggest.generators]]. <kbd>↑</kbd> et <kbd>↓</kbd> choisissent,
@@ -195,7 +199,7 @@ garde le champ.
 Un nom sans valeur ne devient jamais une chaîne vide. Avant une exécution, chaque
 nom qu’un champ utilise doit être un paramètre, un nom de secret valide, ou une variable définie
 sur **chaque** chemin qui mène au nœud. L’éditeur désigne le nœud et
-le champ :
+le champ 
 
 | Problème | Avant l’exécution | Pendant l’exécution |
 | --- | --- | --- |
@@ -212,8 +216,8 @@ Les textes de ces codes sont dans [Erreurs](../reference/errors.md).
 | Nœud | Champs modélisables |
 | --- | --- |
 | [[ui:exp.node.http]] | URL, noms et valeurs d’en-têtes, corps, le nom d’utilisateur et le mot de passe de Basic et Digest, le jeton Bearer |
-| [[ui:exp.node.osc]] | cible, adresse, arguments texte ; avec une réponse : son motif d’adresse et les valeurs de sa règle |
-| [[ui:exp.node.udp]] | cible, charge utile ; avec une réponse : son motif |
+| [[ui:exp.node.osc]] | cible, adresse, arguments texte  avec une réponse  son motif d’adresse et les valeurs de sa règle |
+| [[ui:exp.node.udp]] | cible, charge utile  avec une réponse  son motif |
 | [[ui:exp.node.tcp]] | hôte, charge utile |
 | [[ui:exp.node.mqtt]] | hôte du broker, topic, charge utile |
 | [[ui:exp.node.log]] | message |
@@ -231,29 +235,29 @@ Les textes de ces codes sont dans [Erreurs](../reference/errors.md).
 
 Les nombres — ports, délais d’attente, délais, statuts, nombres OSC typés — et les
 adresses d’écoute des attentes sont littéraux. Un [[ui:exp.node.emulator]] rend
-ses propres réponses avec ce qui est arrivé (`{{request.…}}`) et les paramètres ; voir
+ses propres réponses avec ce qui est arrivé (`{{request.…}}`) et les paramètres  voir
 [défaillances](faults.md#emulator).
 
 **Paramètres seulement.** Certains champs sont ouverts avant la première étape, quand aucune
-variable n’existe encore : le broker et le topic d’une [[ui:exp.node.wait_mqtt]], l’écoute et la cible d’un
+variable n’existe encore  le broker et le topic d’une [[ui:exp.node.wait_mqtt]], l’écoute et la cible d’un
 [[ui:exp.node.impairment]]. Ils n’acceptent que du texte et des paramètres,
 rien d’autre (`node.params_only`).
 
 **Vérifiés comme des littéraux.** Un champ qui n’utilise que des paramètres est résolu
-avant l’exécution et vérifié comme le texte que l’exécution enverra : une URL doit être
+avant l’exécution et vérifié comme le texte que l’exécution enverra  une URL doit être
 `http://` ou `https://`, une cible OSC `IP:port` ou `host:port`, un nom d’en-tête valide. Un champ
 avec des variables ou des générateurs est vérifié quand il s’exécute.
 
 ## Aperçu {#preview}
 
 Quand le nœud sélectionné a un modèle, ses propriétés montrent ce qu’il fera
-avec les valeurs connues maintenant : [[ui:exp.preview]] pour un envoi,
+avec les valeurs connues maintenant  [[ui:exp.preview]] pour un envoi,
 [[ui:exp.previewWait]] pour une attente, [[ui:exp.previewCheck]] pour une comparaison.
 Le moteur le résout, avec le même code qu’une exécution utilise, si bien que l’aperçu ne
 contredit jamais l’exécution.
 
 - Les paramètres viennent du profil actif.
-- Les variables viennent de ce que l’éditeur a vu dans cette session : les étapes de la dernière
+- Les variables viennent de ce que l’éditeur a vu dans cette session  les étapes de la dernière
   exécution, et [[ui:exp.sendNow]].
 - Un secret stocké s’affiche sous la forme `••••`.
 - Un nom sans valeur encore reste tel qu’écrit, et l’aperçu le liste. Un
@@ -269,13 +273,13 @@ chemin et l’écrit dans une variable.
 
 | Champ | Quoi |
 | --- | --- |
-| [[ui:exp.variable]] | la variable à écrire ; les règles de nommage des paramètres s’appliquent |
+| [[ui:exp.variable]] | la variable à écrire  les règles de nommage des paramètres s’appliquent |
 | [[ui:exp.extractFrom]] | d’où vient la valeur (ci-dessous) |
 | [[ui:exp.jsonPath]], [[ui:exp.headerName]] ou [[ui:exp.pattern]] | quoi lire, selon la source |
 
 | [[ui:exp.extractFrom]] | Lit | Valeur |
 | --- | --- | --- |
-| [[ui:exp.from.json]] | le corps en JSON, à un chemin | la valeur JSON : texte, nombre, objet, tableau |
+| [[ui:exp.from.json]] | le corps en JSON, à un chemin | la valeur JSON  texte, nombre, objet, tableau |
 | [[ui:exp.from.header]] | le premier en-tête portant ce nom, quelle que soit la casse | texte |
 | [[ui:exp.from.status]] | le code de statut | un nombre |
 | [[ui:exp.from.body]] | tout le corps | texte |
@@ -287,30 +291,30 @@ tout le corps.
 
 **Les expressions régulières** utilisent la syntaxe du moteur `regex` de Rust, qui n’a ni
 look-around ni rétroréférences. La correspondance est cherchée n’importe où dans le
-corps ; ancrez-la avec `^` et `$` quand cela compte.
+corps  ancrez-la avec `^` et `$` quand cela compte.
 
-L’étape échoue, en nommant ce qui manque, quand :
+L’étape échoue, en nommant ce qui manque, quand 
 
 - aucune requête HTTP ne s’est exécutée avant elle sur ce chemin (`check.no_response` ; l’éditeur
-  refuse déjà un graphe où aucune ne peut, `graph.needs_http`) ;
-- le corps n’est pas du JSON, ou le chemin ne s’y trouve pas ;
-- l’en-tête n’est pas là, ou le motif ne correspond pas ;
+  refuse déjà un graphe où aucune ne peut, `graph.needs_http`) 
+- le corps n’est pas du JSON, ou le chemin ne s’y trouve pas 
+- l’en-tête n’est pas là, ou le motif ne correspond pas 
 - le corps dépasse les 256 Kio qu’une réponse conserve, pour un chemin JSON ou tout le
   corps, et pour un motif qui n’a rien trouvé dans la partie conservée
   (`extract.truncated`).
 
-La chronologie affiche la valeur écrite : `token = abc123`.
+La chronologie affiche la valeur écrite  `token = abc123`.
 
 ::: tip Extraire en cliquant
 [[ui:exp.sendNow]] sur un [[ui:exp.node.http]] montre sa réponse JSON. Cliquez sur une
-valeur : un nœud [[ui:exp.node.extract]] est ajouté après la requête, avec
+valeur  un nœud [[ui:exp.node.extract]] est ajouté après la requête, avec
 le chemin rempli et un nom pris de la clé, et la valeur est connue de
 l’aperçu aussitôt.
 :::
 
 ## Variables {#variables}
 
-Une variable contient une valeur JSON. Ces nœuds en écrivent une :
+Une variable contient une valeur JSON. Ces nœuds en écrivent une 
 
 | Nœud | Écrit | En sortie |
 | --- | --- | --- |
@@ -318,7 +322,7 @@ Une variable contient une valeur JSON. Ces nœuds en écrivent une :
 | [[ui:exp.node.wait_osc]], [[ui:exp.node.wait_udp]], [[ui:exp.node.wait_mqtt]], [[ui:exp.node.wait_http]], [[ui:exp.node.wait_ws]] | ce qui est arrivé, nom par défaut `reply` (`request` pour HTTP) | [[ui:exp.portMatched]] seulement |
 | [[ui:exp.node.osc]], [[ui:exp.node.udp]] avec [[ui:exp.expectReply]] | la réponse, nom par défaut `reply` | sa sortie |
 
-Ce qu’une attente écrit est un objet ; les champs suivants en lisent les parties :
+Ce qu’une attente écrit est un objet  les champs suivants en lisent les parties 
 
 | Attente | Champs |
 | --- | --- |
@@ -334,11 +338,11 @@ exact est dans [la référence des nœuds](nodes.md).
 ### Où une variable est connue {#visibility}
 
 Une variable existe à partir de la sortie qui l’écrit, sur les chemins qui
-passent par cette sortie :
+passent par cette sortie 
 
 - Après une fusion de chemins alternatifs — le [[ui:exp.yes]] et le [[ui:exp.no]]
   d’une branche qui se rejoignent — seul ce que **chaque** chemin définit est connu.
-- Après [[ui:exp.node.join]], ce que **n’importe quelle** branche y entrant définit est connu : toutes
+- Après [[ui:exp.node.join]], ce que **n’importe quelle** branche y entrant définit est connu  toutes
   se sont exécutées.
 - Après le [[ui:exp.portDone]] ou le [[ui:exp.portLimit]] d’une [[ui:exp.node.loop]],
   et dans sa condition de sortie, ce que chaque itération du corps définit est connu.
@@ -351,11 +355,11 @@ définissent, si bien que le résultat ne dépend jamais de la branche qui a fin
 
 ## Comparer des valeurs {#compare}
 
-[[ui:exp.node.assert_value]] fait échouer l’exécution quand une comparaison ne tient pas ;
-[[ui:exp.node.branch_value]] sort par [[ui:exp.yes]] ou [[ui:exp.no]] ;
+[[ui:exp.node.assert_value]] fait échouer l’exécution quand une comparaison ne tient pas 
+[[ui:exp.node.branch_value]] sort par [[ui:exp.yes]] ou [[ui:exp.no]] 
 une [[ui:exp.node.loop]] utilise la même comparaison comme condition de sortie. Chacun a
 une [[ui:exp.value]], un [[ui:exp.operator]] et une valeur [[ui:exp.expected]], et
-les deux textes sont des modèles :
+les deux textes sont des modèles 
 
 | [[ui:exp.value]] | [[ui:exp.operator]] | [[ui:exp.expected]] |
 | --- | --- | --- |
@@ -365,19 +369,19 @@ les deux textes sont des modèles :
 | [[ui:exp.operator]] | Tient quand |
 | --- | --- |
 | [[ui:exp.op.eq]], [[ui:exp.op.ne]] | les deux sont égaux (différents) — comme nombres quand les deux sont des nombres (`200` égale `200.0`), sinon comme texte exact, casse comprise |
-| [[ui:exp.op.lt]], [[ui:exp.op.le]], [[ui:exp.op.gt]], [[ui:exp.op.ge]] | comme nombres ; un côté qui n’est pas un nombre fait échouer l’étape (`compare.not_numbers`) au lieu d’un *non* discret |
+| [[ui:exp.op.lt]], [[ui:exp.op.le]], [[ui:exp.op.gt]], [[ui:exp.op.ge]] | comme nombres  un côté qui n’est pas un nombre fait échouer l’étape (`compare.not_numbers`) au lieu d’un *non* discret |
 | [[ui:exp.op.contains]] | la valeur contient le texte attendu, casse comprise |
 | [[ui:exp.op.matches]] | l’expression régulière dans la valeur attendue correspond n’importe où dans la valeur |
-| [[ui:exp.op.empty]], [[ui:exp.op.not_empty]] | la valeur est vide, ou non, après suppression des espaces ; la valeur attendue n’est pas utilisée |
+| [[ui:exp.op.empty]], [[ui:exp.op.not_empty]] | la valeur est vide, ou non, après suppression des espaces  la valeur attendue n’est pas utilisée |
 
-Un nombre est du texte qui se lit comme tel après suppression des espaces : `42`, `-1.5`,
+Un nombre est du texte qui se lit comme tel après suppression des espaces  `42`, `-1.5`,
 `1e3`. La chronologie montre la comparaison telle que faite, `401 = 200`, chaque côté coupé
 à 120 caractères.
 
 ## Secrets {#secrets}
 
 Un jeton ou un mot de passe entre dans un champ sous la forme `{{secret.NAME}}`. Le fichier
-d’expérience ne garde que le nom ; la valeur reste où elle est stockée et n’atteint jamais
+d’expérience ne garde que le nom  la valeur reste où elle est stockée et n’atteint jamais
 l’interface.
 
 ### Où vivent les secrets {#secret-stores}
@@ -385,17 +389,17 @@ l’interface.
 | Où Signal Lab s’exécute | Magasin | Depuis l’interface |
 | --- | --- | --- |
 | Application de bureau sous Windows | le Gestionnaire d’identification Windows, sous le service `SignalLab`, une entrée par nom | définir, remplacer, supprimer |
-| Application de bureau sous Linux | aucun : une exécution qui a besoin d’un secret échoue avec `secret.unsupported` | — |
+| Application de bureau sous Linux | aucun  une exécution qui a besoin d’un secret échoue avec `secret.unsupported` | — |
 | Serveur | la variable d’environnement `SIGNALLAB_SECRET_<NAME>`, sinon le fichier `<NAME>` dans son dossier de secrets, `/run/secrets/signallab` sauf indication contraire | lecture seule |
 | `signallab` en ligne de commande | comme un serveur, ou le Gestionnaire d’identification Windows avec `--secrets system` | — |
 
 L’en-tête de la section [[ui:exp.secrets]] a une info-bulle qui dit laquelle de
-ces situations s’applique là où vous êtes : le magasin Windows, l’environnement et les
+ces situations s’applique là où vous êtes  le magasin Windows, l’environnement et les
 fichiers du serveur, ou — dans l’application de bureau sous Linux — qu’il n’y a pas de magasin. Là,
 `secret.unsupported` dit que les secrets sont conservés dans le Gestionnaire d’identification
 Windows, que le système n’a pas.
 
-Un secret appartient à l’ordinateur ou au serveur, pas à une expérience : deux
+Un secret appartient à l’ordinateur ou au serveur, pas à une expérience  deux
 expériences qui utilisent `{{secret.API_TOKEN}}` utilisent la même valeur.
 
 Sur un serveur, la variable d’environnement l’emporte sur le fichier. Le saut de ligne
@@ -411,7 +415,7 @@ voir [le serveur](../server/index.md). Pour la ligne de commande, voir
 
 ### Définir un secret {#set-secret}
 
-Sous Windows :
+Sous Windows 
 
 1. Ouvrez [[ui:exp.params]]. La section [[ui:exp.secrets]] liste chaque secret
    que les champs de l’expérience utilisent, chacun [[ui:exp.secretStored]] ou
@@ -419,15 +423,15 @@ Sous Windows :
 2. Appuyez sur [[ui:exp.secretSet]] à côté du nom, ou sur [[ui:exp.addSecret]] pour un
    nom qu’aucun champ n’utilise encore.
 3. Saisissez la valeur — le champ affiche des points — et appuyez sur [[ui:exp.secretSave]] ou
-   <kbd>Enter</kbd>. Le champ est vidé ; rien ne peut relire la valeur.
+   <kbd>Enter</kbd>. Le champ est vidé  rien ne peut relire la valeur.
 
 [[ui:exp.secretReplace]] stocke une nouvelle valeur et [[ui:exp.secretRemove]]
 la supprime du magasin d’identifiants. Un nom stocké dans cette session est aussi proposé
 dans les suggestions.
 
 Dans un navigateur connecté à un serveur, la section dit seulement
-[[ui:exp.secretOnServer]] ou [[ui:exp.secretNotOnServer]] : définissez la valeur là où
-le serveur tourne, de l’une des deux façons suivantes :
+[[ui:exp.secretOnServer]] ou [[ui:exp.secretNotOnServer]]  définissez la valeur là où
+le serveur tourne, de l’une des deux façons suivantes 
 
 ```bash
 # in the server's environment
@@ -437,7 +441,7 @@ printf '%s' '…' > /run/secrets/signallab/API_TOKEN
 ```
 
 Un fichier est lu chaque fois qu’une exécution démarre, donc un fichier modifié compte à partir de
-l’exécution suivante ; une variable d’environnement modifiée nécessite un redémarrage du serveur.
+l’exécution suivante  une variable d’environnement modifiée nécessite un redémarrage du serveur.
 
 ### Avant une exécution {#secret-check}
 
@@ -448,22 +452,24 @@ avant tout trafic, au premier nœud et champ qui l’utilisent
 ### Masquage {#masking}
 
 Pendant qu’une exécution ou un [[ui:exp.sendNow]] utilise des secrets, chaque occurrence de leurs
-valeurs est remplacée par `••••` dans tout ce qui quitte le moteur :
+valeurs est remplacée par `••••` dans tout ce qui quitte le moteur 
 
-- les textes des étapes, les erreurs et les variables qu’une étape a écrites ;
-- le rapport d’exécution ;
-- le résultat de [[ui:exp.sendNow]], la réponse HTTP qu’il affiche comprise ;
+- les textes des étapes, les erreurs et les variables qu’une étape a écrites 
+- le rapport d’exécution 
+- le résultat de [[ui:exp.sendNow]], la réponse HTTP qu’il affiche comprise 
 - les trames de l’[[ui:dock.inspector]], capturées pendant que l’exécution dure — dans un
   vidage hexadécimal, chaque octet d’une valeur devient `*`, pour que les décalages restent exacts.
 
-L’authentification Basic envoie `name:password` en base64 ; quand l’une des deux parties contient un
-secret, ce texte base64 est masqué aussi. Le trafic lui-même transporte la vraie
-valeur. L’aperçu montre un secret stocké sous la forme `••••`. Les réponses d’un
+L’authentification Basic envoie `name:password` en base64  quand l’une des deux parties contient un
+secret, ce texte base64 est masqué aussi. Les formes qu’une requête et un serveur qui
+la répercute donnent à une valeur le sont aussi  encodée en pourcents comme dans une
+URL ou un formulaire, avec le `+` d’une requête relu comme une espace, et échappée dans
+du JSON. Le trafic lui-même transporte la vraie valeur. L’aperçu montre un secret stocké sous la forme `••••`. Les réponses d’un
 [[ui:exp.node.emulator]] ne peuvent pas utiliser de secrets.
 
 ## Commandes {#commands}
 
-L’aperçu est [`experiment_resolve`](../api/commands.md#experiment_resolve) ;
+L’aperçu est [`experiment_resolve`](../api/commands.md#experiment_resolve) 
 les secrets sont listés, définis et supprimés avec
 [`secret_status`](../api/commands.md#secret_status),
 [`secret_set`](../api/commands.md#secret_set) et

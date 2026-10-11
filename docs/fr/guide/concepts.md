@@ -72,8 +72,8 @@ l'affiche dans une seule chronologie.
 - La capture est **désactivée jusqu'à ce que vous l'activiez** avec [[ui:ins.arm]], et ne coûte rien tant qu'elle est
   désactivée. Elle reste active, quel que soit l'écran où vous êtes, jusqu'à ce que vous la désactiviez.
 - Elle conserve jusqu'à 8192 trames et 64 Mio de leurs octets ; les trames les plus anciennes font de la place aux
-  nouvelles. Chaque trame garde jusqu'à 256 Kio de ses octets, et la liste affiche son premier
-  Kio.
+  nouvelles. Chaque trame garde jusqu'à 256 Kio de ses octets, et la liste affiche ses 256
+  premiers octets.
 - [[ui:ins.pause]] empêche la liste de bouger pour que vous puissiez la lire ; la capture continue
   en dessous.
 - Les valeurs secrètes utilisées par une exécution sont masquées dans chaque trame.

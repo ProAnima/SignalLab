@@ -19,7 +19,8 @@ la detección de intrusiones y a menudo va contra las normas.
 
 ## Escanear un host {#scan}
 
-1. Introduce el [[ui:sc.host]]: un host, una dirección IP o un nombre.
+1. Introduce el [[ui:sc.host]]: un host, una dirección IP o un nombre. Un nombre se resuelve una vez, cuando empieza el
+   escaneo; uno que no resuelve lo detiene ahí, con el motivo.
 2. Define [[ui:sc.fromPort]] y [[ui:sc.toPort]], o elige un [[ui:sc.preset]].
 3. Ajusta [[ui:common.concurrency]] y [[ui:common.timeoutMs]] si lo necesitas.
 4. Deja [[ui:sc.grabBanner]] activado para leer lo que dice primero cada
@@ -35,7 +36,7 @@ Los campos quedan fijos mientras funciona.
 | Campo | Qué | Predeterminado |
 | --- | --- | --- |
 | [[ui:sc.host]] | El host que escanear. | `127.0.0.1` |
-| [[ui:sc.fromPort]], [[ui:sc.toPort]] | El intervalo, ambos extremos incluidos, 1–65 535. Cuando el primero es mayor, se intercambian. | 1–1024 |
+| [[ui:sc.fromPort]], [[ui:sc.toPort]] | El intervalo, ambos extremos incluidos, 1–65 535: un número escrito más allá de cualquiera de los extremos se queda en él. Cuando el primero es mayor, se intercambian. | 1–1024 |
 | [[ui:common.concurrency]] | Cuántos intentos de conexión están abiertos a la vez, 1–1024. | 400 |
 | [[ui:common.timeoutMs]] | Cuánto esperar por cada conexión, 50–10 000 ms. | 500 |
 | [[ui:sc.grabBanner]] | Después de conectar, espera hasta 400 ms a que el servicio envíe algo y conserva sus primeros 256 bytes. | activado |
@@ -58,7 +59,8 @@ Un puerto que acepta responde de inmediato. Un puerto que no, puede costar hasta
 todo el tiempo de espera: un firewall que descarta los intentos de conexión nunca
 responde, y en Windows incluso un rechazo puede tardar más que el tiempo de
 espera predeterminado. Así que un escaneo de un host que no responde nada tarda
-aproximadamente:
+aproximadamente (en Windows un puerto rechazado tarda unos 2 s, porque Windows lo
+reintenta, así que allí decide el tiempo de espera):
 
 ```text
 ports ÷ concurrency × timeout
@@ -80,15 +82,29 @@ los puertos abiertos de un host lento se pasan por alto.
 | [[ui:sc.banner]] | Lo que envió primero el servicio, con los saltos de línea convertidos en espacios, o `—`. |
 
 Un puerto que rechazó y uno que no respondió dentro del tiempo de espera se dejan
-ambos fuera: el escáner no distingue cerrado de filtrado. La lista conserva hasta
-2000 puertos abiertos.
+ambos fuera: el escáner no distingue cerrado de filtrado. La lista conserva todos los
+puertos abiertos, sean cuantos sean.
+
+Lo habitual son pocos puertos abiertos: un PC con Windows suele escuchar en el 135 y el
+445 (y el 139 en su dirección de red) entre los primeros mil puertos, y la mayoría de los
+dispositivos en un puñado. Para comparar, lista lo que este equipo escucha con
+`netstat -an` (o `Get-NetTCPConnection -State Listen` en PowerShell).
+
+### Puertos sin comprobar {#unchecked}
+
+Cada conexión usa uno de los puertos propios de este equipo. Cuando se queda sin ellos —
+o sin sockets — un intento falla aquí, antes de llegar al host; el escáner espera y lo
+vuelve a intentar, y un puerto que aun así no puede probar se cuenta como *sin comprobar*,
+se muestra en ámbar junto al recuento de abiertos, y nunca como cerrado. Si lo ves,
+escanea de nuevo con una [[ui:common.concurrency]] más baja.
 
 Solo los servicios que hablan primero tienen un banner — SSH, SMTP, FTP, muchos
 protocolos de control de dispositivos. Un servidor web espera una solicitud, así
 que su puerto muestra `—`. Capturar banners hace que cada puerto abierto tarde
 hasta 400 ms más.
 
-Una conexión que el escáner abre se cierra inmediatamente. El escáner no envía
+Una conexión que el escáner abre se cierra inmediatamente, con un restablecimiento, para
+que no retenga el puerto de este equipo durante minutos. El escáner no envía
 nada por ella.
 
 Con la captura activada, cada puerto abierto está también en el

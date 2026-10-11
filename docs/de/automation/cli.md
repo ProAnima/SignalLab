@@ -491,7 +491,8 @@ Eine OSC-Nachricht. Argumente werden mit einem Präfix typisiert oder abgeleitet
 | `T`, `F` | wahr, falsch |
 | `N` | nil |
 | `3`, `-3` | eine ganze Zahl ohne Präfix ist int32 |
-| `2.5` | eine Dezimalzahl ohne Präfix ist float32 |
+| `3000000000` | eine ganze Zahl über 32 Bit hinaus ist int64 |
+| `2.5`, `1e3` | eine Dezimalzahl oder eine Zahl mit Exponent ist float32 (float64 jenseits des Bereichs von float32) |
 | alles andere | Zeichenkette |
 
 ```bash

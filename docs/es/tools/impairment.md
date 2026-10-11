@@ -156,11 +156,12 @@ Sobre UDP:
 | [[ui:ns.received]] | Datagramas que llegaron al relé. |
 | [[ui:ns.forwarded]] | Datagramas reenviados; uno duplicado cuenta dos veces. |
 | [[ui:ns.dropped]] | Perdidos a propósito: sin conexión, una ráfaga o pérdida. |
-| [[ui:ns.throttled]] | Descartados por el límite de ancho de banda, o porque ya iban 10 000 de camino. |
+| [[ui:ns.throttled]] | Descartados por el límite de ancho de banda, o porque ya iban 10 000 — o 64 MB — de camino. |
 | [[ui:ns.duplicated]] | Datagramas enviados dos veces. |
 | [[ui:ns.corrupted]] | Copias con un bit invertido. |
 | [[ui:ns.reordered]] | Copias retenidas para que otras posteriores las adelantaran. |
 | [[ui:common.volume]] | Bytes reenviados. |
+| [[ui:ns.notRelayed]] | Se muestra en cuanto hay alguno: datagramas que el sistema no quiso enviar. Nunca es obra del perfil. |
 
 Sobre TCP:
 
@@ -169,10 +170,18 @@ Sobre TCP:
 | [[ui:ns.connections]] | Conexiones que los clientes hicieron al relé. |
 | [[ui:ns.received]] | Fragmentos que leyó el relé, en ambos sentidos. |
 | [[ui:ns.forwarded]] | Fragmentos que reenvió. |
+| [[ui:ns.refused]] | Conexiones que el destino rechazó o no respondió; el cliente recibió un restablecimiento. |
 | [[ui:ns.resets]] | Conexiones restablecidas. |
 | [[ui:ns.stalled]] | Conexiones que quedaron semiabiertas. |
-| [[ui:ns.held]] | Cuántas veces un flujo esperó por el límite de ancho de banda: el emisor se ralentizó, no se descartó nada. |
+| [[ui:ns.held]] | Cuántas veces un flujo esperó por el límite de ancho de banda: el emisor se ralentizó, no se descartó nada. Un relé también retiene como máximo 64 MB de camino, todas las conexiones juntas, y espera igual pasado ese punto. |
 | [[ui:common.volume]] | Bytes reenviados. |
+| [[ui:ns.notRelayed]] | Se muestra en cuanto hay alguno: conexiones que este equipo no pudo hacer al destino — sin puerto local ni socket libre, ni siquiera tras dos segundos de intentarlo — y conexiones por encima de 1 024 a la vez. Cada una recibió un restablecimiento. Nunca es la respuesta del destino. |
+
+Un relé que cierra su lado de una conexión primero conserva un puerto local durante un par de
+minutos después (el TIME_WAIT del sistema), como cualquier programa. Muchos cientos de
+conexiones cortas por segundo a través de un relé agotan los puertos de este equipo; el relé
+entonces espera y lo vuelve a intentar, y lo que aun así no puede salir se cuenta en
+[[ui:ns.notRelayed]], nunca se hace pasar por un rechazo del destino.
 
 Con la captura activada, el [Inspector](inspector.md) muestra los datagramas y
 fragmentos retransmitidos —como máximo uno cada 25 ms, los dos sentidos juntos—,

@@ -34,7 +34,9 @@ websocat -H "Authorization: Bearer $TOKEN" ws://127.0.0.1:1430/api/events
   사라집니다. 다시 연결한 클라이언트는 명령(`jobs_list`, `inspect_snapshot`,
   `emulator_exchanges`…)으로 현재 상태를 읽어야 합니다.
 - **뒤처짐.** 소켓 하나에 최대 4096개의 이벤트가 대기합니다. 그보다 더 뒤처지는 클라이언트는
-  얼마나 놓쳤는지와 함께 [`server://lagged`](#event-server-lagged)를 받습니다.
+  얼마나 놓쳤는지와 함께 [`server://lagged`](#event-server-lagged)를 받습니다. 아예 읽기를 멈춘
+  클라이언트 — 10초 동안 아무것도 받아 가지 않는 경우 — 는 연결이 끊기며, 다시 연결해서 상태를
+  다시 읽으십시오.
 
 ## 메시지 형식 {#format}
 
@@ -61,7 +63,8 @@ websocat -H "Authorization: Bearer $TOKEN" ws://127.0.0.1:1430/api/events
 | [`experiment://step`](#event-experiment-step) | 실행 | 단계가 시작, 통과, 실패, 재시도, 반복되거나 부하를 보고할 때 |
 | [`experiment://ended`](#event-experiment-ended) | 실행 | 실행이 스스로 끝났을 때 한 번 |
 | [`job://ended`](#event-job-ended) | 모든 작업 | 작업이 스스로 끝나거나 실패했을 때 한 번 |
-| [`osc://message`](#event-osc-message) | OSC 모니터 | 패킷마다 |
+| [`osc://message`](#event-osc-message) | OSC 모니터 | 패킷마다, 폭주 시에는 초당 200개로 샘플링 |
+| [`osc://monitor-stat`](#event-osc-monitor-stat) | OSC 모니터 | 250 ms마다, 그리고 끝날 때 |
 | [`osc://gen-tick`](#event-osc-gen-tick) | OSC 발생기 | 메시지마다, 초당 60개를 넘으면 초당 30~45번 |
 | [`http://burst-progress`](#event-http-burst-progress) | HTTP 버스트 | 100 ms마다, 그리고 끝날 때 |
 | [`ws://state`](#event-ws-state) | WebSocket 연결 | 연결됨, 닫힘 |
@@ -98,6 +101,7 @@ websocat -H "Authorization: Bearer $TOKEN" ws://127.0.0.1:1430/api/events
 | `error` | `EngineError` | 실패한 이유, 또는 시도가 실패한 이유(`retry`). 아니면 빠짐 |
 | `frame` | number | 캡처가 켜져 있었을 때 대기(또는 전송의 예상 회신)가 일치시킨 메시지의 인스펙터 프레임. 아니면 빠짐 |
 | `load` | object | 부하가 측정한 것과 읽은 임계값 — 부하 단계의 마지막 이벤트에, 통과 또는 실패와 함께. 아니면 빠짐. [부하](../experiments/load.md) 참고 |
+| `omitted` | number | 이 단계 바로 앞에서 생략된 단계의 수. 없으면 빠짐. 실행은 처음 5 000개 단계를 하나씩 보고하고, 그 뒤로는 초당 하나(와 모든 실패)를, 끝날 때는 마지막 500개를 보고합니다 — 그래서 천 번 도는 Loop도 읽을 만하게 유지됩니다 |
 
 실행의 [[ui:exp.node.end]] 노드는 첫 분기가 도달하면 `running`을, 모든 분기가 실패 없이
 끝나면 `passed`를 표시합니다. 시크릿 값은 모든 필드에서 가려집니다.
@@ -150,7 +154,10 @@ websocat -H "Authorization: Bearer $TOKEN" ws://127.0.0.1:1430/api/events
 
 ### `osc://message` {#event-osc-message}
 
-OSC 모니터가 받은 UDP 패킷 하나를 디코딩한 것입니다. 묶지 않고 패킷마다 전송됩니다.
+OSC 모니터가 받은 UDP 패킷 하나를 디코딩한 것입니다. 폭주가 인터페이스로 가는 링크를 가득 채우지
+못하도록 디코딩된 패킷은 초당 최대 200개 이벤트로 샘플링됩니다
+([`osc://monitor-stat`](#event-osc-monitor-stat)가 몇 개를 받았고 몇 개를 전달하지 않았는지
+알려 줍니다). 형식이 잘못된 패킷은 항상 전송됩니다.
 
 | 필드 | 형식 | 의미 |
 | --- | --- | --- |
@@ -160,6 +167,20 @@ OSC 모니터가 받은 UDP 패킷 하나를 디코딩한 것입니다. 묶지 �
 | `bytes` | number | 패킷의 크기 |
 | `messages` | object[] | 패킷의 각 메시지(번들은 여러 개): `address`와 `args` ([`OscArg`](commands.md#type-oscarg)`[]`) |
 | `error` | `EngineError` 또는 null | 패킷이 디코딩되지 않았을 때 `osc.packet_malformed`(이때 `messages`는 비어 있음) |
+
+### `osc://monitor-stat` {#event-osc-monitor-stat}
+
+OSC 모니터의 누적 합계입니다. 250 ms마다, 그리고 끝날 때 한 번 더 전송되어, 샘플링된 목록이
+얼마만큼의 트래픽을 대표하는지 보여 줍니다.
+
+| 필드 | 형식 | 의미 |
+| --- | --- | --- |
+| `job_id` | number | 모니터의 작업 |
+| `ts` | number | 시각 |
+| `packets` | number | 받은 패킷, 디코딩되었든 아니든 |
+| `bytes` | number | 받은 바이트 |
+| `not_shown` | number | 받았지만 [`osc://message`](#event-osc-message)로 전달하지 않은 패킷(속도 샘플링이 붙잡음) |
+| `malformed` | number | OSC로 디코딩되지 않은 패킷 |
 
 ### `osc://gen-tick` {#event-osc-gen-tick}
 
@@ -183,8 +204,9 @@ HTTP 버스트의 숫자입니다. 실행되는 동안 100 ms마다, 스스로 �
 | `job_id` | number | 버스트의 작업 |
 | `ts` | number | 시각 |
 | `sent` | number | 지금까지 응답받거나 실패한 요청 |
-| `ok` | number | 그중 2xx 상태로 응답받은 요청 |
-| `failed` | number | 그중 그 밖의 상태이거나 응답이 없는 요청 |
+| `ok` | number | 그중 2xx 상태로, 본문 전체와 함께 응답받은 요청 |
+| `failed` | number | 그중 그 밖의 상태이거나, 본문이 중간에 끊겼거나, 응답이 없는 요청 — 이 컴퓨터가 보내지 못한 것은 결코 아님 |
+| `local` | number | 그중 이 컴퓨터가 보내지 못한 요청: 소켓이나 로컬 포트가 바닥났음(`transport.exhausted`). `failed`에도 지연 시간에도 들어가지 않음 |
 | `missed` | number | 속도를 맞춘 버스트에서 빈 워커를 너무 오래 기다려 건너뛴 요청 |
 | `rps` | number | 지난 100 ms 동안의 초당 요청. 마지막 이벤트에서는 버스트 전체 기준 |
 | `last_latency_ms`, `min_latency_ms`, `max_latency_ms`, `avg_latency_ms` | number | 지금까지의 지연 시간 |
@@ -213,8 +235,9 @@ WebSocket 연결이 마지막 이벤트 이후 보내고 받은 것입니다. �
 | --- | --- | --- |
 | `job_id` | number | 연결의 작업 |
 | `ts` | number | 시각 |
-| `messages` | object[] | 순서대로: `ts`, `dir`(`rx` 받음, `tx` 보냄), `kind`(`text` 또는 `binary`), `text`(처음 64 KiB를 UTF-8로, 바이너리 메시지도 마찬가지. 아닌 바이트는 `�`가 됨), `hex`(바이너리 메시지의 처음 4096바이트를 hex로, 아니면 null), `bytes`(전체 크기), `truncated`(보여 준 것보다 많음: 텍스트 64 KiB 초과, 바이너리 4096바이트 초과) |
-| `dropped` | number | 2000개를 넘어 이 이벤트에서 빠진 메시지. 가장 오래된 것부터 |
+| `messages` | object[] | 순서대로: `ts`, `dir`(`rx` 받음, `tx` 보냄), `kind`(`text` 또는 `binary`), `text`(처음 64 KiB를 UTF-8로, 바이너리 메시지는 처음 4096바이트를. UTF-8이 아닌 바이트는 `�`가 됨), `hex`(바이너리 메시지의 처음 4096바이트를 hex로, 아니면 null), `bytes`(전체 크기), `truncated`(보여 준 것보다 많음: 텍스트 64 KiB 초과, 바이너리 4096바이트 초과) |
+| `dropped` | number | 2000개를 넘거나 `text`와 `hex`가 합쳐 1 MiB를 넘어 이 이벤트에서 빠진 메시지. 가장 오래된 것부터 |
+| `received`, `sent` | number | 지금까지 연결에서 받은 메시지와 보낸 메시지, 표시했든 아니든 |
 
 ### `mqtt://state` {#event-mqtt-state}
 
@@ -238,8 +261,8 @@ MQTT 연결이 마지막 이벤트 이후 받은 것입니다. 뭔가 있을 때
 | --- | --- | --- |
 | `job_id` | number | 연결의 작업 |
 | `ts` | number | 시각 |
-| `messages` | object[] | `ts`, `topic`, `payload`(UTF-8로. 아닌 바이트는 `�`가 됨), `bytes`, `qos`, `retain`, `dup` |
-| `dropped` | number | 100 ms 동안 4000개가 넘게 도착해 빠진 메시지. 가장 오래된 것부터 |
+| `messages` | object[] | 토픽마다 하나, 그 토픽에 도착한 가장 최근 것: `ts`, `topic`, `payload`(처음 4096바이트를 UTF-8로. 아닌 바이트는 `�`가 됨), `bytes`(페이로드 전체의 크기), `truncated`(`payload`가 시작 부분뿐임), `qos`, `retain`, `dup`, 그리고 `count`(지난 이벤트 이후 그 토픽의 메시지 수, 이번 것 포함) |
+| `dropped` | number | 항상 0: 이벤트가 토픽 4000개 또는 페이로드 2 MiB를 넘게 담게 되면, 연결은 그것이 나갈 때까지 읽기를 멈추고 브로커가 기다립니다 |
 
 ### `mqtt://ack` {#event-mqtt-ack}
 
@@ -265,6 +288,7 @@ MQTT 연결이 마지막 이벤트 이후 받은 것입니다. 뭔가 있을 때
 | `rounds` | number | 보낸 라운드 |
 | `packets`, `bytes` | number | 보낸 데이터그램과 바이트 |
 | `errors` | number | 실패한 전송 |
+| `local` | number | 이 컴퓨터가 보내지 못한 전송(버퍼나 소켓 부족). `errors`에는 들어가지 않음. 0이면 빠짐 |
 | `pps` | number | 지난 250 ms 동안의 초당 데이터그램 |
 
 ### `broadcast://peers` {#event-broadcast-peers}
@@ -278,6 +302,8 @@ MQTT 연결이 마지막 이벤트 이후 받은 것입니다. 뭔가 있을 때
 | `peers` | object[] | 가장 최근에 들은 것부터: `addr`, `proto`, `packets`, `bytes`, `first_ms`, `last_ms`, `last_summary`, `responded`(응답한 패킷, 도착하는 대로 집계). 최대 512개 |
 | `packets`, `bytes` | number | 받은 모든 것 |
 | `responses` | number | 보낸 응답 |
+| `unlisted` | number | 표가 담는 512개를 넘은 서로 다른 피어: 여기에 세고 `peers`에는 없음 |
+| `replies_skipped` | number | 자동 회신이 이미 너무 많이(1024개) 진행 중이어서 응답하지 않은 프로브 — 프로브 폭주가 끝없이 증폭되는 것을 막는 상한 |
 
 ### `netsim://stat` {#event-netsim-stat}
 
@@ -294,6 +320,8 @@ MQTT 연결이 마지막 이벤트 이후 받은 것입니다. 뭔가 있을 때
 | `duplicated`, `corrupted`, `reordered` | number | 프로필이 그것들에 한 일 |
 | `bytes` | number | 전달한 바이트 |
 | `connections`, `reset`, `stalled` | number | TCP: 받은 연결, 리셋한 연결, 반쯤 열어 둔 연결. 0이면 빠짐 |
+| `refused` | number | TCP: 대상이 거부했거나 응답하지 않아 클라이언트에 리셋으로 전달한 연결. 0이면 빠짐 |
+| `failed` | number | 이 컴퓨터가 전달하지 못한 것: 시스템이 보내 주지 않은 데이터그램, 로컬 포트나 소켓이 없어 연결하지 못한 연결(먼저 약 2초 동안 다시 시도함), 또는 릴레이의 동시 1 024개 연결을 넘은 연결. 0이면 빠짐 |
 | `profile` | string | 지금 장애를 주는 프로필, 타임라인이 부르는 대로: 이름, 또는 하는 일(`60 ms ±25 · loss 2%`) |
 
 ### `storm://stat` {#event-storm-stat}
@@ -306,7 +334,8 @@ MQTT 연결이 마지막 이벤트 이후 받은 것입니다. 뭔가 있을 때
 | `job_id` | number | 스톰의 작업 |
 | `ts` | number | 시각 |
 | `packets`, `bytes` | number | 보낸 데이터그램(또는 TCP 연결)과 바이트 |
-| `errors` | number | 실패한 전송 또는 연결 |
+| `errors` | number | 목적지가 거부했거나 리셋했거나 응답하지 않은 전송 또는 연결 |
+| `local` | number | 이 컴퓨터가 보내지 못한 단위 — 로컬 포트, 소켓, 버퍼가 바닥났으며 목적지가 거부한 것이 아님. `errors`로는 결코 세지 않음 |
 | `pps` | number | 지난 250 ms 동안의 초당 |
 | `mbps` | number | 지난 250 ms 동안의 초당 메가비트 |
 
@@ -333,6 +362,7 @@ MQTT 연결이 마지막 이벤트 이후 받은 것입니다. 뭔가 있을 때
 | `done` | number | 시도한 포트 |
 | `total` | number | 범위의 포트 |
 | `open` | number | 찾은 열린 포트 |
+| `unchecked` | number | 이 컴퓨터가 시도하지 못한 포트(로컬 포트나 소켓이 바닥남)로, 열림도 닫힘도 아님. 보통은 0 |
 
 ### `emulator://activity` {#event-emulator-activity}
 
@@ -345,7 +375,7 @@ MQTT 연결이 마지막 이벤트 이후 받은 것입니다. 뭔가 있을 때
 | --- | --- | --- |
 | `job_id` | number | 에뮬레이터의 작업 |
 | `ts` | number | 시각 |
-| `counts` | object | `total`, `unmatched`, `failed`, `down`, `hits`(규칙별), `missed`(MQTT. 0이면 빠짐) — [`emulator_exchanges`](commands.md#emulator_exchanges)처럼 |
+| `counts` | object | `total`, `unmatched`, `failed`, `down`, `hits`(규칙별), `missed`(MQTT. 0이면 빠짐), `refused`(한도를 넘은 연결. 0이면 빠짐) — [`emulator_exchanges`](commands.md#emulator_exchanges)처럼 |
 | `forced` | string | 다운된 동안 `unavailable`, `reset` 또는 `timeout`. 아니면 빠짐 |
 | `exchanges` | object[] | 새 교환들, `emulator_exchanges`가 나열하는 대로지만 `data`는 없음. 최대 200개 |
 | `dropped` | number | 그 간격의 처음 200개를 넘어 여기 보내지 않은 교환. `emulator_exchanges`에는 여전히 마지막 500개가 있음 |

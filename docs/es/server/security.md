@@ -35,8 +35,11 @@ Iniciado sin token, el servidor escucha en `127.0.0.1:1430` y no pide iniciar se
 herramienta para la persona que está en este equipo. Para impedir que una página web abierta en
 cualquier navegador de este equipo llegue a él a través de un nombre que se resuelve como
 `127.0.0.1` (DNS rebinding), solo responde a solicitudes cuyo `Host` es un nombre de loopback
-(`localhost`, un nombre que termina en `.localhost`, `127.x.x.x` o `[::1]`) o un nombre que
-permitas con `--allowed-host`.
+(`localhost`, un nombre que termina en `.localhost`, una dirección de loopback escrita como tal
+(`127.x.x.x`, `[::1]`)) o un nombre que permitas con `--allowed-host`. Un nombre DNS que solo
+empieza como una dirección (`127.0.0.1.example.com`) no lo es: cualquiera puede apuntarlo a
+`127.0.0.1`. Una solicitud con dos encabezados `Host`, o con uno que no es un `host[:port]`, también
+se rechaza.
 
 Si se le pide escuchar en cualquier otra dirección sin token, no se inicia: explica por qué y
 termina con el código `2`.
@@ -127,8 +130,18 @@ ninguna otra página puede incrustarla en un marco.
 ## Archivos y tamaños {#files}
 
 - Una descarga (`GET /api/files?path=…`) solo se sirve desde dentro de la carpeta de datos, con un
-  máximo de 256 MiB; cualquier otra cosa es `404`.
+  máximo de 256 MiB; cualquier otra cosa es `404`. La ruta se juzga por su
+  nombre antes de abrir nada: una ruta con `..`, otra unidad, un recurso compartido en otro equipo
+  (`\\host\share`), un dispositivo o una tubería con nombre se rechaza sin tocarla.
 - El cuerpo de una solicitud tiene como máximo 24 MiB.
+
+## Clientes lentos e inactivos {#connections}
+
+- Un cliente debe enviar la cabecera de una solicitud en 30 segundos; uno que envía la mitad y se
+  detiene se desconecta, y también una conexión inactiva durante ese tiempo.
+- Se atienden como máximo 1024 conexiones a la vez; las demás se cierran según llegan.
+- Cuando el servidor se detiene, las solicitudes en curso tienen 5 segundos para terminar (una
+  ejecución que se espera responde que se detuvo); un cliente que lo retendría más tiempo se corta.
 
 ## Secretos {#secrets}
 

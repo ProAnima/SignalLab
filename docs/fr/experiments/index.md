@@ -336,7 +336,7 @@ L’éditeur vérifie l’expérience au fur et à mesure, et une fois de plus q
 Une expérience s’exécute quand, entre autres choses :
 
 - elle a un nom, exactement un [[ui:exp.node.start]] et un
-  [[ui:exp.node.end]], et au plus 64 nœuds ;
+  [[ui:exp.node.end]], et au plus 64 nœuds — l’éditeur n’en ajoute, n’en colle ni n’en duplique au-delà, et le dit ;
 - chaque nœud est atteignable depuis [[ui:exp.node.start]] et chaque sortie requise a un fil ;
 - les seuls cycles sont les corps des nœuds [[ui:exp.node.loop]] qui y ramènent ;
 - chaque vérification et [[ui:exp.node.extract]] a une requête HTTP avant elle sur chaque chemin (une
