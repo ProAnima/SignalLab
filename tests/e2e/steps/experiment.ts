@@ -339,6 +339,9 @@ export async function experimentLoad(expect: Expect, args: StepArgs) {
   expect("a threshold that does not hold fails the run, saying which", failed.outcome.startsWith(T("exp.failed")) && failed.outcome.includes(rule), `${failed.outcome} · ${rule}`);
   const broken = await until("the broken threshold", () => properties.querySelector(".experiment-verdicts li.broken"));
   expect("…and the result shows which", textOf(broken).includes(`${T("exp.metric.p95_ms")} < 0`), textOf(broken));
+  // What this second load says it got answered: on a slow machine some of its
+  // requests are missed (counted, never sent late), so the API is checked against it.
+  const answered = numberIn(textOf(properties.querySelector(".experiment-load-statuses")).split("×").pop() ?? "") ?? 0;
 
   // Compare: this run beside the one before it.
   await click(button(editor, T("exp.compare")));
@@ -351,6 +354,7 @@ export async function experimentLoad(expect: Expect, args: StepArgs) {
   expect("the dialog's controls have names", unnamedInDialog.length === 0, unnamedInDialog.join(" | "));
   await click(button(compare, T("exp.close")));
   await until("the dialog to close", () => !document.querySelector("dialog.experiment-compare[open]"));
+  return { sent: 30 + answered };
 }
 
 export async function experimentParallel(expect: Expect, args: StepArgs) {
