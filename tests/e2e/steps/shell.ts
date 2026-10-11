@@ -71,8 +71,13 @@ export async function shell(expect: Expect, args: StepArgs) {
   const osc = await go("osc");
   const target = control(panel(osc, T("osc.sender")), T("common.target"));
   await sleep(200);
-  target.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
-  const tip = await until("the tooltip", () => document.querySelector<HTMLElement>("#signal-lab-tooltip"));
+  // Focused again while it waits: on a slow machine the screen switch can still
+  // scroll (which hides a tooltip, as it should) after the first focus showed it.
+  const tip = await until("the tooltip", () => {
+    const shown = document.querySelector<HTMLElement>("#signal-lab-tooltip");
+    if (!shown) target.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+    return shown;
+  });
   expect("focus on a field shows its label's help", textOf(tip) === T("common.targetHint"), textOf(tip));
   expect("…and the field is described by it", (target.getAttribute("aria-describedby") ?? "").includes("signal-lab-tooltip"));
   target.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
