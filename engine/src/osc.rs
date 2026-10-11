@@ -338,9 +338,12 @@ pub async fn start_generator(
         // The generator can run at thousands of pps; the Inspector only wants a
         // representative sample of that.
         let gate = Gate::new(100);
-        let period = std::time::Duration::from_secs_f64(1.0 / rate);
-        let mut ticker = tokio::time::interval(period);
-        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        // Value n is due at n / rate from the start; each wake sends every value
+        // due by then, each computed for its own moment. An interval that skips
+        // missed ticks sent one value per timer tick instead — 833 a second on
+        // a CI runner's 1.2 ms timer when 5 000 were asked for.
+        let mut n: u64 = 0;
+        let mut unslept: u32 = 0;
 
         let span = (cfg.max - cfg.min).max(0.0);
         let start = std::time::Instant::now();
@@ -348,8 +351,29 @@ pub async fn start_generator(
         let mut rng_state: u64 = 0x9E3779B97F4A7C15 ^ id.wrapping_mul(2654435761);
 
         loop {
-            ticker.tick().await;
-            let t = start.elapsed().as_secs_f64();
+            let due = std::time::Duration::from_secs_f64(n as f64 / rate);
+            match due.checked_sub(start.elapsed()) {
+                Some(wait) if !wait.is_zero() => {
+                    tokio::time::sleep(wait).await;
+                    unslept = 0;
+                }
+                _ => {
+                    // Catching up: let the runtime breathe now and then.
+                    unslept += 1;
+                    if unslept >= 1024 {
+                        tokio::task::yield_now().await;
+                        unslept = 0;
+                    }
+                }
+            }
+            // Far behind (a machine that stalled): more than a second late is not
+            // sent in one burst now.
+            let now_n = (start.elapsed().as_secs_f64() * rate) as u64;
+            if now_n > n + (rate as u64).max(1) {
+                n = now_n;
+            }
+            let t = n as f64 / rate;
+            n += 1;
             if cfg.duration_s > 0.0 && t >= cfg.duration_s {
                 emit_ended(&host_cl, id, "osc-gen", None);
                 break;

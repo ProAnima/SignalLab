@@ -32,6 +32,11 @@ release notes — so what is written here is what users read. See
 
 ### Fixed
 
+- **A beacon and the OSC generator send the rate they are given.** Each sent one round or
+  one value per tick of the system's timer, so on a typical Windows timer a beacon asked
+  for 10 000 packets a second sent 833 (and the generator likewise). Each value now goes
+  out at its own moment, as many as are due at every wake.
+
 - **The OSC generator keeps going when nothing listens yet.** On Linux, the "port unreachable"
   answer to one value stopped the generator with *connection refused*; it now carries on (and
   sends that value again), so it can run before the device starts.

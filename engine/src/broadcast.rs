@@ -25,6 +25,8 @@ use super::transport::{self, Cause};
 const MAX_SWEEP_HOSTS: usize = 1024;
 /// Guard rail on aggregate send rate (targets × rounds/sec).
 const MAX_AGGREGATE_PPS: f64 = 50_000.0;
+/// Rounds one wake of a beacon sends at most before it lets the runtime breathe.
+const MAX_ROUNDS_PER_WAKE: u64 = 1024;
 
 // ---------------------------------------------------------------------------
 // Payload
@@ -495,60 +497,84 @@ pub async fn start_beacon(
             })
         };
 
-        let mut ticker = tokio::time::interval(Duration::from_secs_f64(1.0 / rate));
-        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        // Round n is due at n / rate from the start, and each wake sends every
+        // round due by then. An interval that skips missed ticks sent one
+        // round per timer tick instead — on a Windows timer of 15.6 ms, 64 a
+        // second whatever the rate asked.
         let start = std::time::Instant::now();
+        let ends = (cfg.duration_s > 0.0).then(|| Duration::from_secs_f64(cfg.duration_s));
         let mut error: Option<EngineError> = None;
+        let mut done: u64 = 0;
 
-        loop {
-            ticker.tick().await;
-            if cfg.duration_s > 0.0 && start.elapsed().as_secs_f64() >= cfg.duration_s {
-                break;
-            }
-            // Check before counting, so the reported round total matches what
-            // actually went out.
-            if cfg.count > 0 && rounds.load(Ordering::Relaxed) >= cfg.count {
-                break;
-            }
-            rounds.fetch_add(1, Ordering::Relaxed);
-            // Sample the capture: a fast beacon must not flood the Inspector.
-            // A round not drawn is a frame per target not shown.
-            let capture = inspect::armed(&host_cl) && gate.allow_for(targets.len() as u64);
-            for t in &targets {
-                match sock.send_to(&payload, t).await {
-                    Ok(n) => {
-                        packets.fetch_add(1, Ordering::Relaxed);
-                        bytes.fetch_add(n as u64, Ordering::Relaxed);
-                        if capture {
-                            let frame = Frame::tx(proto, "beacon")
-                                .job(id)
-                                .local(&local)
-                                .remote(t)
-                                .payload(&payload)
-                                .summary(summary.clone())
-                                .verdict(verdict);
-                            // The round's first frame says what the gate held back.
-                            inspect::publish(&host_cl, gate.mark(frame));
+        'beacon: loop {
+            let due = (start.elapsed().as_secs_f64() * rate) as u64 + 1;
+            // Far behind (a machine that stalled): what more than a second late
+            // would have gone out is not sent in one burst now.
+            done = done.max(due.saturating_sub((rate as u64).max(1)));
+            let mut this_wake = 0;
+            while done < due && this_wake < MAX_ROUNDS_PER_WAKE {
+                if ends.is_some_and(|ends| start.elapsed() >= ends) {
+                    break 'beacon;
+                }
+                // Check before counting, so the reported round total matches what
+                // actually went out.
+                if cfg.count > 0 && rounds.load(Ordering::Relaxed) >= cfg.count {
+                    break 'beacon;
+                }
+                done += 1;
+                this_wake += 1;
+                rounds.fetch_add(1, Ordering::Relaxed);
+                // Sample the capture: a fast beacon must not flood the Inspector.
+                // A round not drawn is a frame per target not shown.
+                let capture = inspect::armed(&host_cl) && gate.allow_for(targets.len() as u64);
+                for t in &targets {
+                    match sock.send_to(&payload, t).await {
+                        Ok(n) => {
+                            packets.fetch_add(1, Ordering::Relaxed);
+                            bytes.fetch_add(n as u64, Ordering::Relaxed);
+                            if capture {
+                                let frame = Frame::tx(proto, "beacon")
+                                    .job(id)
+                                    .local(&local)
+                                    .remote(t)
+                                    .payload(&payload)
+                                    .summary(summary.clone())
+                                    .verdict(verdict);
+                                // The round's first frame says what the gate held back.
+                                inspect::publish(&host_cl, gate.mark(frame));
+                            }
                         }
-                    }
-                    Err(e) => {
-                        // Out of buffers at a high rate is this machine's limit,
-                        // not the network refusing: counted apart.
-                        if transport::out_of_resources(&e) {
-                            local_failures.fetch_add(1, Ordering::Relaxed);
-                        } else {
-                            errors.fetch_add(1, Ordering::Relaxed);
-                        }
-                        // A persistent send error (no route, blocked broadcast)
-                        // would otherwise spin silently.
-                        if errors.load(Ordering::Relaxed) + local_failures.load(Ordering::Relaxed) > 32 && packets.load(Ordering::Relaxed) == 0
-                        {
-                            error = Some(transport::of_io(&e).error(&t.to_string()).because(e));
+                        Err(e) => {
+                            // Out of buffers at a high rate is this machine's limit,
+                            // not the network refusing: counted apart.
+                            if transport::out_of_resources(&e) {
+                                local_failures.fetch_add(1, Ordering::Relaxed);
+                            } else {
+                                errors.fetch_add(1, Ordering::Relaxed);
+                            }
+                            // A persistent send error (no route, blocked broadcast)
+                            // would otherwise spin silently.
+                            if errors.load(Ordering::Relaxed) + local_failures.load(Ordering::Relaxed) > 32 && packets.load(Ordering::Relaxed) == 0
+                            {
+                                error = Some(transport::of_io(&e).error(&t.to_string()).because(e));
+                            }
                         }
                     }
                 }
+                if error.is_some() {
+                    break 'beacon;
+                }
             }
-            if error.is_some() {
+            // Until the next round is due, or the beacon's end if that comes first.
+            let mut next = Duration::from_secs_f64(done as f64 / rate);
+            if let Some(ends) = ends {
+                next = next.min(ends);
+            }
+            match next.checked_sub(start.elapsed()) {
+                Some(wait) if !wait.is_zero() => tokio::time::sleep(wait).await,
+                _ => tokio::task::yield_now().await,
+            }
+            if ends.is_some_and(|ends| start.elapsed() >= ends) {
                 break;
             }
         }
