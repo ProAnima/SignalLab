@@ -10,6 +10,8 @@ release notes — so what is written here is what users read. See
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-11
+
 ### Added
 
 - **Anonymous usage statistics for ProAnima Hub.** The desktop app sends a launch, then
@@ -778,7 +780,8 @@ release notes — so what is written here is what users read. See
 - Storm and the broadcast beacon reported a count up to 250 ms old at the end of a run.
 - Checkbox, row and slider alignment.
 
-[Unreleased]: https://github.com/ProAnima/SignalLab/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/ProAnima/SignalLab/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/ProAnima/SignalLab/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/ProAnima/SignalLab/compare/v0.3.1...v1.0.0
 [0.3.1]: https://github.com/ProAnima/SignalLab/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/ProAnima/SignalLab/compare/v0.2.0...v0.3.0
