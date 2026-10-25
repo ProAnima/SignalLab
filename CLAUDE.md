@@ -77,6 +77,8 @@ src/                      React UI
   components/Scope.tsx    canvas oscilloscope (no chart library)
   components/OscArgs.tsx  typed OSC argument editor (OSC + Broadcast + Signals share it)
   components/Palette.tsx  Ctrl+K signal palette, mounted once in the shell
+  components/Onboarding.tsx  the introduction tour, mounted once: spotlight + card; About shows it again
+  lib/onboarding.ts       its steps (data-tour targets), moves, skipping a missing target, the done key (pure)
   components/TooltipLayer.tsx  the one tooltip: any `data-tip`, hover + keyboard focus (placement: lib/tooltip.ts)
   components/Splitter.tsx the pane handle (console, properties, timeline): drag or arrow keys, sizes kept
   lib/signals.ts          firing, describing and capturing signals
@@ -467,6 +469,12 @@ src/components/FirewallBanner.tsx  the desktop app's firewall notice, with Allow
   causes reuse `transport.*` (`transport::of_io`, `net::bind_error`). What
   the Inspector decodes (summaries, verdicts) is protocol notation, not a
   sentence.
+- **The introduction tour points by `data-tour`, never by class.** `TOUR_STEPS`
+  (`lib/onboarding.ts`) names shell elements by their `data-tour` attribute; a missing
+  or hidden one is passed over, so the tour can always be finished — never add a step
+  it cannot get past. Finished or skipped sets `signal-lab.onboarding.done` (without
+  storage: once a session); it opens by itself only on the first launch and from
+  About's *Show the introduction tour*. The e2e tour walks it first.
 - **Screens stay mounted.** `App.tsx` mounts a view on first visit and only
   hides it afterwards, so nothing typed or received is lost on a tab switch. A
   view must therefore not assume it is visible (a canvas measures 0 wide while

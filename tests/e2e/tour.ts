@@ -21,13 +21,14 @@ import { experimentAuth, experimentEmulator, experimentExport, experimentFaults,
 import { layout } from "./steps/layout";
 import { experimentWs, websocket } from "./steps/websocket";
 import { feedback } from "./steps/about";
+import { onboarding, onboardingEnd, onboardingWalk } from "./steps/onboarding";
 
 export type { Check };
 
 // ---- the steps (steps/*.ts, by screen; the runner's plan calls them by these names) ----
 
 const STEPS: Record<string, (expect: Expect, args: StepArgs) => Promise<Record<string, unknown> | void>> = {
-  shell, inspectArm, osc, signals, oscStop, mqtt, broadcast, netsimStart, netsimCheck, netsimTcp, storm, inspectWhole, scan, http, websocket,
+  onboarding, onboardingWalk, onboardingEnd, shell, inspectArm, osc, signals, oscStop, mqtt, broadcast, netsimStart, netsimCheck, netsimTcp, storm, inspectWhole, scan, http, websocket,
   library, emulators, emulatorMqtt, experimentHttp, experimentTcp, experimentOsc, experimentRepeat, experimentLoop, experimentLoad, experimentParallel, experimentEmulator, experimentFaults, experimentAuth, experimentWs, experimentSelection, experimentExport, layout,
   inspectCheck, feedback, russian, languages, docs, cleanup,
 };

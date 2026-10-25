@@ -67,7 +67,8 @@ Signal Lab은 마지막으로 사용한 화면으로 열립니다.
 Signal Lab 정보에는 버전, 개발자, 연락처 주소(복사 버튼 포함), 소스 코드, 라이선스가 표시됩니다.
 데스크톱 앱에서는 [[ui:update.title]] 섹션에서 업데이트를 찾고, 보여 주고, 설치합니다.
 [업데이트](install.md#updates)를 참고하십시오. 브라우저에서는 [[ui:update.server]] 안내가
-표시됩니다. [[ui:about.writeUs]] 버튼은 피드백 양식을 엽니다.
+표시됩니다. [[ui:about.writeUs]] 버튼은 피드백 양식을 열고, [[ui:about.tour]] 버튼은
+Signal Lab 정보를 닫고 [소개 둘러보기](#tour)를 다시 시작합니다.
 
 같은 섹션의 [[ui:about.stats]](기본값은 켜짐)는 데스크톱 앱이 익명 사용 통계를 보내도록
 허용합니다. [Signal Lab이 외부로 보내는 것](../server/security.md#stats)을 참고하세요.
@@ -227,3 +228,24 @@ Windows Defender 방화벽은 프로그램별로 다른 컴퓨터의 접근을 �
 
 아랍어를 선택하면 창 전체가 오른쪽에서 왼쪽 방향으로 바뀝니다. 데이터에 해당하는 주소, hex 덤프,
 코드, 실험 캔버스는 쓰인 그대로 왼쪽에서 오른쪽 방향을 유지합니다.
+
+## 소개 둘러보기 {#tour}
+
+Signal Lab을 처음 시작하면(데스크톱 앱이든 브라우저에서 연 서버 페이지든) 인터페이스 언어로 창을
+짧게 둘러보도록 안내합니다. 창이 어두워지고 한 번에 한 부분만 드러나며, 그 옆의 카드가 그 부분의
+용도를 알려 줍니다. 사이드바의 화면, [[ui:nav.experiment]], <kbd>Ctrl</kbd>+<kbd>K</kbd>와 함께
+쓰는 [[ui:nav.signals]], [[ui:nav.emulators]], 하단 패널, 실행 중인 작업과 [[ui:app.stopAll]],
+언어, 문서, Signal Lab 정보를 차례로 보여 줍니다.
+
+- [[ui:onboarding.start]] 버튼을 누르면 시작됩니다. 첫 카드의 [[ui:onboarding.skipShort]] 버튼이나
+  다른 카드의 [[ui:onboarding.skip]] 버튼을 누르면 끝납니다.
+- [[ui:onboarding.next]] 버튼과 [[ui:onboarding.back]] 버튼으로 카드 사이를 이동하며,
+  <kbd>Enter</kbd>, <kbd>→</kbd>, <kbd>←</kbd> 키도 같은 역할을 합니다(아랍어에서는 화살표가
+  반대로 동작합니다). <kbd>Esc</kbd> 키는 나머지를 건너뜁니다.
+- 마지막 카드에는 첫 세션을 차근차근 안내하는 페이지를 여는 [[ui:onboarding.firstSteps]] 버튼이
+  있습니다. [[ui:onboarding.finish]] 버튼은 둘러보기를 닫습니다.
+- 창에서 표시되지 않는 부분은(예를 들어 창이 아주 좁을 때) 건너뜁니다.
+
+둘러보기가 열려 있는 동안에는 뒤의 창이 클릭이나 키 입력을 받지 않습니다. 둘러보기를 끝내거나
+건너뛰면 저절로 다시 나타나지 않습니다. 브라우저에서는 그 브라우저에 대해 그렇습니다. 다시 보려면
+Signal Lab 정보(헤더의 **?**)를 열고 [[ui:about.tour]] 버튼을 누르십시오.

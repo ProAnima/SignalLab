@@ -9,6 +9,7 @@ import { Splitter } from "./components/Splitter";
 import { FirewallBanner } from "./components/FirewallBanner";
 import { AboutDialog } from "./components/AboutDialog";
 import { FeedbackDialog } from "./components/FeedbackDialog";
+import { Onboarding } from "./components/Onboarding";
 import { UpdatesProvider, useUpdates } from "./lib/updates";
 import { ExperimentView, type ExperimentHandle } from "./views/ExperimentView";
 import { SignalsView } from "./views/SignalsView";
@@ -154,6 +155,8 @@ function Shell() {
   const updates = useUpdates();
   // About (with updates) and Feedback: one dialog at a time, over everything.
   const [dialog, setDialog] = useState<"about" | "feedback" | null>(null);
+  // The introduction tour, asked for again from About (it opens by itself on the first launch).
+  const [tourRequest, setTourRequest] = useState(0);
   // A job as the engine describes it (`job.<kind>` with its values); the English label for a kind without a text.
   const jobLabel = (job: JobInfo) => `job.${job.kind}` in en ? t(`job.${job.kind}`, job.params) : job.label;
   // Reopen on the screen last used: someone who only ever sends OSC lands on OSC.
@@ -266,7 +269,7 @@ function Shell() {
   return (
     <div className={"app" + (consoleOpen ? "" : " console-collapsed") + (compactNav ? " sidebar-compact" : "") + (view === "experiment" ? " experiment-active" : "") + (focusMode && view === "experiment" ? " experiment-focus" : "")}
       style={consoleOpen ? { "--console-h": `${consoleHeight}px` } as CSSProperties : undefined}>
-      <aside className="sidebar">
+      <aside className="sidebar" data-tour="nav">
         <Brand name={t("app.name")} by={t("app.by")} />
         {NAV.map((n) => {
           const running = jobs.filter((j) => n.kinds.includes(j.kind)).length;
@@ -274,6 +277,7 @@ function Shell() {
             <button
               key={n.key}
               className={"nav-item" + (view === n.key ? " active" : "")}
+              data-tour={`nav-${n.key}`}
               aria-current={view === n.key ? "page" : undefined}
               data-tip={compactNav ? t(n.label) : undefined}
               aria-label={t(n.label)}
@@ -311,14 +315,14 @@ function Shell() {
             {t("update.chip", { version: updates.found.version })}
           </button>
         )}
-        <button className="ghost sm header-icon" aria-label={t("app.docs")} data-tip={t("app.docsHint")} onClick={showDocs}>
+        <button className="ghost sm header-icon" data-tour="docs" aria-label={t("app.docs")} data-tip={t("app.docsHint")} onClick={showDocs}>
           <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M2.5 3.2c1.9-.6 3.8-.4 5.5.8 1.7-1.2 3.6-1.4 5.5-.8v9.3c-1.9-.6-3.8-.4-5.5.8-1.7-1.2-3.6-1.4-5.5-.8zM8 4v9.3" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" /></svg>
         </button>
         <button className="ghost sm header-icon" aria-label={t("feedback.open")} data-tip={t("feedback.open")} onClick={() => setDialog("feedback")}>✉</button>
-        <button className="ghost sm header-icon" aria-label={t("about.open")} data-tip={t("about.open")} onClick={() => setDialog("about")}>?</button>
+        <button className="ghost sm header-icon" data-tour="about" aria-label={t("about.open")} data-tip={t("about.open")} onClick={() => setDialog("about")}>?</button>
         <LanguageMenu />
         {signedIn && <button className="ghost sm" onClick={() => void signOut()}>{t("app.signOut")}</button>}
-        <button className="danger sm" data-tip={t("app.stopAllHint")} onClick={stopAll} disabled={jobs.length === 0}>
+        <button className="danger sm" data-tour="stop-all" data-tip={t("app.stopAllHint")} onClick={stopAll} disabled={jobs.length === 0}>
           {t("app.stopAll")}
         </button>
       </header>
@@ -342,7 +346,7 @@ function Shell() {
         {page("scan", <ScanView />)}
       </main>
 
-      <section className="console">
+      <section className="console" data-tour="dock">
         {consoleOpen && <Splitter orientation="horizontal" label="layout.console" size={consoleHeight} min={96} initial={CONSOLE_HEIGHT}
           max={() => Math.max(96, window.innerHeight - ABOVE_CONSOLE)} onSize={setConsoleHeight} />}
         <div className="console-head">
@@ -393,9 +397,11 @@ function Shell() {
       </section>
 
       <Palette />
-      {dialog === "about" && <AboutDialog onClose={() => setDialog(null)} onFeedback={() => setDialog("feedback")} />}
+      {dialog === "about" && <AboutDialog onClose={() => setDialog(null)} onFeedback={() => setDialog("feedback")}
+        onTour={() => { setDialog(null); setTourRequest((count) => count + 1); }} />}
       {dialog === "feedback" && <FeedbackDialog onClose={() => setDialog(null)} />}
       <TooltipLayer />
+      <Onboarding request={tourRequest} />
     </div>
   );
 }

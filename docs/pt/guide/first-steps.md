@@ -16,7 +16,9 @@ então nenhum dispositivo, rede ou regra de firewall entra em jogo. Você vai:
    verificação.
 
 Se ainda não instalou o Signal Lab, veja [Instalação e atualização](install.md). Não sabe onde
-fica alguma coisa na janela? Veja [A janela](interface.md).
+fica alguma coisa na janela? Veja [A janela](interface.md). O
+[tour de introdução](interface.md#tour) mostra as partes principais dela em um minuto;
+[[ui:about.tour]] na janela Sobre o traz de volta.
 
 ## Enviar uma mensagem OSC e vê-la chegar {#osc}
 

@@ -1,0 +1,106 @@
+/* The introduction tour (components/Onboarding.tsx): the window dimmed, one part
+   of the shell shown through a rounded cut-out with a soft pulsing ring, and a
+   card beside it. The cut-out and the card move from one part to the next.
+   Positions are the screen's coordinates (getBoundingClientRect), so they are
+   written as left/top and translate, in both reading directions; the card's
+   own contents follow the language (start/end). */
+
+.tour {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  /* Takes every click: the app behind does nothing while the tour is open. */
+  pointer-events: auto;
+  animation: tour-in 0.2s var(--ease);
+}
+@keyframes tour-in { from { opacity: 0; } to { opacity: 1; } }
+
+.tour-hole {
+  position: fixed;
+  left: 0;
+  top: 0;
+  border-radius: var(--radius-sm);
+  /* One box, its shadow the scrim over everything else. */
+  box-shadow: 0 0 0 200vmax var(--scrim);
+  pointer-events: none;
+}
+.tour-hole::after {
+  content: "";
+  position: absolute;
+  inset: -3px;
+  border: 2px solid var(--accent);
+  border-radius: calc(var(--radius-sm) + 3px);
+  box-shadow: 0 0 18px 2px rgba(62, 230, 176, 0.45);
+  animation: tour-pulse 1.8s var(--ease) infinite;
+}
+.tour-hole.none::after { display: none; }
+@keyframes tour-pulse {
+  0% { box-shadow: 0 0 18px 2px rgba(62, 230, 176, 0.45), 0 0 0 0 rgba(62, 230, 176, 0.5); opacity: 1; }
+  70% { box-shadow: 0 0 18px 2px rgba(62, 230, 176, 0.45), 0 0 0 14px rgba(62, 230, 176, 0); opacity: 0.85; }
+  100% { box-shadow: 0 0 18px 2px rgba(62, 230, 176, 0.45), 0 0 0 0 rgba(62, 230, 176, 0); opacity: 1; }
+}
+
+.tour-card {
+  position: fixed;
+  left: 0;
+  top: 0;
+  width: min(360px, calc(100vw - 32px));
+  padding: 16px 18px 14px;
+  border: 1px solid var(--border-strong);
+  border-top: 2px solid var(--accent);
+  border-radius: var(--radius);
+  color: var(--text);
+  background: var(--surface-2);
+  box-shadow: var(--shadow-md), 0 0 40px rgba(62, 230, 176, 0.12);
+}
+.tour-card:not(.placed) { visibility: hidden; }
+.tour.moving .tour-hole,
+.tour.moving .tour-card {
+  transition: transform 0.3s var(--ease), width 0.3s var(--ease), height 0.3s var(--ease);
+}
+
+/* The arrow: a turned square on the edge that faces the element, at --arrow along it. */
+.tour-arrow {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-2);
+  transform: rotate(45deg);
+}
+.tour-card.side-below .tour-arrow { top: -7px; left: calc(var(--arrow) - 6px); border-right: none; border-bottom: none; }
+.tour-card.side-above .tour-arrow { bottom: -7px; left: calc(var(--arrow) - 6px); border-left: none; border-top: none; }
+.tour-card.side-right .tour-arrow { left: -7px; top: calc(var(--arrow) - 6px); border-right: none; border-top: none; }
+.tour-card.side-left .tour-arrow { right: -7px; top: calc(var(--arrow) - 6px); border-left: none; border-bottom: none; }
+
+.tour-progress { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.tour-dots { display: flex; gap: 5px; }
+.tour-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--border-strong); }
+.tour-dot.past { background: var(--accent-deep); }
+.tour-dot.on { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.tour-count { margin-inline-start: auto; color: var(--text-faint); font-family: var(--mono); font-size: 11px; }
+
+.tour-title { margin: 0 0 6px; font-size: 15px; font-weight: 600; }
+.tour-text { margin: 0; color: var(--text-dim); font-size: 13px; line-height: 1.5; }
+.tour-docs { margin-top: 8px; font-size: 13px; }
+
+.tour-buttons { display: flex; align-items: center; gap: 8px; margin-top: 16px; }
+.tour-buttons .spacer { flex: 1; }
+.tour-skip { color: var(--text-dim); }
+
+/* Read by screen readers as the steps change; not drawn. */
+.tour-live {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tour { animation: none; }
+  .tour-hole::after { animation: none; }
+  .tour.moving .tour-hole,
+  .tour.moving .tour-card { transition: none; }
+}

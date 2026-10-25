@@ -15,7 +15,9 @@ computer, so no device, network or firewall rule is involved. You will:
 5. run an experiment against that API, read why it fails, fix it and add a check.
 
 If you have not installed Signal Lab yet, see [Installing and updating](install.md).
-Not sure where something is in the window? See [The window](interface.md).
+Not sure where something is in the window? See [The window](interface.md). The
+[introduction tour](interface.md#tour) shows its main parts in a minute;
+[[ui:about.tour]] in About brings it back.
 
 ## Send an OSC message and watch it arrive {#osc}
 

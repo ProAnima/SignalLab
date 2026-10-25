@@ -16,6 +16,8 @@ ordinateur, si bien qu’aucun appareil, aucun réseau ni aucune règle de pare-
 
 Si vous n’avez pas encore installé Signal Lab, voir [Installation et mises à jour](install.md).
 Vous ne savez pas où se trouve quelque chose dans la fenêtre ? Voir [La fenêtre](interface.md).
+La [visite guidée](interface.md#tour) en montre les parties principales en une minute ;
+[[ui:about.tour]] dans À propos la relance.
 
 ## Envoyer un message OSC et le voir arriver {#osc}
 

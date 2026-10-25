@@ -11,7 +11,7 @@
 //   npm run e2e:linux -- --image signallab:dev   …the server from that image instead of a build
 //   node scripts/e2e.mjs --native             inside the Linux container, or on Linux CI
 //
-//   --steps osc,mqtt     only these steps (the first, shell, always runs)
+//   --steps osc,mqtt     only these steps (the introduction tour and shell, first, always run)
 //   --no-build           use what the last run built
 //   --server-url URL     a server that is already running (its data folder: --data-dir)
 //
@@ -29,6 +29,8 @@ const BUILD = join(root, "target", "e2e");
 const EXE = process.platform === "win32" ? ".exe" : "";
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const STEP_TIMEOUT = 120_000;
+/** Run whatever --steps says: the introduction tour (it covers the app on fresh data) and the shell. */
+const ALWAYS = ["onboarding", "onboardingWalk", "onboardingEnd", "shell"];
 /** No single call to the browser takes longer: a hung page fails the tour instead of stalling it. */
 const CALL_TIMEOUT = 60_000;
 
@@ -295,6 +297,10 @@ function plan(ports, fixtures, mode, dataDir, { feedbackHere }) {
   const at = {};
   const mark = () => { at.udp = counts.udp; at.http = counts.http; at.tcp = counts.tcpBytes; at.pings = counts.pings; at.polls = counts.statusPolls; };
   return [
+    // First: on fresh data the introduction tour is up and would cover every other step.
+    { name: "onboarding", args: { mode } },
+    { name: "onboardingWalk" },
+    { name: "onboardingEnd" },
     { name: "shell", args: { mode, version: currentVersion() } },
     { name: "inspectArm" },
     { name: "osc", args: { port: ports.osc } },
@@ -415,7 +421,7 @@ async function tour(target, opts, source) {
     if (app.page.inject) await app.page.inject(source);
     else await app.page.evaluate(`${source}\n;true`);
     const steps = plan(ports, fixtures, target, opts.dataDir ?? app.dataDir, { feedbackHere: !opts.serverUrl });
-    const chosen = opts.steps ? steps.filter((step) => step.name === "shell" || opts.steps.includes(step.name)) : steps;
+    const chosen = opts.steps ? steps.filter((step) => ALWAYS.includes(step.name) || opts.steps.includes(step.name)) : steps;
     for (const [index, step] of chosen.entries()) {
       const at = Date.now();
       const expect = (name, ok, detail) => record(step.name, { name, ok, detail: ok ? undefined : detail });

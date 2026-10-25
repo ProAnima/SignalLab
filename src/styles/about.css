@@ -64,6 +64,7 @@
 /* One under the other: Check once a day, Send anonymous usage statistics. */
 .about-updates label.checkbox { display: flex; width: fit-content; margin-top: 10px; font-size: 12px; }
 .about-updates label.checkbox + label.checkbox { margin-top: 6px; }
+.about-updates .btn-row.about-tour { margin-top: 12px; }
 
 .feedback-dialog { width: min(600px, calc(100vw - 32px)); max-height: calc(100vh - 48px); overflow-y: auto; }
 .feedback-dialog textarea { min-height: 120px; resize: vertical; }

@@ -10,6 +10,14 @@ release notes — so what is written here is what users read. See
 
 ## [Unreleased]
 
+### Added
+
+- **An introduction tour.** On the first launch (and once after updating to this
+  version), in the desktop app and in a server's page alike, a one-minute tour dims the window and shows its parts one at a time —
+  the screens, Experiments, Signals and Ctrl+K, Emulators, the bottom panel, Stop all,
+  the language, the documentation and About — in the interface's language. Skip it at
+  any step; About → *Show the introduction tour* brings it back.
+
 ## [1.1.0] - 2026-10-11
 
 ### Added

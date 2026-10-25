@@ -13,7 +13,7 @@ description: 在一台计算机上的第一次使用——发送一条 OSC 消�
 4. 启动一个模拟的 HTTP API，并向它发出请求；
 5. 针对该 API 运行一个实验，查看它失败的原因，修复它，并添加一项检查。
 
-如果还没有安装 Signal Lab，请参见[安装与更新](install.md)。不确定某样东西在窗口的哪里？请参见[窗口](interface.md)。
+如果还没有安装 Signal Lab，请参见[安装与更新](install.md)。不确定某样东西在窗口的哪里？请参见[窗口](interface.md)。[入门导览](interface.md#tour)会在一分钟内介绍窗口的主要部分；在“关于”中按 [[ui:about.tour]] 可以再次打开它。
 
 ## 发送一条 OSC 消息并看着它到达 {#osc}
 

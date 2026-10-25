@@ -70,7 +70,8 @@ própria. A janela Sobre também tem um botão [[ui:app.docs]], que abre
 A janela Sobre mostra a versão, o desenvolvedor, o endereço de contato (com um botão que o copia),
 o código-fonte e a licença. No aplicativo de desktop, a seção [[ui:update.title]] dela procura,
 mostra e instala atualizações — veja [Atualizações](install.md#updates). No navegador, ela diz
-[[ui:update.server]]. O botão [[ui:about.writeUs]] abre o formulário de comentários.
+[[ui:update.server]]. O botão [[ui:about.writeUs]] abre o formulário de comentários, e
+[[ui:about.tour]] fecha a janela Sobre e inicia de novo [o tour de introdução](#tour).
 
 Na mesma seção, [[ui:about.stats]] (ativada por padrão) permite que o aplicativo de
 desktop envie estatísticas de uso anônimas; veja
@@ -239,3 +240,26 @@ aquele navegador.
 
 O árabe vira a janela inteira da direita para a esquerda. O que é dado continua da esquerda para a
 direita, como está escrito: endereços, dumps hexadecimais, código e o canvas do experimento.
+
+## O tour de introdução {#tour}
+
+Na primeira vez que o Signal Lab inicia — o aplicativo de desktop, ou a página de um servidor no
+navegador —, ele oferece um tour curto pela janela no idioma da interface. A janela escurece, uma
+parte dela de cada vez aparece, e um cartão ao lado diz para que serve essa parte: as telas da barra
+lateral, [[ui:nav.experiment]], [[ui:nav.signals]] com <kbd>Ctrl</kbd>+<kbd>K</kbd>,
+[[ui:nav.emulators]], o painel inferior, as tarefas em execução e [[ui:app.stopAll]], o idioma, a
+documentação e a janela Sobre.
+
+- [[ui:onboarding.start]] o começa. [[ui:onboarding.skipShort]] no primeiro cartão, ou
+  [[ui:onboarding.skip]] em qualquer outro, o encerra.
+- [[ui:onboarding.next]] e [[ui:onboarding.back]] passam de um cartão a outro, assim como
+  <kbd>Enter</kbd>, <kbd>→</kbd> e <kbd>←</kbd> (em árabe, as setas funcionam ao contrário);
+  <kbd>Esc</kbd> pula o resto.
+- O último cartão oferece [[ui:onboarding.firstSteps]], a página que guia você por uma primeira
+  sessão; [[ui:onboarding.finish]] fecha o tour.
+- Uma parte da janela que não aparece — numa janela muito estreita, por exemplo — é deixada de
+  lado.
+
+Enquanto o tour está aberto, a janela por trás dele não recebe cliques nem teclas. Depois que você o
+termina ou pula, ele não volta sozinho — no navegador, para aquele navegador. Para vê-lo de novo,
+abra a janela Sobre (**?** no cabeçalho) e pressione [[ui:about.tour]].

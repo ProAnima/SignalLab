@@ -70,7 +70,8 @@ Browser öffnet sie sich in einem eigenen Tab. Auch „Über Signal Lab“ hat e
 „Über Signal Lab“ zeigt die Version, den Entwickler, die Kontaktadresse (mit einer Schaltfläche, die sie
 kopiert), den Quellcode und die Lizenz. In der Desktop-App sucht der Abschnitt [[ui:update.title]]
 nach Updates, zeigt sie an und installiert sie — siehe [Updates](install.md#updates). Im Browser
-steht dort [[ui:update.server]]. [[ui:about.writeUs]] öffnet das Feedback-Formular.
+steht dort [[ui:update.server]]. [[ui:about.writeUs]] öffnet das Feedback-Formular, und
+[[ui:about.tour]] schließt „Über Signal Lab“ und startet [die Einführungstour](#tour) erneut.
 
 Im selben Abschnitt erlaubt [[ui:about.stats]] (standardmäßig an) der Desktop-App,
 anonyme Nutzungsstatistiken zu senden; siehe
@@ -240,3 +241,27 @@ Browser für diesen Browser.
 
 Arabisch stellt das ganze Fenster auf rechts nach links um. Was Daten sind, bleibt so von links nach rechts, wie es
 geschrieben ist: Adressen, Hex-Dumps, Code und die Arbeitsfläche der Experimente.
+
+## Die Einführungstour {#tour}
+
+Beim ersten Start — als Desktop-App oder als Seite eines Servers im Browser — bietet Signal Lab eine
+kurze Tour durch das Fenster in der Sprache der Oberfläche an. Das Fenster wird abgedunkelt, jeweils
+ein Teil davon bleibt sichtbar, und eine Karte daneben sagt, wofür er da ist: die Ansichten der
+Seitenleiste, [[ui:nav.experiment]], [[ui:nav.signals]] mit <kbd>Ctrl</kbd>+<kbd>K</kbd>,
+[[ui:nav.emulators]], der untere Bereich, die laufenden Jobs und [[ui:app.stopAll]], die Sprache, die
+Dokumentation und „Über Signal Lab“.
+
+- [[ui:onboarding.start]] beginnt sie. [[ui:onboarding.skipShort]] auf der ersten Karte oder
+  [[ui:onboarding.skip]] auf jeder anderen beendet sie.
+- [[ui:onboarding.next]] und [[ui:onboarding.back]] wechseln zwischen den Karten, ebenso
+  <kbd>Enter</kbd>, <kbd>→</kbd> und <kbd>←</kbd> (im Arabischen wirken die Pfeile umgekehrt);
+  <kbd>Esc</kbd> überspringt den Rest.
+- Die letzte Karte bietet [[ui:onboarding.firstSteps]] an, die Seite, die Sie durch eine erste
+  Sitzung führt; [[ui:onboarding.finish]] schließt die Tour.
+- Ein Teil des Fensters, der nicht angezeigt wird — etwa in einem sehr schmalen Fenster —, wird
+  übergangen.
+
+Solange die Tour offen ist, nimmt das Fenster dahinter weder Klicks noch Tasten an. Haben Sie sie
+beendet oder übersprungen, kommt sie nicht von selbst wieder — im Browser für diesen Browser. Um sie
+erneut zu sehen, öffnen Sie „Über Signal Lab“ (**?** in der Kopfzeile) und drücken Sie
+[[ui:about.tour]].

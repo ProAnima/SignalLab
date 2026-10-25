@@ -210,6 +210,8 @@ export async function cleanup(expect: Expect) {
   await until("no jobs", () => textOf(document.querySelector(".sidebar .foot")).includes(T("app.activeJobs", { n: 0 })), 5000);
   expect("no job is left running", true);
   expect("no connection banner appeared", !document.querySelector(".connection-banner"));
+  // Skipped at the start, in English or not: no language since brought the introduction tour back.
+  expect("the introduction tour never came back", !document.querySelector(".tour"));
   // On a machine whose firewall has no rule for the app yet, the notice came up and was answered "Not now".
   const notice = document.querySelector(".firewall-banner");
   if (notice) {

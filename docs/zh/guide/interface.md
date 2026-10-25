@@ -53,7 +53,7 @@ Signal Lab 启动时会打开您上次使用的界面。
 
 ### 关于 {#about}
 
-“关于”显示版本、开发者、联系地址（带一个复制按钮）、源代码和许可证。在桌面应用中，其中的 [[ui:update.title]] 部分用于查找、显示和安装更新——参见[更新](install.md#updates)。在浏览器中，它显示 [[ui:update.server]]。[[ui:about.writeUs]] 会打开反馈表单。
+“关于”显示版本、开发者、联系地址（带一个复制按钮）、源代码和许可证。在桌面应用中，其中的 [[ui:update.title]] 部分用于查找、显示和安装更新——参见[更新](install.md#updates)。在浏览器中，它显示 [[ui:update.server]]。[[ui:about.writeUs]] 会打开反馈表单，[[ui:about.tour]] 会关闭“关于”并重新开始[入门导览](#tour)。
 
 在同一部分中，[[ui:about.stats]]（默认开启）允许桌面应用发送匿名使用统计；参见 [Signal Lab 向外界发送什么](../server/security.md#stats)。
 
@@ -154,3 +154,14 @@ Windows Defender 防火墙逐个程序决定其他机器能否访问它。程序
 界面会立即切换，无需重启：每个界面、提示和错误都会切换，控制台之前的行也一样。Signal Lab 第一次启动时，会选择您系统语言中它支持的第一种，否则使用英语，此后会一直保留您的选择——在浏览器中，按浏览器分别保留。
 
 阿拉伯语会让整个窗口从右到左显示。属于数据的内容保持书写时的从左到右：地址、十六进制转储、代码和实验画布。
+
+## 入门导览 {#tour}
+
+Signal Lab 第一次启动时——无论是桌面应用，还是浏览器中的服务器页面——都会用界面语言提供一段简短的窗口导览。窗口会变暗，每次只露出其中一个部分，旁边的卡片说明这个部分的用途：侧边栏中的各个界面、[[ui:nav.experiment]]、[[ui:nav.signals]] 和 <kbd>Ctrl</kbd>+<kbd>K</kbd>、[[ui:nav.emulators]]、底部面板、正在运行的任务和 [[ui:app.stopAll]]、语言、文档以及“关于”。
+
+- [[ui:onboarding.start]] 开始导览。在第一张卡片上按 [[ui:onboarding.skipShort]]，或在其他任意一张卡片上按 [[ui:onboarding.skip]]，即可结束导览。
+- [[ui:onboarding.next]] 和 [[ui:onboarding.back]] 在卡片之间切换，<kbd>Enter</kbd>、<kbd>→</kbd> 和 <kbd>←</kbd> 也可以（在阿拉伯语中，方向键的作用相反）；<kbd>Esc</kbd> 跳过剩下的部分。
+- 最后一张卡片提供 [[ui:onboarding.firstSteps]]，该页面会带您完成第一次使用；[[ui:onboarding.finish]] 关闭导览。
+- 窗口中未显示的部分（例如窗口非常窄时）会被跳过。
+
+导览打开期间，后面的窗口不响应点击和按键。完成或跳过导览后，它不会自行再次出现——在浏览器中，按浏览器分别记住。要再次查看，请打开“关于”（顶栏中的 **?**），然后按 [[ui:about.tour]]。

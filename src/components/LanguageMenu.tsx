@@ -94,7 +94,7 @@ export function LanguageMenu() {
     }
   };
 
-  return <div className="lang-menu">
+  return <div className="lang-menu" data-tour="language">
     <button ref={button} className="lang-menu-button" popoverTarget={id} aria-haspopup="menu" aria-expanded={open}
       aria-label={`${t("app.language")}: ${current.label}`} data-tip={`${t("app.language")} · ${current.label}`}
       onKeyDown={(event) => {

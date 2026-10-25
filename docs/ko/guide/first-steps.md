@@ -16,6 +16,8 @@ description: 컴퓨터 한 대에서 진행하는 첫 세션입니다. OSC 메�
 
 아직 Signal Lab을 설치하지 않았다면 [설치와 업데이트](install.md)를 참고하십시오.
 창에서 무엇이 어디에 있는지 모르겠다면 [창](interface.md)을 참고하십시오.
+[소개 둘러보기](interface.md#tour)가 창의 주요 부분을 1분 만에 보여 주며, Signal Lab 정보의
+[[ui:about.tour]] 버튼으로 다시 볼 수 있습니다.
 
 ## OSC 메시지를 보내고 도착 확인하기 {#osc}
 

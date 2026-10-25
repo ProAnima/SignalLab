@@ -71,7 +71,8 @@ Acerca de muestra la versión, el desarrollador, la dirección de contacto (con 
 copia), el código fuente y la licencia. En la aplicación de escritorio, su sección
 [[ui:update.title]] busca, muestra e instala actualizaciones; consulta
 [Actualizaciones](install.md#updates). En un navegador indica [[ui:update.server]].
-[[ui:about.writeUs]] abre el formulario de comentarios.
+[[ui:about.writeUs]] abre el formulario de comentarios, y [[ui:about.tour]] cierra Acerca de y
+vuelve a iniciar [el recorrido de introducción](#tour).
 
 En la misma sección, [[ui:about.stats]] (activada por defecto) permite que la
 aplicación de escritorio envíe estadísticas de uso anónimas; consulta
@@ -245,3 +246,25 @@ conserva tu elección; en un navegador, para ese navegador.
 El árabe pone toda la ventana de derecha a izquierda. Lo que son datos se queda de izquierda a
 derecha, tal como se escribe: direcciones, volcados hexadecimales, código y el lienzo del
 experimento.
+
+## El recorrido de introducción {#tour}
+
+La primera vez que se inicia Signal Lab (la aplicación de escritorio o la página de un servidor en
+un navegador), ofrece un breve recorrido por la ventana en el idioma de la interfaz. La ventana se
+oscurece, se ve una sola parte cada vez y una tarjeta a su lado explica para qué sirve: las
+pantallas de la barra lateral, [[ui:nav.experiment]], [[ui:nav.signals]] con
+<kbd>Ctrl</kbd>+<kbd>K</kbd>, [[ui:nav.emulators]], el panel inferior, las tareas en curso y
+[[ui:app.stopAll]], el idioma, la documentación y Acerca de.
+
+- [[ui:onboarding.start]] lo comienza. [[ui:onboarding.skipShort]] en la primera tarjeta, o
+  [[ui:onboarding.skip]] en cualquier otra, lo termina.
+- [[ui:onboarding.next]] y [[ui:onboarding.back]] pasan de una tarjeta a otra, igual que
+  <kbd>Enter</kbd>, <kbd>→</kbd> y <kbd>←</kbd> (en árabe, las flechas funcionan al revés);
+  <kbd>Esc</kbd> salta el resto.
+- La última tarjeta ofrece [[ui:onboarding.firstSteps]], la página que te guía en una primera
+  sesión; [[ui:onboarding.finish]] cierra el recorrido.
+- Una parte de la ventana que no se muestra (en una ventana muy estrecha, por ejemplo) se omite.
+
+Mientras el recorrido está abierto, la ventana que hay detrás no responde a clics ni a teclas. Una
+vez que lo terminas o lo saltas, no vuelve a aparecer por sí solo (en un navegador, para ese
+navegador). Para verlo de nuevo, abre Acerca de (**?** en la cabecera) y pulsa [[ui:about.tour]].

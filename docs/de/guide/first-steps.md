@@ -15,7 +15,9 @@ Computer, daher sind weder Gerät noch Netzwerk noch Firewall-Regel beteiligt. S
 5. ein Experiment gegen diese API ausführen, lesen, warum es fehlschlägt, es korrigieren und eine Prüfung hinzufügen.
 
 Falls Sie Signal Lab noch nicht installiert haben, siehe [Installieren und aktualisieren](install.md).
-Unsicher, wo im Fenster etwas zu finden ist? Siehe [Das Fenster](interface.md).
+Unsicher, wo im Fenster etwas zu finden ist? Siehe [Das Fenster](interface.md). Die
+[Einführungstour](interface.md#tour) zeigt seine wichtigsten Teile in einer Minute;
+[[ui:about.tour]] in „Über Signal Lab“ holt sie zurück.
 
 ## Eine OSC-Nachricht senden und ihr Eintreffen beobachten {#osc}
 

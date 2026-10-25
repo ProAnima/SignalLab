@@ -14,9 +14,9 @@ export const REPOSITORY = "https://github.com/ProAnima/SignalLab";
  * Who makes Signal Lab and how to reach them, and — in the desktop app — its
  * updates: the newest published release, what is new in it, and installing
  * it, which saves what is pending, stops every job and restarts the app — and
- * whether it sends anonymous usage statistics.
+ * whether it sends anonymous usage statistics; and the introduction tour, shown again.
  */
-export function AboutDialog({ onClose, onFeedback }: { onClose: () => void; onFeedback: () => void }) {
+export function AboutDialog({ onClose, onFeedback, onTour }: { onClose: () => void; onFeedback: () => void; onTour: () => void }) {
   const { t, lang } = useI18n();
   const { info, jobs } = useStore();
   const updates = useUpdates();
@@ -101,6 +101,9 @@ export function AboutDialog({ onClose, onFeedback }: { onClose: () => void; onFe
             {t("about.stats")}
           </label>
         </>}
+        <div className="btn-row about-tour">
+          <button type="button" className="ghost" onClick={onTour} disabled={working}>{t("about.tour")}</button>
+        </div>
       </section>
 
       <footer className="btn-row">

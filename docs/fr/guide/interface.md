@@ -70,7 +70,8 @@ ouvre [Qu’est-ce que Signal Lab](index.md).
 À propos affiche la version, le développeur, l’adresse de contact (avec un bouton qui la
 copie), le code source et la licence. Dans l’application de bureau, sa section [[ui:update.title]]
 recherche, affiche et installe les mises à jour — voir [Mises à jour](install.md#updates). Dans un navigateur,
-elle indique [[ui:update.server]]. Le bouton [[ui:about.writeUs]] ouvre le formulaire de retour.
+elle indique [[ui:update.server]]. Le bouton [[ui:about.writeUs]] ouvre le formulaire de retour, et
+[[ui:about.tour]] ferme À propos et relance [la visite guidée](#tour).
 
 Dans la même section, [[ui:about.stats]] (activée par défaut) permet à l’application
 de bureau d’envoyer des statistiques d’utilisation anonymes ; voir
@@ -240,3 +241,26 @@ un navigateur, pour ce navigateur.
 
 L’arabe fait passer toute la fenêtre de droite à gauche. Ce qui relève des données reste de gauche à droite, tel qu’il est
 écrit : les adresses, les vidages hexadécimaux, le code et le canevas des expériences.
+
+## La visite guidée {#tour}
+
+Au premier démarrage de Signal Lab — l’application de bureau, ou la page d’un serveur dans un
+navigateur —, une courte visite de la fenêtre est proposée dans la langue de l’interface. La fenêtre
+s’assombrit, une seule de ses parties à la fois reste visible, et une carte à côté dit à quoi elle
+sert : les écrans de la barre latérale, [[ui:nav.experiment]], [[ui:nav.signals]] avec
+<kbd>Ctrl</kbd>+<kbd>K</kbd>, [[ui:nav.emulators]], le panneau inférieur, les tâches en cours et
+[[ui:app.stopAll]], la langue, la documentation et À propos.
+
+- [[ui:onboarding.start]] la lance. [[ui:onboarding.skipShort]] sur la première carte, ou
+  [[ui:onboarding.skip]] sur n’importe quelle autre, y met fin.
+- [[ui:onboarding.next]] et [[ui:onboarding.back]] passent d’une carte à l’autre, tout comme
+  <kbd>Enter</kbd>, <kbd>→</kbd> et <kbd>←</kbd> (en arabe, les flèches fonctionnent à l’inverse) ;
+  <kbd>Esc</kbd> passe le reste.
+- La dernière carte propose [[ui:onboarding.firstSteps]], la page qui vous guide pendant une
+  première séance ; [[ui:onboarding.finish]] ferme la visite.
+- Une partie de la fenêtre qui n’est pas affichée — dans une fenêtre très étroite, par exemple — est
+  sautée.
+
+Tant que la visite est ouverte, la fenêtre derrière elle ne reçoit ni clics ni touches. Une fois la
+visite terminée ou passée, elle ne revient pas d’elle-même — dans un navigateur, pour ce navigateur.
+Pour la revoir, ouvrez À propos (**?** dans l’en-tête) et appuyez sur [[ui:about.tour]].

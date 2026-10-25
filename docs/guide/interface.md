@@ -70,7 +70,8 @@ opens [What is Signal Lab](index.md).
 About shows the version, the developer, the contact address (with a button that copies
 it), the source code and the license. In the desktop app its [[ui:update.title]] section
 looks for, shows and installs updates — see [Updates](install.md#updates). In a browser
-it says [[ui:update.server]]. [[ui:about.writeUs]] opens the feedback form.
+it says [[ui:update.server]]. [[ui:about.writeUs]] opens the feedback form, and
+[[ui:about.tour]] closes About and starts [the introduction tour](#tour) again.
 
 In the same section, [[ui:about.stats]] (on by default) lets the desktop app send
 anonymous usage statistics; see
@@ -240,3 +241,25 @@ a browser, for that browser.
 
 Arabic turns the whole window right to left. What is data stays left to right as it is
 written: addresses, hex dumps, code and the experiment canvas.
+
+## The introduction tour {#tour}
+
+The first time Signal Lab starts — the desktop app, or a server's page in a browser — it
+offers a short tour of the window in the interface's language. The window dims, one part
+of it at a time shows through, and a card beside it says what that part is for: the
+sidebar's screens, [[ui:nav.experiment]], [[ui:nav.signals]] with
+<kbd>Ctrl</kbd>+<kbd>K</kbd>, [[ui:nav.emulators]], the bottom panel, the running jobs and
+[[ui:app.stopAll]], the language, the documentation and About.
+
+- [[ui:onboarding.start]] begins it. [[ui:onboarding.skipShort]] on the first card, or
+  [[ui:onboarding.skip]] on any other, ends it.
+- [[ui:onboarding.next]] and [[ui:onboarding.back]] move between the cards, and so do
+  <kbd>Enter</kbd>, <kbd>→</kbd> and <kbd>←</kbd> (the arrows the other way round in
+  Arabic); <kbd>Esc</kbd> skips the rest.
+- The last card offers [[ui:onboarding.firstSteps]], the page that walks you through a
+  first session; [[ui:onboarding.finish]] closes the tour.
+- A part of the window that is not shown — in a very narrow window, say — is passed over.
+
+While the tour is open, the window behind it takes no clicks or keys. Once you have
+finished or skipped it, it does not come back by itself — in a browser, for that browser.
+To see it again, open About (**?** in the header) and press [[ui:about.tour]].

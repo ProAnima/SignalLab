@@ -15,7 +15,9 @@ intervienen dispositivos, redes ni reglas de firewall. Vas a:
 5. ejecutar un experimento contra esa API, leer por qué falla, corregirlo y añadir una comprobación.
 
 Si aún no has instalado Signal Lab, consulta [Instalación y actualizaciones](install.md).
-¿No sabes dónde está algo en la ventana? Consulta [La ventana](interface.md).
+¿No sabes dónde está algo en la ventana? Consulta [La ventana](interface.md). El
+[recorrido de introducción](interface.md#tour) muestra sus partes principales en un minuto;
+[[ui:about.tour]] en Acerca de lo vuelve a mostrar.
 
 ## Enviar un mensaje OSC y verlo llegar {#osc}
 

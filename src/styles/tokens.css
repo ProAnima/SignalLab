@@ -57,6 +57,9 @@
 
   --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.45);
   --shadow-md: 0 6px 24px rgba(0, 0, 0, 0.4);
+  /* The introduction tour dims the window with this, around what it shows. */
+  /* Dark enough to read as "set aside" over a dark interface too. */
+  --scrim: rgba(0, 0, 0, 0.82);
   --ring: 0 0 0 3px rgba(62, 230, 176, 0.16);
 
   --ease: cubic-bezier(0.32, 0.72, 0.35, 1);
